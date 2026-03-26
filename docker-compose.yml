@@ -1,0 +1,38 @@
+name: vikunja-pwa
+
+services:
+  vikunja-pwa:
+    build: .
+    container_name: vikunja-pwa
+    restart: unless-stopped
+    group_add:
+      - "${DOCKER_GID:-999}"
+    ports:
+      - "${PORT:-4300}:${PORT:-4300}"
+    environment:
+      HOST: 0.0.0.0
+      PORT: ${PORT:-4300}
+      APP_PUBLIC_ORIGIN: ${APP_PUBLIC_ORIGIN:-}
+      APP_ALLOWED_ORIGINS: ${APP_ALLOWED_ORIGINS:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-}
+      APP_SESSION_STORE_PATH: .data/app-sessions.enc
+      APP_SESSION_KEY_PATH: .data/app-sessions.key
+      APP_HTTPS_CERT_PATH: ${APP_HTTPS_CERT_PATH:-}
+      APP_HTTPS_KEY_PATH: ${APP_HTTPS_KEY_PATH:-}
+      VIKUNJA_DEFAULT_BASE_URL: ${VIKUNJA_DEFAULT_BASE_URL}
+      VIKUNJA_BRIDGE_MODE: ${VIKUNJA_BRIDGE_MODE:-}
+      VIKUNJA_CONTAINER_NAME: ${VIKUNJA_CONTAINER_NAME:-vikunja}
+      VIKUNJA_CLI_PATH: ${VIKUNJA_CLI_PATH:-/app/vikunja/vikunja}
+      VIKUNJA_SSH_DESTINATION: ${VIKUNJA_SSH_DESTINATION:-}
+      VIKUNJA_SSH_PORT: ${VIKUNJA_SSH_PORT:-22}
+      VIKUNJA_SSH_KEY_PATH: ${VIKUNJA_SSH_KEY_PATH:-}
+    volumes:
+      - app_data:/app/.data
+      # Optional runtime files. Keep certs or SSH keys in ./deploy and point the
+      # corresponding env vars at /app/deploy/<filename> when you need them.
+      - ./deploy:/app/deploy:ro
+      # Only used when VIKUNJA_BRIDGE_MODE=docker-exec.
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  app_data:

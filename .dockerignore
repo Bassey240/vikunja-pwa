@@ -1,0 +1,13 @@
+.git
+.github
+.forgejo
+.data
+.env
+.env.*
+node_modules
+dist
+deploy
+playwright-report
+test-results
+coverage
+npm-debug.log*
