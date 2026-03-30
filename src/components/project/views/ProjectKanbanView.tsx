@@ -38,7 +38,7 @@ export default function ProjectKanbanView({
 	const updateProjectViewConfig = useAppStore(state => state.updateProjectViewConfig)
 	const deleteBucket = useAppStore(state => state.deleteBucket)
 	const createTaskInBucket = useAppStore(state => state.createTaskInBucket)
-	const moveTaskToBucket = useAppStore(state => state.moveTaskToBucket)
+	const moveTask = useAppStore(state => state.moveTask)
 	const toggleTaskDone = useAppStore(state => state.toggleTaskDone)
 	const duplicateTask = useAppStore(state => state.duplicateTask)
 	const deleteTask = useAppStore(state => state.deleteTask)
@@ -124,26 +124,29 @@ export default function ProjectKanbanView({
 	async function handleMoveToBucket(taskId: number, bucketId: number) {
 		setBucketPicker(null)
 		setOpenMenu(null)
-		await moveTaskToBucket(projectId, viewId, taskId, bucketId)
+		await moveTask({
+			taskId,
+			targetProjectId: projectId,
+			viewId,
+			bucketId,
+		})
 	}
 
 	async function handleToggleTaskDone(task: Task, bucketId: number) {
 		const nextDone = !task.done
-		const toggled = await toggleTaskDone(task.id)
+		const doneBucketId = Number(currentView?.doneBucketId ?? currentView?.done_bucket_id ?? 0) || 0
+		const defaultBucketId = Number(currentView?.defaultBucketId ?? currentView?.default_bucket_id ?? 0) || 0
+		const targetBucketId = nextDone
+			? (doneBucketId && doneBucketId !== bucketId ? doneBucketId : bucketId)
+			: (doneBucketId && bucketId === doneBucketId && defaultBucketId && defaultBucketId !== bucketId ? defaultBucketId : bucketId)
+		const toggled = await toggleTaskDone(task.id, {
+			kanbanViewId: viewId,
+			sourceBucketId: bucketId,
+			targetBucketId,
+		})
 		if (!toggled) {
 			return
 		}
-
-		const doneBucketId = Number(currentView?.doneBucketId ?? currentView?.done_bucket_id ?? 0) || 0
-		const defaultBucketId = Number(currentView?.defaultBucketId ?? currentView?.default_bucket_id ?? 0) || 0
-
-		if (nextDone && doneBucketId && doneBucketId !== bucketId) {
-			await moveTaskToBucket(projectId, viewId, task.id, doneBucketId)
-		} else if (!nextDone && doneBucketId && bucketId === doneBucketId && defaultBucketId && defaultBucketId !== bucketId) {
-			await moveTaskToBucket(projectId, viewId, task.id, defaultBucketId)
-		}
-
-		await refreshBuckets()
 	}
 
 	async function handleCreateBucket() {

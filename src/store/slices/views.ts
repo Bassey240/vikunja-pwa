@@ -2,7 +2,6 @@ import {api, type ApiError} from '@/api'
 import type {Bucket, ProjectView, Task} from '@/types'
 import {formatError} from '@/utils/formatting'
 import {parseQuickAddMagic} from '@/utils/quickAddMagic'
-import {calculateTaskPosition} from '@/utils/taskPosition'
 import type {StateCreator} from 'zustand'
 import type {AppStore} from '../index'
 import {persistOfflineBrowseSnapshot} from '../offline-browse-cache'
@@ -32,16 +31,6 @@ export interface ViewsSlice {
 		patch: Partial<Pick<ProjectView, 'default_bucket_id' | 'done_bucket_id' | 'defaultBucketId' | 'doneBucketId'>>,
 	) => Promise<ProjectView | null>
 	createTaskInBucket: (projectId: number, viewId: number, bucketId: number, title: string) => Promise<boolean>
-	moveTaskToBucket: (
-		projectId: number,
-		viewId: number,
-		taskId: number,
-		bucketId: number,
-		options?: {
-			beforeTaskId?: number | null
-			afterTaskId?: number | null
-		},
-	) => Promise<boolean>
 	resolveProjectTaskViewId: (projectId: number) => Promise<number | null>
 	ensureCurrentProjectTaskViewId: () => Promise<number | null>
 	selectProjectView: (
@@ -386,105 +375,22 @@ export const createViewsSlice: StateCreator<AppStore, [], [], ViewsSlice> = (set
 		}
 	},
 
-	async moveTaskToBucket(projectId, viewId, taskId, bucketId, options = {}) {
-		const numericProjectId = Number(projectId || 0)
-		const numericViewId = Number(viewId || 0)
-		const numericTaskId = Number(taskId || 0)
-		const numericBucketId = Number(bucketId || 0)
-		if (!numericProjectId || !numericViewId || !numericTaskId || !numericBucketId) {
-			return false
-		}
-
-		if (blockOfflineReadOnlyAction(get, set, 'move tasks between buckets')) {
-			return false
-		}
-
-		const buckets = get().projectBucketsByViewId[numericViewId] || []
-		const sourceBucket = buckets.find(bucket => bucket.tasks.some(task => task.id === numericTaskId)) || null
-		const targetBucket = buckets.find(bucket => bucket.id === numericBucketId) || null
-		if (!targetBucket) {
-			return false
-		}
-
-		const sourceTask =
-			sourceBucket?.tasks.find(task => task.id === numericTaskId) ||
-			get().tasks.find(task => task.id === numericTaskId) ||
-			null
-		if (!sourceTask) {
-			return false
-		}
-
-		const targetTasksWithoutMoved = targetBucket.tasks.filter(task => task.id !== numericTaskId)
-		const previousTask = resolveBucketTaskById(targetTasksWithoutMoved, options.beforeTaskId || null)
-		const nextTask = resolveBucketTaskById(targetTasksWithoutMoved, options.afterTaskId || null)
-		const position = calculateTaskPosition(previousTask?.position ?? null, nextTask?.position ?? null)
-		const optimisticBuckets = applyOptimisticBucketMove(
-			buckets,
-			{
-				...sourceTask,
-				bucket_id: numericBucketId,
-				bucketId: numericBucketId,
-				position,
-			},
-			numericBucketId,
-			options.beforeTaskId || null,
-			options.afterTaskId || null,
-		)
-
-		set(state => ({
-			projectBucketsByViewId: {
-				...state.projectBucketsByViewId,
-				[numericViewId]: optimisticBuckets,
-			},
-			tasks: patchTaskBucketState(state.tasks, numericTaskId, numericBucketId, position),
-			taskDetail:
-				state.taskDetail?.id === numericTaskId
-					? {
-						...state.taskDetail,
-						bucket_id: numericBucketId,
-						bucketId: numericBucketId,
-						position,
-					}
-					: state.taskDetail,
-		}))
-
-		try {
-			await api(`/api/projects/${numericProjectId}/views/${numericViewId}/buckets/${numericBucketId}/tasks`, {
-				method: 'POST',
-				body: {
-					task_id: numericTaskId,
-					bucket_id: numericBucketId,
-					project_view_id: numericViewId,
-					project_id: numericProjectId,
-				},
-			})
-
-			if (Number.isFinite(position)) {
-				await api(`/api/tasks/${numericTaskId}/position`, {
-					method: 'POST',
-					body: {
-						project_view_id: numericViewId,
-						position,
-					},
-				})
-			}
-
-			return true
-		} catch (error) {
-			set({error: formatError(error as Error)})
-			await get().loadProjectBuckets(numericProjectId, numericViewId, {force: true})
-			await get().refreshCurrentCollections()
-			if (get().taskDetailOpen && get().taskDetail?.id === numericTaskId) {
-				await get().openTaskDetail(numericTaskId)
-			}
-			return false
-		}
-	},
-
 	async resolveProjectTaskViewId(projectId) {
 		const views = await get().loadProjectViews(projectId)
 		if (views.length === 0) {
 			return null
+		}
+
+		const currentViewId =
+			(projectId === Number(get().selectedProjectId || 0)
+				? Number(get().currentProjectViewId || 0)
+				: projectId === Number(get().inboxProjectId || 0)
+					? Number(get().currentInboxViewId || 0)
+					: projectId === Number(get().selectedSavedFilterProjectId || 0)
+						? Number(get().currentSavedFilterViewId || 0)
+						: 0) || 0
+		if (currentViewId && views.some(view => view.id === currentViewId)) {
+			return currentViewId
 		}
 
 		const preferredViewKind = get().preferredProjectViewKind
@@ -695,76 +601,4 @@ function sortTasksByPosition(taskList: Task[]) {
 	return taskList
 		.slice()
 		.sort((left, right) => Number(left.position || 0) - Number(right.position || 0) || left.id - right.id)
-}
-
-function resolveBucketTaskById(taskList: Task[], taskId: number | null) {
-	if (!taskId) {
-		return null
-	}
-
-	return taskList.find(task => task.id === taskId) || null
-}
-
-function applyOptimisticBucketMove(
-	buckets: Bucket[],
-	task: Task,
-	targetBucketId: number,
-	beforeTaskId: number | null,
-	afterTaskId: number | null,
-) {
-	const nextBuckets = buckets.map(bucket => ({
-		...bucket,
-		tasks: bucket.tasks.filter(entry => entry.id !== task.id),
-	}))
-
-	for (const bucket of nextBuckets) {
-		if (bucket.count != null) {
-			const actualCount = bucket.tasks.length
-			bucket.count = actualCount
-		}
-	}
-
-	const targetBucket = nextBuckets.find(bucket => bucket.id === targetBucketId)
-	if (!targetBucket) {
-		return nextBuckets
-	}
-
-	const insertIndex = resolveBucketInsertIndex(targetBucket.tasks, beforeTaskId, afterTaskId)
-	targetBucket.tasks.splice(insertIndex, 0, task)
-	if (targetBucket.count != null) {
-		targetBucket.count = targetBucket.tasks.length
-	}
-
-	return nextBuckets
-}
-
-function resolveBucketInsertIndex(taskList: Task[], beforeTaskId: number | null, afterTaskId: number | null) {
-	if (beforeTaskId) {
-		const previousIndex = taskList.findIndex(task => task.id === beforeTaskId)
-		if (previousIndex >= 0) {
-			return previousIndex + 1
-		}
-	}
-
-	if (afterTaskId) {
-		const nextIndex = taskList.findIndex(task => task.id === afterTaskId)
-		if (nextIndex >= 0) {
-			return nextIndex
-		}
-	}
-
-	return taskList.length
-}
-
-function patchTaskBucketState(taskList: Task[], taskId: number, bucketId: number, position: number) {
-	return taskList.map(task =>
-		task.id === taskId
-			? {
-				...task,
-				bucket_id: bucketId,
-				bucketId: bucketId,
-				position,
-			}
-			: task,
-	)
 }

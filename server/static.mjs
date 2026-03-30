@@ -17,6 +17,10 @@ export async function serveStatic(publicDir, res, url, sendJson) {
 			filePath = path.join(publicDir, 'index.html')
 		}
 	} catch {
+		if (serveMissingAssetRecovery(res, url.pathname)) {
+			return
+		}
+
 		if (!shouldServeAppShell(url.pathname, res)) {
 			sendJson(res, 404, {error: 'Not found'})
 			return
@@ -47,6 +51,67 @@ export async function serveStatic(publicDir, res, url, sendJson) {
 
 	res.writeHead(200, headers)
 	createReadStream(filePath).pipe(res)
+}
+
+function serveMissingAssetRecovery(res, pathname) {
+	if (!pathname.startsWith('/assets/')) {
+		return false
+	}
+
+	if (pathname.endsWith('.js')) {
+		res.writeHead(200, {
+			'Content-Type': 'application/javascript; charset=utf-8',
+			'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+			Pragma: 'no-cache',
+			Expires: '0',
+		})
+		res.end(buildAssetRecoveryScript())
+		return true
+	}
+
+	if (pathname.endsWith('.css')) {
+		res.writeHead(200, {
+			'Content-Type': 'text/css; charset=utf-8',
+			'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+			Pragma: 'no-cache',
+			Expires: '0',
+		})
+		res.end('/* stale asset recovery placeholder */')
+		return true
+	}
+
+	return false
+}
+
+function buildAssetRecoveryScript() {
+	return `;(async () => {
+  const key = 'vikunja-pwa-stale-asset-recovery-at'
+  const now = Date.now()
+  try {
+    const previous = Number(window.sessionStorage?.getItem(key) || '0')
+    window.sessionStorage?.setItem(key, String(now))
+    if (previous && now - previous < 10000) {
+      window.location.replace('/')
+      return
+    }
+  } catch {}
+
+  try {
+    if ('serviceWorker' in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations()
+      await Promise.all(registrations.map(registration => registration.unregister()))
+    }
+  } catch {}
+
+  try {
+    if ('caches' in window) {
+      const cacheKeys = await caches.keys()
+      await Promise.all(cacheKeys.map(cacheKey => caches.delete(cacheKey)))
+    }
+  } catch {}
+
+  window.location.replace('/')
+})()`
 }
 
 function getContentType(filePath) {

@@ -28,7 +28,8 @@ import {
 	getSavedFilterProjectId,
 	resolveInboxProjectId,
 } from '../project-helpers'
-import {getTaskSortQuery, normalizeTaskGraph} from '../selectors'
+import {buildTaskStatusFilter, getTaskSortQuery, isManualTaskSort, normalizeTaskGraph} from '../selectors'
+import {mergeTaskListsWithStablePositions} from '../task-helpers'
 
 export interface ProjectsSlice {
 	projects: Project[]
@@ -296,6 +297,7 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 
 	async openProjectDetail(projectId) {
 		get().resetProjectSharingState()
+		get().setSubscriptionState('project', projectId, null)
 		const cachedProject = get().projects.find(project => project.id === projectId) || null
 		set({
 			projectDetailOpen: true,
@@ -323,6 +325,7 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 		try {
 			const result = await api<{project: Project}>(`/api/projects/${projectId}`)
 			set({projectDetail: result.project})
+			get().setSubscriptionState('project', projectId, result.project.subscription?.subscribed ?? null)
 		} catch (error) {
 			set({error: formatError(error as Error)})
 		} finally {
@@ -542,14 +545,46 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 				get().projectFilters.taskSortBy,
 				get().projectFilters.taskSortOrder,
 			)
-			const normalizedSort = sanitizeProjectPreviewTaskSort(sortBy, orderBy)
-			const query = buildProjectPreviewTaskQuery(normalizedSort.sortBy, normalizedSort.orderBy)
-			const tasks = await api<Task[]>(`/api/projects/${projectId}/tasks${query}`)
+			const useViewEndpoint = isManualTaskSort(get().projectFilters.taskSortBy)
+			let tasks = get().projectPreviewTasksById[projectId] || []
+			if (useViewEndpoint) {
+				const viewId = await get().resolveProjectTaskViewId(projectId)
+				if (viewId) {
+					const normalizedSort = sanitizeProjectPreviewTaskSort(sortBy, orderBy)
+					const [viewTasks, completedTasks] = await Promise.all([
+						api<Task[]>(`/api/projects/${projectId}/views/${viewId}/tasks${buildProjectPreviewTaskQuery(sortBy, orderBy)}`),
+						api<Task[]>(
+							`/api/projects/${projectId}/tasks${buildProjectPreviewTaskQuery(
+								normalizedSort.sortBy,
+								normalizedSort.orderBy,
+								buildTaskStatusFilter('done'),
+							)}`,
+						),
+					])
+					const normalizedViewTasks = normalizeTaskGraph(viewTasks)
+					const normalizedCompletedTasks = normalizeTaskGraph(completedTasks)
+					tasks = mergeTaskListsWithStablePositions(
+						normalizedViewTasks,
+						normalizedCompletedTasks,
+						tasks,
+					)
+				} else {
+					const normalizedSort = sanitizeProjectPreviewTaskSort(sortBy, orderBy)
+					tasks = normalizeTaskGraph(
+						await api<Task[]>(`/api/projects/${projectId}/tasks${buildProjectPreviewTaskQuery(normalizedSort.sortBy, normalizedSort.orderBy)}`),
+					)
+				}
+			} else {
+				const normalizedSort = sanitizeProjectPreviewTaskSort(sortBy, orderBy)
+				tasks = normalizeTaskGraph(
+					await api<Task[]>(`/api/projects/${projectId}/tasks${buildProjectPreviewTaskQuery(normalizedSort.sortBy, normalizedSort.orderBy)}`),
+				)
+			}
 			set(state => ({
 				error: state.error === 'You must provide a project view ID when sorting by position' ? null : state.error,
 				projectPreviewTasksById: {
 					...state.projectPreviewTasksById,
-					[projectId]: normalizeTaskGraph(tasks),
+					[projectId]: tasks,
 				},
 			}))
 			persistOfflineBrowseSnapshot(get())
@@ -724,6 +759,8 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 		if (!currentProject?.id) {
 			return false
 		}
+		const projectPayload = {...currentProject}
+		delete projectPayload.subscription
 
 		try {
 			const result = await api<{project: Project}, Partial<Project>>(
@@ -731,7 +768,7 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 				{
 					method: 'POST',
 					body: {
-						...currentProject,
+						...projectPayload,
 						...patch,
 					},
 				},
@@ -778,8 +815,9 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 	},
 })
 
-function buildProjectPreviewTaskQuery(sortBy: string[], orderBy: string[]) {
+function buildProjectPreviewTaskQuery(sortBy: string[], orderBy: string[], filter = '') {
 	const params = new URLSearchParams()
+	const normalizedFilter = `${filter || ''}`.trim()
 	for (const value of sortBy) {
 		if (value) {
 			params.append('sort_by', value)
@@ -789,6 +827,10 @@ function buildProjectPreviewTaskQuery(sortBy: string[], orderBy: string[]) {
 		if (value) {
 			params.append('order_by', value)
 		}
+	}
+	if (normalizedFilter) {
+		params.set('filter', normalizedFilter)
+		params.set('filter_timezone', 'UTC')
 	}
 	params.append('expand', 'subtasks')
 	const query = params.toString()
@@ -840,7 +882,10 @@ function dedupeProjects(projects: Project[]) {
 }
 
 function cloneProjectSnapshot(project: Project): Project {
-	return {...project}
+	return {
+		...project,
+		subscription: project.subscription ? {...project.subscription} : null,
+	}
 }
 
 function cloneTaskListSnapshot(tasks: Task[]) {
@@ -871,6 +916,7 @@ function cloneTaskListSnapshot(tasks: Task[]) {
 					: [],
 			}
 			: {parenttask: [], subtask: []},
+		subscription: task.subscription ? {...task.subscription} : null,
 	}))
 }
 

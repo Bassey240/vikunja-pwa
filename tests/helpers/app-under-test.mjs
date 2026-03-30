@@ -6,18 +6,30 @@ import path from 'node:path'
 import process from 'node:process'
 import {setTimeout as delay} from 'node:timers/promises'
 import {fileURLToPath} from 'node:url'
+import {createMockAdminBridge} from './mock-admin-bridge.mjs'
 import {createMockVikunjaServer} from './mock-vikunja-server.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(__dirname, '../..')
 let buildPromise = null
 
-export async function startTestStack({legacyConfigured = true} = {}) {
-	const mock = await createMockVikunjaServer()
+export async function startTestStack({
+	legacyConfigured = true,
+	mockVikunjaOptions = {},
+	mockAdminBridge = false,
+	envOverrides = {},
+} = {}) {
+	const mock = await createMockVikunjaServer(mockVikunjaOptions)
 	const appPort = await getFreePort()
 	const tempDir = await mkdtemp(path.join(os.tmpdir(), 'vikunja-pwa-tests-'))
 	const appUrl = `http://127.0.0.1:${appPort}`
 	let logs = ''
+	const adminBridge = mockAdminBridge
+		? await createMockAdminBridge(
+			tempDir,
+			typeof mockAdminBridge === 'object' ? mockAdminBridge : {},
+		)
+		: null
 
 	await runBuildOnce(log => {
 		logs += log
@@ -30,7 +42,6 @@ export async function startTestStack({legacyConfigured = true} = {}) {
 			HOST: '127.0.0.1',
 			PORT: String(appPort),
 			APP_PUBLIC_ORIGIN: appUrl,
-			APP_ALLOWED_ORIGINS: appUrl,
 			APP_HTTPS_KEY_PATH: '',
 			APP_HTTPS_CERT_PATH: '',
 			COOKIE_SECURE: 'false',
@@ -38,12 +49,26 @@ export async function startTestStack({legacyConfigured = true} = {}) {
 			VIKUNJA_BASE_URL: legacyConfigured ? mock.origin : '',
 			VIKUNJA_DEFAULT_BASE_URL: mock.origin,
 			VIKUNJA_API_TOKEN: legacyConfigured ? 'smoke-token' : '',
+			VIKUNJA_BRIDGE_MODE: '',
+			VIKUNJA_CONTAINER_NAME: '',
+			VIKUNJA_CLI_PATH: '',
+			VIKUNJA_SSH_DESTINATION: '',
+			VIKUNJA_SSH_PORT: '',
+			VIKUNJA_SSH_KEY_PATH: '',
+			VIKUNJA_HOST_CONFIG_PATH: '',
+			VIKUNJA_COMPOSE_PATH: '',
+			ADMIN_BRIDGE_ALLOWED_EMAILS: 'smoke@example.test',
 			APP_SESSION_STORE_PATH: path.join(tempDir, 'sessions.enc'),
 			APP_SESSION_KEY_PATH: path.join(tempDir, 'sessions.key'),
 			LOGIN_RATE_LIMIT_WINDOW_SECONDS: '60',
 			LOGIN_RATE_LIMIT_MAX: legacyConfigured ? '2' : '100',
 			SESSION_MUTATION_RATE_LIMIT_WINDOW_SECONDS: '60',
 			SESSION_MUTATION_RATE_LIMIT_MAX: '5',
+			PATH: adminBridge
+				? `${adminBridge.binDir}${path.delimiter}${process.env.PATH || ''}`
+				: process.env.PATH,
+			...(adminBridge?.env || {}),
+			...envOverrides,
 		},
 		stdio: ['ignore', 'pipe', 'pipe'],
 	})
@@ -86,16 +111,19 @@ export async function startTestStack({legacyConfigured = true} = {}) {
 		},
 		async stop() {
 			mock.reset()
+			adminBridge?.reset()
 			await stopProcess(appProcess)
 			await mock.close()
 			await rm(tempDir, {recursive: true, force: true})
 		},
 		reset() {
 			mock.reset()
+			adminBridge?.reset()
 		},
 		getLogs() {
 			return logs
 		},
+		adminBridge,
 	}
 }
 

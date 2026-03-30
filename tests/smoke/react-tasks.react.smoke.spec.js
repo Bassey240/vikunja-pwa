@@ -43,6 +43,52 @@ test('today tasks render and checkbox plus menu actions update the collection', 
 	await expect(page.locator('.workspace-screen.is-active .task-row').filter({hasText: 'Prepare daily summary (Copy)'})).toHaveCount(0)
 })
 
+test('task completion commit preserves the task due date after the undo window', async ({page}) => {
+	let completionPayload = null
+	const completionRequest = page.waitForRequest(request => {
+		if (request.method() !== 'POST') {
+			return false
+		}
+		const url = request.url()
+		if (!/\/api\/tasks\/101$/.test(url)) {
+			return false
+		}
+		completionPayload = request.postDataJSON()
+		return true
+	}, {timeout: 10000})
+
+	await page.locator('.workspace-screen.is-active .task-row').filter({hasText: 'Buy milk'}).locator('[data-action="toggle-done"]').click()
+	await completionRequest
+
+	expect(completionPayload).toMatchObject({
+		title: 'Buy milk',
+		project_id: 1,
+		done: true,
+		done_at: expect.any(String),
+		due_date: expect.any(String),
+	})
+	const updatedTask = await stack.mockApi('tasks/101')
+	expect(updatedTask.due_date).toBeTruthy()
+})
+
+test('today show completed reveals a just-completed today task', async ({page}) => {
+	const completionRequest = page.waitForRequest(request => {
+		return request.method() === 'POST' && /\/api\/tasks\/101$/.test(request.url())
+	}, {timeout: 10000})
+
+	await page.locator('.workspace-screen.is-active .task-row').filter({hasText: 'Buy milk'}).locator('[data-action="toggle-done"]').click()
+	await completionRequest
+
+	await page.locator('[data-action="toggle-today-menu"]').click()
+	await page.getByRole('button', {name: 'Show completed'}).click()
+
+	await expect(page.locator('.workspace-screen.is-active .task-row').filter({hasText: 'Buy milk'})).toHaveCount(1)
+})
+
+test('today startup does not emit the manual-sort view-id error', async ({page}) => {
+	await expect(page.locator('.status-card.danger')).toHaveCount(0)
+})
+
 test('upcoming subtasks expand and collapse', async ({page}) => {
 	await page.getByRole('button', {name: 'Inbox'}).click()
 	await expect(page.getByRole('heading', {name: 'Inbox'})).toBeVisible()

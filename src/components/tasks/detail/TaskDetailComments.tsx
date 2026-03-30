@@ -1,5 +1,6 @@
+import UserAvatar from '@/components/common/UserAvatar'
 import type {TaskComment} from '@/types'
-import {formatLongDate, getUserDisplayName, getUserInitials} from '@/utils/formatting'
+import {formatLongDate, getUserDisplayName} from '@/utils/formatting'
 import type {FormEvent} from 'react'
 import type {TaskDetailSection} from '@/utils/task-detail-helpers'
 import CollapsibleSection from './CollapsibleSection'
@@ -48,7 +49,9 @@ export default function TaskDetailComments({
 							<div key={comment.id} className="detail-comment-row" data-task-comment={comment.id}>
 								<div className="detail-comment-head">
 									<div className="detail-comment-author">
-										<span className="detail-comment-token">{getUserInitials(comment.author)}</span>
+										<span className="detail-comment-token">
+											<UserAvatar user={comment.author} size={27} />
+										</span>
 										<div className="detail-comment-copy">
 											<div className="detail-comment-name">{getUserDisplayName(comment.author)}</div>
 											<div className="detail-meta">

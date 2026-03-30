@@ -134,6 +134,18 @@ export function getTaskSortQuery(sortBy: TaskSortBy = 'position', sortOrder: Tas
 	}
 }
 
+export function buildTaskStatusFilter(status: 'open' | 'all' | 'done' | 'any') {
+	if (status === 'open') {
+		return 'done = false'
+	}
+
+	if (status === 'done') {
+		return 'done = true'
+	}
+
+	return ''
+}
+
 export function getTaskCollectionForTask(taskId: number, projectId: number, collections: TaskCollectionsLookup) {
 	if (collections.tasks.some(task => task.id === taskId)) {
 		return collections.tasks

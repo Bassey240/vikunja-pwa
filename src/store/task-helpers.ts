@@ -342,36 +342,99 @@ export function applyTaskAttachmentsOptimisticUpdate(state: AppStore, taskId: nu
 	}
 }
 
-export function applyTaskDoneOptimisticUpdate(state: AppStore, taskId: number, done: boolean, doneAt: string | null) {
-	const patchTask = (task: Task) =>
+export function applyTaskDoneOptimisticUpdate(
+	state: AppStore,
+	taskId: number,
+	done: boolean,
+	doneAt: string | null,
+	options: {
+		viewId?: number | null
+		targetBucketId?: number | null
+	} = {},
+) {
+	const targetViewId = Number(options.viewId || 0) || null
+	const hasTargetBucket = options.targetBucketId !== undefined
+	const targetBucketId = hasTargetBucket ? (Number(options.targetBucketId || 0) || null) : null
+	const movedPosition =
+		targetViewId && targetBucketId
+			? Math.max(
+				0,
+				...((state.projectBucketsByViewId[targetViewId] || [])
+					.find(bucket => bucket.id === targetBucketId)
+					?.tasks || [])
+					.filter(task => task.id !== taskId)
+					.map(task => Number(task.position || 0)),
+			) + 1024
+			: null
+	const patchTask = (task: Task, includeBucketState = false) =>
 		task.id === taskId
 			? {
 				...task,
 				done,
 				done_at: done ? doneAt : null,
+				...(includeBucketState
+					? {
+						bucket_id: targetBucketId,
+						bucketId: targetBucketId,
+					}
+					: {}),
+				...(movedPosition ? {position: movedPosition} : {}),
 			}
 			: task
-	const patchList = (list: Task[]) => list.map(patchTask)
+	const patchList = (list: Task[], includeBucketState = false) =>
+		list.map(task => patchTask(task, includeBucketState))
 
 	return {
-		tasks: patchList(state.tasks),
-		todayTasks: patchList(state.todayTasks),
-		inboxTasks: patchList(state.inboxTasks),
-		upcomingTasks: patchList(state.upcomingTasks),
-		searchTasks: patchList(state.searchTasks),
-		savedFilterTasks: patchList(state.savedFilterTasks),
-		projectFilterTasks: patchList(state.projectFilterTasks),
+		tasks: patchList(state.tasks, hasTargetBucket),
+		todayTasks: patchList(state.todayTasks, hasTargetBucket),
+		inboxTasks: patchList(state.inboxTasks, hasTargetBucket),
+		upcomingTasks: patchList(state.upcomingTasks, hasTargetBucket),
+		searchTasks: patchList(state.searchTasks, hasTargetBucket),
+		savedFilterTasks: patchList(state.savedFilterTasks, hasTargetBucket),
+		projectFilterTasks: patchList(state.projectFilterTasks, hasTargetBucket),
 		projectPreviewTasksById: Object.fromEntries(
-			Object.entries(state.projectPreviewTasksById).map(([projectId, list]) => [projectId, patchList(list)]),
+			Object.entries(state.projectPreviewTasksById).map(([projectId, list]) => [projectId, patchList(list, hasTargetBucket)]),
 		),
 		projectBucketsByViewId: Object.fromEntries(
-			Object.entries(state.projectBucketsByViewId).map(([viewId, buckets]) => [
-				viewId,
-				buckets.map(bucket => ({
+			Object.entries(state.projectBucketsByViewId).map(([viewId, buckets]) => {
+				const numericViewId = Number(viewId || 0) || null
+				if (!(targetViewId && numericViewId === targetViewId && hasTargetBucket)) {
+					return [viewId, buckets.map(bucket => ({
+						...bucket,
+						tasks: patchList(bucket.tasks),
+					}))]
+				}
+
+				let movedTask: Task | null = null
+				const updatedBuckets = buckets.map(bucket => {
+					const nextTasks: Task[] = []
+					for (const bucketTask of bucket.tasks) {
+						if (bucketTask.id === taskId) {
+							movedTask = patchTask(bucketTask, true)
+							continue
+						}
+
+						nextTasks.push(patchTask(bucketTask))
+					}
+
+					return {
+						...bucket,
+						tasks: nextTasks,
+					}
+				})
+
+				if (movedTask && targetBucketId) {
+					const targetBucket = updatedBuckets.find(bucket => bucket.id === targetBucketId) || null
+					if (targetBucket) {
+						targetBucket.tasks.push(movedTask)
+					}
+				}
+
+				return [viewId, updatedBuckets.map(bucket => ({
 					...bucket,
-					tasks: patchList(bucket.tasks),
-				})),
-			]),
+					count: bucket.tasks.length,
+				}))]
+			}),
 		),
 		taskDetail:
 			state.taskDetail?.id === taskId
@@ -379,6 +442,13 @@ export function applyTaskDoneOptimisticUpdate(state: AppStore, taskId: number, d
 					...state.taskDetail,
 					done,
 					done_at: done ? doneAt : null,
+					...(hasTargetBucket
+						? {
+							bucket_id: targetBucketId,
+							bucketId: targetBucketId,
+						}
+						: {}),
+					...(movedPosition ? {position: movedPosition} : {}),
 					comments: Array.isArray(state.taskDetail.comments)
 						? state.taskDetail.comments.map(comment => ({
 							...comment,
@@ -511,8 +581,9 @@ export function getTaskCollections(state: AppStore) {
 	}
 }
 
-export function buildProjectTaskQuery(sortBy: string[], orderBy: string[]) {
+export function buildProjectTaskQuery(sortBy: string[], orderBy: string[], filter = '') {
 	const params = new URLSearchParams()
+	const normalizedFilter = `${filter || ''}`.trim()
 	for (const value of sortBy) {
 		if (value) {
 			params.append('sort_by', value)
@@ -523,10 +594,73 @@ export function buildProjectTaskQuery(sortBy: string[], orderBy: string[]) {
 			params.append('order_by', value)
 		}
 	}
+	if (normalizedFilter) {
+		params.set('filter', normalizedFilter)
+		params.set('filter_timezone', 'UTC')
+	}
 	params.append('expand', 'subtasks')
 	params.append('expand', 'comment_count')
 	const query = params.toString()
 	return query ? `?${query}` : ''
+}
+
+export function mergeTaskListsWithStablePositions(
+	primaryTasks: Task[],
+	secondaryTasks: Task[],
+	previousTasks: Task[] = [],
+) {
+	const previousPositionById = new Map(
+		previousTasks
+			.map(task => [task.id, Number(task.position || 0)] as const)
+			.filter(([, position]) => position > 0),
+	)
+	let nextSyntheticPosition = Math.max(
+		0,
+		...primaryTasks.map(task => Number(task.position || 0)),
+		...secondaryTasks.map(task => Number(task.position || 0)),
+	)
+	const mergedById = new Map<number, Task>()
+
+	for (const task of [...primaryTasks, ...secondaryTasks]) {
+		if (!task?.id || mergedById.has(task.id)) {
+			continue
+		}
+
+		let position = Number(task.position || 0)
+		const previousPosition = previousPositionById.get(task.id)
+		if (previousPosition && position <= 0) {
+			position = previousPosition
+		} else if (position <= 0) {
+			nextSyntheticPosition += 1024
+			position = nextSyntheticPosition
+		}
+
+		mergedById.set(task.id, {
+			...task,
+			position,
+		})
+	}
+
+	return [...mergedById.values()].sort(compareByPositionThenId)
+}
+
+export function mergeTaskListsPreservingPrimaryOrder(
+	primaryTasks: Task[],
+	secondaryTasks: Task[],
+) {
+	const mergedTaskIds = new Set<number>()
+	const mergedTasks: Task[] = []
+
+	for (const task of [...primaryTasks, ...secondaryTasks]) {
+		if (!task?.id || mergedTaskIds.has(task.id)) {
+			continue
+		}
+
+		mergedTaskIds.add(task.id)
+		mergedTasks.push(task)
+	}
+
+	return mergedTasks
 }
 
 export function getClonedTaskCollections(state: AppStore) {
@@ -1200,6 +1334,16 @@ function updateTaskPositionAcrossCollections(state: AppStore, taskId: number, po
 			}
 		}
 	}
+
+	for (const bucketList of Object.values(state.projectBucketsByViewId)) {
+		for (const bucket of bucketList || []) {
+			for (const task of bucket.tasks || []) {
+				if (task.id === taskId) {
+					task.position = position
+				}
+			}
+		}
+	}
 }
 
 export function resolveTaskById(taskId: number | null, collections: ReturnType<typeof getTaskCollections>) {
@@ -1244,7 +1388,77 @@ export function resolveMovedTaskPosition({
 	return Number(lastSiblingTask?.position || task.position || 0) + 1024
 }
 
-export function applyOptimisticTaskPlacement(
+export function applyOptimisticTaskMove(
+	state: AppStore,
+	{
+		task,
+		sourceTaskList,
+		taskList,
+		targetProjectId,
+		parentTask,
+		nextParentTaskId,
+		beforeTaskId,
+		afterTaskId,
+		siblingIds,
+		position,
+		bucketId,
+		viewId,
+	}: {
+		task: Task
+		sourceTaskList: Task[]
+		taskList: Task[] | null
+		targetProjectId: number
+		parentTask: Task | null
+		nextParentTaskId: number | null
+		beforeTaskId: number | null
+		afterTaskId: number | null
+		siblingIds: number[] | null
+		position: number
+		bucketId?: number | null
+		viewId?: number | null
+	},
+) {
+	if (bucketId !== undefined) {
+		return applyOptimisticBucketTaskMove(state, {
+			task,
+			targetProjectId,
+			parentTask,
+			nextParentTaskId,
+			beforeTaskId,
+			afterTaskId,
+			position,
+			bucketId,
+			viewId: viewId || null,
+		})
+	}
+
+	return targetProjectId !== task.project_id
+		? applyOptimisticVisibleTaskPlacement(state, {
+			task,
+			sourceTaskList,
+			taskList,
+			targetProjectId,
+			parentTask,
+			nextParentTaskId,
+			beforeTaskId,
+			afterTaskId,
+			siblingIds,
+			position,
+		})
+		: applyOptimisticTaskPlacement(state, {
+			task,
+			taskList: Array.isArray(taskList) ? taskList : sourceTaskList,
+			targetProjectId,
+			parentTask,
+			nextParentTaskId,
+			beforeTaskId,
+			afterTaskId,
+			siblingIds,
+			position,
+		})
+}
+
+function applyOptimisticTaskPlacement(
 	state: AppStore,
 	{
 		task,
@@ -1340,7 +1554,7 @@ export function applyOptimisticTaskPlacement(
 	return mutationSet
 }
 
-export function applyOptimisticVisibleTaskPlacement(
+function applyOptimisticVisibleTaskPlacement(
 	state: AppStore,
 	{
 		task,
@@ -1408,6 +1622,119 @@ export function applyOptimisticVisibleTaskPlacement(
 
 		const orderedSiblingTasks = getOrderedSiblingTasksForPlacement(taskList, nextParentTaskId, siblingIds)
 		applyLocalSiblingReorderInList(orderedSiblingTasks, task.id, position)
+	}
+
+	if (state.taskDetailOpen && state.taskDetail?.id === task.id) {
+		state.taskDetail = optimisticTask
+		mutationSet.taskDetailChanged = true
+	}
+
+	return mutationSet
+}
+
+function applyOptimisticBucketTaskMove(
+	state: AppStore,
+	{
+		task,
+		targetProjectId,
+		parentTask,
+		nextParentTaskId,
+		beforeTaskId,
+		afterTaskId,
+		position,
+		bucketId,
+		viewId,
+	}: {
+		task: Task
+		targetProjectId: number
+		parentTask: Task | null
+		nextParentTaskId: number | null
+		beforeTaskId: number | null
+		afterTaskId: number | null
+		position: number
+		bucketId: number | null
+		viewId: number | null
+	},
+) {
+	const mutationSet: TaskCollectionMutationSet = {
+		topLevelKeys: new Set(),
+		previewProjectIds: new Set(),
+		taskDetailChanged: false,
+	}
+	const collectionEntries = getTaskCollectionEntries(state)
+	const nextBucketId = Number(bucketId || 0) || null
+	const optimisticTask: Task = {
+		...task,
+		project_id: targetProjectId,
+		position,
+		bucket_id: nextBucketId,
+		bucketId: nextBucketId,
+		labels: Array.isArray(task.labels) ? [...task.labels] : [],
+		related_tasks: {
+			...cloneRelatedTasksMap(task.related_tasks),
+			parenttask: nextParentTaskId && parentTask ? [createTaskRelationRef(parentTask)] : [],
+		},
+	}
+
+	for (const entry of collectionEntries) {
+		let listChanged = false
+		for (let index = 0; index < entry.list.length; index += 1) {
+			const candidate = entry.list[index]
+			if (candidate.id !== task.id) {
+				continue
+			}
+			entry.list[index] = {
+				...candidate,
+				project_id: targetProjectId,
+				position,
+				bucket_id: nextBucketId,
+				bucketId: nextBucketId,
+				related_tasks: optimisticTask.related_tasks,
+			}
+			listChanged = true
+		}
+
+		if (listChanged) {
+			markTaskCollectionEntryChanged(mutationSet, entry)
+		}
+	}
+
+	if (viewId) {
+		state.projectBucketsByViewId = Object.fromEntries(
+			Object.entries(state.projectBucketsByViewId).map(([key, bucketList]) => {
+				if (!Array.isArray(bucketList)) {
+					return [key, bucketList]
+				}
+				const updatedBuckets = bucketList.map(bucket => ({
+					...bucket,
+					tasks: bucket.tasks.filter(entry => entry.id !== task.id),
+				}))
+				for (const bucket of updatedBuckets) {
+					if (bucket.count != null) {
+						bucket.count = bucket.tasks.length
+					}
+				}
+
+				if (Number(key) === viewId && nextBucketId) {
+					const targetBucket = updatedBuckets.find(bucket => bucket.id === nextBucketId) || null
+					if (targetBucket) {
+						const insertIndex = resolveTaskInsertionIndex(targetBucket.tasks, beforeTaskId, afterTaskId)
+						targetBucket.tasks.splice(insertIndex, 0, optimisticTask)
+						if (targetBucket.count != null) {
+							targetBucket.count = targetBucket.tasks.length
+						}
+						for (let index = 0; index < targetBucket.tasks.length; index += 1) {
+							targetBucket.tasks[index] = {
+								...targetBucket.tasks[index],
+								position: (index + 1) * 1024,
+							}
+						}
+					}
+				}
+
+				return [key, updatedBuckets]
+			}),
+		)
 	}
 
 	if (state.taskDetailOpen && state.taskDetail?.id === task.id) {

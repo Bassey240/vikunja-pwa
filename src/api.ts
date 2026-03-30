@@ -38,7 +38,7 @@ export async function uploadApi<TResponse>(
 	path: string,
 	formData: FormData,
 	options: {
-		method?: 'POST'
+		method?: 'POST' | 'PUT'
 	} = {},
 ): Promise<TResponse> {
 	const response = await fetch(path, {

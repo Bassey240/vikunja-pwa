@@ -6,6 +6,7 @@ import {createNotificationsSlice, type NotificationsSlice} from './slices/notifi
 import {createProjectsSlice, type ProjectsSlice} from './slices/projects'
 import {createRuntimeSlice, type RuntimeSlice} from './slices/runtime'
 import {createSharingSlice, type SharingSlice} from './slices/sharing'
+import {createSubscriptionsSlice, type SubscriptionsSlice} from './slices/subscriptions'
 import {createTasksSlice, type TasksSlice} from './slices/tasks'
 import {createTeamsSlice, type TeamsSlice} from './slices/teams'
 import {createUiSlice, type UiSlice} from './slices/ui'
@@ -21,6 +22,7 @@ export type AppStore =
 	& NotificationsSlice
 	& TeamsSlice
 	& SharingSlice
+	& SubscriptionsSlice
 	& ProjectsSlice
 	& ViewsSlice
 	& TasksSlice
@@ -36,6 +38,7 @@ export const useAppStore = create<AppStore>()((...args) => ({
 	...createSharingSlice(...args),
 	...createLabelsSlice(...args),
 	...createNotificationsSlice(...args),
+	...createSubscriptionsSlice(...args),
 	...createViewsSlice(...args),
 	...createProjectsSlice(...args),
 	...createTasksSlice(...args),

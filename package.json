@@ -1,6 +1,6 @@
 {
   "name": "vikunja-pwa",
-  "version": "0.1.0-alpha",
+  "version": "0.2.0-alpha",
   "private": true,
   "description": "Unofficial mobile-first Vikunja PWA client with a Node gateway, offline-ready shell, and self-hosted collaboration tools.",
   "license": "AGPL-3.0-only",
@@ -11,13 +11,15 @@
     "task-management"
   ],
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.19.0"
   },
   "type": "module",
   "scripts": {
     "dev": "node scripts/start-server.mjs",
     "dev:react": "vite",
     "start": "node scripts/start-server.mjs",
+    "docker:local": "./scripts/start-local-docker.sh",
+    "docker:local:stop": "docker compose down",
     "build": "vite build",
     "build:react": "vite build",
     "preview": "vite preview",
@@ -39,6 +41,7 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.9.6",
+    "yaml": "^2.8.3",
     "zustand": "^5.0.8"
   },
   "devDependencies": {

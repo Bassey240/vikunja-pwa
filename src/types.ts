@@ -60,6 +60,9 @@ export interface UserProfile {
 		timezone?: string | null
 		discoverable_by_name?: boolean | null
 		discoverable_by_email?: boolean | null
+		email_reminders_enabled?: boolean | null
+		overdue_tasks_reminders_enabled?: boolean | null
+		overdue_tasks_reminders_time?: string | null
 		frontend_settings?: UserFrontendSettings | null
 		[key: string]: unknown
 	}
@@ -82,15 +85,31 @@ export interface NotificationCategoryPreference {
 
 export type NotificationPreferenceMap = Record<NotificationCategory, NotificationCategoryPreference>
 
+export interface NotificationSettingsForm {
+	centerPreferences: NotificationPreferenceMap
+	emailRemindersEnabled: boolean
+	overdueTasksRemindersEnabled: boolean
+}
+
 export interface UserFrontendSettings {
 	notification_preferences?: Partial<Record<NotificationCategory, Partial<NotificationCategoryPreference>>> | null
 	[key: string]: unknown
 }
 
+export type AvatarProvider =
+	| 'default'
+	| 'initials'
+	| 'gravatar'
+	| 'marble'
+	| 'upload'
+	| 'ldap'
+	| 'openid'
+
 export interface InstanceFeatures {
 	linkSharingEnabled: boolean | null
 	publicTeamsEnabled: boolean | null
 	frontendUrl: string | null
+	emailRemindersEnabled: boolean | null
 }
 
 export interface Account {
@@ -127,6 +146,62 @@ export interface AdminRuntimeHealth {
 	containerName: string | null
 	cliPath: string | null
 	errors: string[]
+}
+
+export interface AdminMailDiagnosticsResult {
+	success: boolean
+	stdout: string | null
+	stderr: string | null
+}
+
+export type MailerConfigField =
+	| 'enabled'
+	| 'host'
+	| 'port'
+	| 'authType'
+	| 'username'
+	| 'password'
+	| 'skipTlsVerify'
+	| 'fromEmail'
+	| 'forceSsl'
+
+export type MailerCapabilityReasonCode =
+	| 'no_bridge'
+	| 'no_config_path'
+	| 'unsupported_source_mode'
+	| 'not_authorized'
+
+export interface MailerConfigCapabilities {
+	canInspect: boolean
+	canWrite: boolean
+	canApply: boolean
+	reasonCode: MailerCapabilityReasonCode | null
+}
+
+export interface MailerConfig {
+	enabled: boolean
+	host: string
+	port: number
+	authType: string
+	username: string
+	passwordConfigured: boolean
+	skipTlsVerify: boolean
+	fromEmail: string
+	forceSsl: boolean
+	envOverrides: MailerConfigField[]
+	capabilities: MailerConfigCapabilities
+}
+
+export interface MailerConfigInput {
+	enabled: boolean
+	host: string
+	port: number
+	authType: string
+	username: string
+	password: string
+	skipTlsVerify: boolean
+	fromEmail: string
+	forceSsl: boolean
 }
 
 export type SharePermission = 0 | 1 | 2
@@ -201,6 +276,10 @@ export interface Label {
 	hexColor?: string
 }
 
+export interface EntitySubscription {
+	subscribed: boolean
+}
+
 export interface Project {
 	id: number
 	title: string
@@ -214,6 +293,7 @@ export interface Project {
 	is_inbox_project?: boolean
 	created?: string | null
 	updated?: string | null
+	subscription?: EntitySubscription | null
 }
 
 export interface SavedFilter {
@@ -371,6 +451,8 @@ export interface Task {
 	done_at?: string | null
 	created?: string | null
 	updated?: string | null
+	read?: boolean
+	read_at?: string | null
 	position?: number | null
 	priority?: number | null
 	percent_done?: number | null
@@ -386,6 +468,7 @@ export interface Task {
 	related_tasks?: Partial<Record<TaskRelationKind, TaskRelationRef[]>>
 	bucket_id?: number | null
 	bucketId?: number | null
+	subscription?: EntitySubscription | null
 }
 
 export interface FocusTarget {

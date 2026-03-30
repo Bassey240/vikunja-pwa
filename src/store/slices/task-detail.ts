@@ -30,6 +30,7 @@ export interface TaskDetailStoreSlice {
 	taskDetail: Task | null
 	openTaskDetail: (taskId: number) => Promise<void>
 	closeTaskDetail: () => void
+	markTaskRead: (taskId: number) => Promise<boolean>
 	saveTaskDetailPatch: (patch: Partial<Task>) => Promise<boolean>
 	loadTaskAttachments: (taskId: number) => Promise<void>
 	addAttachmentToTask: (file: File) => Promise<boolean>
@@ -58,6 +59,7 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 			findTaskInAnyContext(taskId, getTaskCollections(get())),
 			get().taskDetail?.id === taskId ? get().taskDetail?.attachments : [],
 		)
+		get().setSubscriptionState('task', taskId, null)
 		set({
 			taskDetailOpen: true,
 			taskDetailLoading: true,
@@ -90,6 +92,8 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 					state.taskDetail?.id === taskId ? state.taskDetail.attachments : [],
 				),
 			}))
+			get().setSubscriptionState('task', taskId, result.task.subscription?.subscribed ?? null)
+			void get().markTaskRead(taskId)
 			void get().loadTaskAttachments(taskId)
 		} catch (error) {
 			set({error: formatError(error as Error)})
@@ -106,6 +110,43 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 		})
 	},
 
+	async markTaskRead(taskId) {
+		if (isOfflineReadOnly(get)) {
+			return false
+		}
+
+		const numericTaskId = Number(taskId || 0)
+		if (!numericTaskId) {
+			return false
+		}
+
+		const currentTask = get().taskDetail
+		if (currentTask?.id === numericTaskId && (currentTask.read || currentTask.read_at)) {
+			return true
+		}
+
+		try {
+			await api<{ok: boolean}>(`/api/tasks/${numericTaskId}/read`, {
+				method: 'POST',
+			})
+			const readAt = new Date().toISOString()
+			set(state => ({
+				taskDetail:
+					state.taskDetail?.id === numericTaskId
+						? {
+							...state.taskDetail,
+							read: true,
+							read_at: readAt,
+						}
+						: state.taskDetail,
+			}))
+			return true
+		} catch (error) {
+			set({error: formatError(error as Error)})
+			return false
+		}
+	},
+
 	async saveTaskDetailPatch(patch) {
 		if (blockOfflineReadOnlyAction(get, set, 'edit tasks')) {
 			return false
@@ -120,13 +161,17 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 			...currentTask,
 			...patch,
 		}
+		const taskPayload = {...currentTask}
+		delete taskPayload.subscription
+		delete taskPayload.read
+		delete taskPayload.read_at
 
 		try {
 			set({taskDetail: optimisticTask})
 			const result = await api<{task: Task}, Partial<Task>>(`/api/tasks/${currentTask.id}`, {
 				method: 'POST',
 				body: {
-					...currentTask,
+					...taskPayload,
 					...patch,
 				},
 			})
@@ -552,7 +597,8 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 	},
 
 	async makeTaskSubtask(taskId, parentTaskId) {
-		return get().moveTaskToPlacement(taskId, {
+		return get().moveTask({
+			taskId,
 			parentTaskId,
 		})
 	},

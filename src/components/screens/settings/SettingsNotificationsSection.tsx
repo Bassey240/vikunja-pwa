@@ -1,5 +1,8 @@
 import {type FormEvent, useEffect, useState} from 'react'
-import type {NotificationPreferenceMap, UserFrontendSettings} from '@/types'
+import type {
+	NotificationSettingsForm,
+	UserFrontendSettings,
+} from '@/types'
 import {
 	defaultNotificationPreferences,
 	normalizeNotificationPreferences,
@@ -17,6 +20,10 @@ export default function SettingsNotificationsSection({
 	open,
 	onToggle,
 	frontendSettings,
+	emailDeliveryAvailable,
+	emailRemindersEnabled,
+	overdueTasksRemindersEnabled,
+	accountIsAdmin,
 	pushManagerSupported,
 	isSecureContext,
 	standaloneWebApp,
@@ -32,6 +39,10 @@ export default function SettingsNotificationsSection({
 	open: boolean
 	onToggle: (section: SettingsSectionId) => void
 	frontendSettings: UserFrontendSettings | null | undefined
+	emailDeliveryAvailable: boolean
+	emailRemindersEnabled: boolean
+	overdueTasksRemindersEnabled: boolean
+	accountIsAdmin: boolean
 	pushManagerSupported: boolean
 	isSecureContext: boolean
 	standaloneWebApp: boolean
@@ -42,13 +53,17 @@ export default function SettingsNotificationsSection({
 	onRefreshRuntimeState: () => void
 	onRequestBrowserNotificationPermission: () => void
 	onSendTestBrowserNotification: () => void
-	onSubmit: (preferences: NotificationPreferenceMap) => Promise<boolean>
+	onSubmit: (settings: NotificationSettingsForm) => Promise<boolean>
 }) {
 	const [notificationPreferencesForm, setNotificationPreferencesForm] = useState(defaultNotificationPreferences)
+	const [emailRemindersEnabledForm, setEmailRemindersEnabledForm] = useState(false)
+	const [overdueTasksRemindersEnabledForm, setOverdueTasksRemindersEnabledForm] = useState(false)
 
 	useEffect(() => {
 		setNotificationPreferencesForm(normalizeNotificationPreferences(frontendSettings))
-	}, [frontendSettings])
+		setEmailRemindersEnabledForm(emailRemindersEnabled)
+		setOverdueTasksRemindersEnabledForm(overdueTasksRemindersEnabled)
+	}, [emailRemindersEnabled, frontendSettings, overdueTasksRemindersEnabled])
 
 	const appleMobileWeb = isAppleMobileWeb()
 	const iosVersion = getIosVersion()
@@ -95,7 +110,11 @@ export default function SettingsNotificationsSection({
 
 	async function handleSubmit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault()
-		await onSubmit(notificationPreferencesForm)
+		await onSubmit({
+			centerPreferences: notificationPreferencesForm,
+			emailRemindersEnabled: emailRemindersEnabledForm,
+			overdueTasksRemindersEnabled: overdueTasksRemindersEnabledForm,
+		})
 	}
 
 	return (
@@ -177,6 +196,42 @@ export default function SettingsNotificationsSection({
 						</label>
 					</div>
 				))}
+				<div className="detail-item detail-item-full detail-field settings-checkbox-field">
+					<div className="detail-label">Email notifications</div>
+					{!emailDeliveryAvailable ? (
+						<div className="detail-helper-text">
+							Email delivery is not configured on this instance.
+							{accountIsAdmin ? ' Configure SMTP in the Admin section below.' : ''}
+						</div>
+					) : (
+						<>
+							<label className="settings-checkbox-row">
+								<input
+									data-setting-field="email-reminders-enabled"
+									type="checkbox"
+									checked={emailRemindersEnabledForm}
+									disabled={notificationPreferencesSubmitting}
+									onChange={event => {
+										setEmailRemindersEnabledForm(event.currentTarget.checked)
+									}}
+								/>
+								<span>Task reminder emails.</span>
+							</label>
+							<label className="settings-checkbox-row">
+								<input
+									data-setting-field="overdue-tasks-reminders-enabled"
+									type="checkbox"
+									checked={overdueTasksRemindersEnabledForm}
+									disabled={notificationPreferencesSubmitting}
+									onChange={event => {
+										setOverdueTasksRemindersEnabledForm(event.currentTarget.checked)
+									}}
+								/>
+								<span>Daily overdue task summary emails.</span>
+							</label>
+						</>
+					)}
+				</div>
 				<div className="detail-item detail-item-full detail-field">
 					<button className="composer-submit" type="submit" disabled={notificationPreferencesSubmitting}>
 						{notificationPreferencesSubmitting ? 'Saving…' : 'Save notification preferences'}

@@ -245,6 +245,116 @@ test('can reorder root tasks by drag', async ({page}) => {
 	}).toBe(true)
 })
 
+test('inbox drag uses the inbox view id for position updates', async ({page}) => {
+	await page.getByRole('button', {name: 'Inbox'}).click()
+	await expect(page.getByRole('heading', {name: 'Inbox'})).toBeVisible()
+	await expect.poll(() => rootTaskIds(page)).toEqual([101, 102])
+
+	let positionPayload = null
+	await page.route('**/api/tasks/102/position', async route => {
+		positionPayload = route.request().postDataJSON()
+		await route.continue()
+	})
+
+	await dragTaskToTaskEdge(page, 102, 101, 'top')
+
+	await expect.poll(() => positionPayload?.project_view_id || null).toBe(11)
+	await expect.poll(() => rootTaskIds(page)).toEqual([102, 101])
+})
+
+test('inbox drag position persists after background refresh', async ({page}) => {
+	await page.getByRole('button', {name: 'Inbox'}).click()
+	await expect(page.getByRole('heading', {name: 'Inbox'})).toBeVisible()
+	await expect.poll(() => rootTaskIds(page)).toEqual([101, 102])
+
+	await dragTaskToTaskEdge(page, 102, 101, 'top')
+
+	await expect.poll(() => rootTaskIds(page)).toEqual([102, 101])
+	await expect.poll(async () => {
+		const tasks = await stack.mockApi('projects/1/tasks')
+		const moved = tasks.find(task => task.id === 102)
+		const other = tasks.find(task => task.id === 101)
+		return Number(moved.position) < Number(other.position)
+	}).toBe(true)
+})
+
+test('drag after switching projects uses the correct project view id', async ({page}) => {
+	// Navigate to project 1 first (view 11) to set currentProjectViewId
+	await openProject(page, 1, 'Inbox')
+	await expect.poll(() => rootTaskIds(page)).toEqual([101, 102])
+
+	// Now switch to project 2 (view 12) and drag
+	await openProject(page, 2, 'Work')
+	await expect.poll(() => rootTaskIds(page)).toEqual([201, 202, 203])
+
+	let positionPayload = null
+	await page.route('**/api/tasks/203/position', async route => {
+		positionPayload = route.request().postDataJSON()
+		await route.continue()
+	})
+
+	await dragTaskToTaskEdge(page, 203, 201, 'top')
+
+	// Must use project 2's view (12), NOT project 1's stale view (11)
+	await expect.poll(() => positionPayload?.project_view_id || null).toBe(12)
+})
+
+test('task position updates use the active selected project view id', async ({page}) => {
+	await openProject(page, 2, 'Work')
+	await page.getByRole('button', {name: 'View'}).click()
+	await page.getByRole('button', {name: 'Alt List'}).click()
+	await expect.poll(() => rootTaskIds(page)).toEqual([201, 202, 203])
+
+	let positionPayload = null
+	await page.route('**/api/tasks/203/position', async route => {
+		positionPayload = route.request().postDataJSON()
+		await route.continue()
+	})
+
+	await dragTaskToTaskEdge(page, 203, 201, 'top')
+
+	await expect.poll(() => positionPayload?.project_view_id || null).toBe(16)
+})
+
+test('drag reorder applies the persisted backend position before the refresh completes', async ({page}) => {
+	await openProject(page, 2, 'Work')
+	await expect.poll(() => rootTaskIds(page)).toEqual([201, 202, 203])
+
+	let delayedRefreshSeen = false
+	await page.route('**/api/tasks/203/position', async route => {
+		await route.fulfill({
+			status: 200,
+			contentType: 'application/json',
+			body: JSON.stringify({
+				taskPosition: {
+					task_id: 203,
+					project_view_id: 12,
+					position: 250,
+				},
+			}),
+		})
+	})
+
+	await page.route('**/api/projects/2/views/12/tasks**', async route => {
+		delayedRefreshSeen = true
+		const tasks = await stack.mockApi('projects/2/tasks')
+		const payload = tasks
+			.map(task => task.id === 203 ? {...task, position: 250} : task)
+			.sort((left, right) => Number(left.position || 0) - Number(right.position || 0) || left.id - right.id)
+		await new Promise(resolve => setTimeout(resolve, 1200))
+		await route.fulfill({
+			status: 200,
+			contentType: 'application/json',
+			body: JSON.stringify(payload),
+		})
+	})
+
+	await dragTaskToTaskEdge(page, 203, 201, 'top')
+
+	await expect.poll(() => delayedRefreshSeen).toBe(true)
+	await expect.poll(() => rootTaskIds(page), {timeout: 800}).toEqual([201, 202, 203])
+})
+
 test('can move a task into a child project by drag', async ({page}) => {
 	await openProject(page, 2, 'Work')
 	let projectMovePayload = null
@@ -404,6 +514,25 @@ test('today branch promotion keeps the root task due date after nested moves', a
 	}).toBe(0)
 	await expect.poll(async () => (await rootTaskIds(page)).includes(parentTaskId)).toBe(true)
 	await expect(page.locator(`[data-task-branch-id="${parentTaskId}"] [data-task-due-date="true"]`)).toHaveCount(1)
+})
+
+test('today screen drag reorder preserves order after background refresh', async ({page}) => {
+	const taskA = await createTodayTask('Today task A')
+	const taskB = await createTodayTask('Today task B')
+	const taskC = await createTodayTask('Today task C')
+
+	await page.reload()
+	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
+	// Default today tasks (101, 102) appear first
+	await expect.poll(() => rootTaskIds(page)).toEqual([101, 102, taskA, taskB, taskC])
+
+	// Drag C above A — reorder to 101, 102, C, A, B
+	await dragTaskToTaskEdge(page, taskC, taskA, 'top')
+	await expect.poll(() => rootTaskIds(page)).toEqual([101, 102, taskC, taskA, taskB])
+
+	// Wait for background refresh to complete and verify order is preserved
+	await page.waitForTimeout(2000)
+	await expect.poll(() => rootTaskIds(page)).toEqual([101, 102, taskC, taskA, taskB])
 })
 
 test('today branch promotion keeps the root task due date for UI-created tasks', async ({page}) => {

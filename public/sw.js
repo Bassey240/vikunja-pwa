@@ -1,5 +1,5 @@
-const SHELL_CACHE = 'vikunja-mobile-poc-shell-v1'
-const STATIC_CACHE = 'vikunja-mobile-poc-static-v1'
+const SHELL_CACHE = 'vikunja-pwa-shell-v3'
+const STATIC_CACHE = 'vikunja-pwa-static-v3'
 const APP_SHELL_URLS = [
 	'/',
 	'/index.html',

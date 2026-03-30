@@ -1,7 +1,6 @@
 import {api, type ApiError} from '@/api'
 import {
 	defaultTaskFilters,
-	getTaskSortByForScreen,
 	normalizeTaskFilters,
 	setTaskFilterField as updateTaskFilterField,
 	type TaskFilterField,
@@ -10,6 +9,7 @@ import {
 import type {MenuAnchor, Screen, Task} from '@/types'
 import {markTaskDropTrace} from '@/utils/dragPerf'
 import {formatError} from '@/utils/formatting'
+import {calculateTaskPosition} from '@/utils/taskPosition'
 import type {StateCreator} from 'zustand'
 import type {AppStore} from '../index'
 import {blockOfflineReadOnlyAction} from '../offline-readonly'
@@ -19,19 +19,17 @@ import {
 } from '../offline-browse-cache'
 import {loadOfflineSnapshot} from '../offline-snapshot'
 import {
+	buildTaskStatusFilter,
 	buildTaskCollectionPath,
-	canTaskUsePositionReorder,
 	expandTaskAncestorsInCollection,
 	findTaskInAnyContext,
-	getSiblingTasksForReorder,
+	isManualTaskSort,
 	getTaskCollectionForTask,
 	getTaskSortQuery,
 	normalizeTaskGraph,
 } from '../selectors'
 import {
-	applyLocalSiblingReorder,
-	applyOptimisticTaskPlacement,
-	applyOptimisticVisibleTaskPlacement,
+	applyOptimisticTaskMove,
 	applyTaskDeletionOptimisticUpdate,
 	applyTaskDoneOptimisticUpdate,
 	applyTaskPositionSnapshot,
@@ -43,9 +41,10 @@ import {
 	COMPLETION_ANIMATION_MS,
 	completionAnimationTimers,
 	getClonedTaskCollections,
+	mergeTaskListsPreservingPrimaryOrder,
+	mergeTaskListsWithStablePositions,
 	getSelectiveTaskCollectionUpdate,
 	getTaskCollections,
-	getTaskPositionSnapshot,
 	isTaskDescendant,
 	persistOfflineTaskCollections,
 	resolveMovedTaskPosition,
@@ -53,6 +52,7 @@ import {
 	restoreTaskDeletionSnapshot,
 	UNDOABLE_MUTATION_MS,
 } from '../task-helpers'
+import type {TaskMoveIntent} from '../types/task-move'
 import {createBulkTasksSlice, type BulkTasksSlice} from './bulk-tasks'
 import {createTaskComposersSlice, type TaskComposersSlice} from './task-composers'
 import {createTaskDetailSlice, type TaskDetailStoreSlice} from './task-detail'
@@ -103,24 +103,15 @@ export interface TasksSlice extends BulkTasksSlice, TaskComposersSlice, TaskDeta
 	openSearchTaskResult: (taskId: number, projectId?: number) => Promise<void>
 	toggleTaskExpanded: (taskId: number) => void
 	toggleTaskMenu: (taskId: number, anchor: MenuAnchor) => void
-	toggleTaskDone: (taskId: number) => Promise<boolean>
+	toggleTaskDone: (
+		taskId: number,
+		options?: {kanbanViewId?: number | null; sourceBucketId?: number | null; targetBucketId?: number | null},
+	) => Promise<boolean>
 	duplicateTask: (taskId: number) => Promise<boolean>
 	deleteTask: (taskId: number) => Promise<boolean>
-	moveTask: (taskId: number, offset: number, taskList?: Task[]) => Promise<boolean>
+	moveTask: (intent: TaskMoveIntent) => Promise<boolean>
 	openFocusedTask: (taskId: number, projectId: number, sourceScreen: Screen) => void
 	closeFocusedTask: () => void
-	moveTaskToPlacement: (
-		taskId: number,
-		options: {
-			parentTaskId: number | null
-			targetProjectId?: number | null
-			beforeTaskId?: number | null
-			afterTaskId?: number | null
-			siblingIds?: number[] | null
-			traceToken?: string | null
-			taskList?: Task[] | null
-		},
-	) => Promise<boolean>
 	resetTasksState: () => void
 }
 
@@ -208,14 +199,15 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 		set({loadingTasks: true, error: null})
 
 		try {
-			const viewId = await get().resolveProjectTaskViewId(projectId)
+			const viewId = await resolveActiveProjectTaskViewId(get, projectId, 'project')
 			const viewKind = await resolveProjectViewKind(get, projectId, viewId)
 			const {sortBy, orderBy} = getTaskSortQuery(get().taskFilters.sortBy, get().taskFilters.sortOrder)
-			const tasks = normalizeTaskGraph(await loadProjectTasks(projectId, viewId, {
+			const tasks = await loadProjectTasks(projectId, viewId, {
 				sortBy,
 				orderBy,
 				useViewTasks: viewKind === 'list',
-			}))
+				previousTasks: get().tasks,
+			})
 			set({
 				tasks,
 				currentTasksProjectId: projectId,
@@ -254,7 +246,36 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 		})
 
 		try {
-			const todayTasks = normalizeTaskGraph(await api<Task[]>('/api/tasks/today'))
+			const previousTodayTasks = get().todayTasks
+			const {sortBy, orderBy} = getTaskSortQuery(get().taskFilters.sortBy, get().taskFilters.sortOrder)
+			const genericSort = sanitizeTaskCollectionSort(sortBy, orderBy)
+			const [freshTasks, completedTodayTasks] = await Promise.all([
+				api<Task[]>('/api/tasks/today'),
+				api<Task[]>(buildTaskCollectionPath({
+					filter: buildTodayTaskFilter('done'),
+					sortBy: genericSort.sortBy,
+					orderBy: genericSort.orderBy,
+				})),
+			])
+			const normalizedFreshTasks = normalizeTaskGraph(freshTasks)
+			const normalizedCompletedTodayTasks = normalizeTaskGraph(completedTodayTasks)
+			const mergedTodayTasks = isManualTaskSort(get().taskFilters.sortBy)
+				? mergeTaskListsWithStablePositions(
+					normalizedFreshTasks,
+					normalizedCompletedTodayTasks,
+					previousTodayTasks,
+				)
+				: mergeTaskListsPreservingPrimaryOrder(
+					normalizedFreshTasks,
+					normalizedCompletedTodayTasks,
+				)
+			const recentlyCompleted = get().recentlyCompletedTaskIds
+			const keptDoneTasks = previousTodayTasks.filter(prev =>
+				prev.done && recentlyCompleted.has(prev.id) && !mergedTodayTasks.some(task => task.id === prev.id),
+			)
+			const todayTasks = isManualTaskSort(get().taskFilters.sortBy)
+				? mergeTaskListsWithStablePositions(mergedTodayTasks, keptDoneTasks, previousTodayTasks)
+				: mergeTaskListsPreservingPrimaryOrder(mergedTodayTasks, keptDoneTasks)
 			set({todayTasks})
 			persistOfflineTaskCollections(get())
 		} catch (error) {
@@ -287,13 +308,23 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 		})
 
 		try {
-			const viewId = await get().resolveProjectTaskViewId(inboxProjectId)
-			const {sortBy, orderBy} = getTaskSortQuery(defaultTaskFilters.sortBy, defaultTaskFilters.sortOrder)
-			const inboxTasks = normalizeTaskGraph(await loadProjectTasks(inboxProjectId, viewId, {
+			const viewId = await resolveActiveProjectTaskViewId(get, inboxProjectId, 'inbox')
+			const viewKind = await resolveProjectViewKind(get, inboxProjectId, viewId)
+			const {sortBy, orderBy} = getTaskSortQuery(get().taskFilters.sortBy, get().taskFilters.sortOrder)
+			const freshTasks = await loadProjectTasks(inboxProjectId, viewId, {
 				sortBy,
 				orderBy,
-				useViewTasks: false,
-			}))
+				useViewTasks: viewKind === 'list',
+				previousTasks: get().inboxTasks,
+			})
+			// Preserve recently-completed tasks that have not reached the server yet
+			// so completion animations remain visible until the undo window closes.
+			const recentlyCompleted = get().recentlyCompletedTaskIds
+			const previousInboxTasks = get().inboxTasks
+			const keptDoneTasks = previousInboxTasks.filter(prev =>
+				prev.done && recentlyCompleted.has(prev.id) && !freshTasks.some(t => t.id === prev.id),
+			)
+			const inboxTasks = keptDoneTasks.length > 0 ? [...freshTasks, ...keptDoneTasks] : freshTasks
 			set({
 				inboxTasks,
 				currentInboxViewId: viewId,
@@ -388,14 +419,15 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 		})
 
 		try {
-			const viewId = await get().resolveProjectTaskViewId(numericProjectId)
+			const viewId = await resolveActiveProjectTaskViewId(get, numericProjectId, 'savedFilter')
 			const viewKind = await resolveProjectViewKind(get, numericProjectId, viewId)
 			const {sortBy, orderBy} = getTaskSortQuery(defaultTaskFilters.sortBy, defaultTaskFilters.sortOrder)
-			const savedFilterTasks = normalizeTaskGraph(await loadProjectTasks(numericProjectId, viewId, {
+			const savedFilterTasks = await loadProjectTasks(numericProjectId, viewId, {
 				sortBy,
 				orderBy,
 				useViewTasks: viewKind === 'list',
-			}))
+				previousTasks: get().savedFilterTasks,
+			})
 			set({
 				savedFilterTasks,
 				currentSavedFilterViewId: viewId,
@@ -572,7 +604,7 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 		}))
 	},
 
-	async toggleTaskDone(taskId) {
+	async toggleTaskDone(taskId, options = {}) {
 		if (blockOfflineReadOnlyAction(get, set, 'complete tasks')) {
 			return false
 		}
@@ -598,7 +630,10 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 			}
 
 			return {
-				...applyTaskDoneOptimisticUpdate(state, taskId, nextDone, doneAt),
+				...applyTaskDoneOptimisticUpdate(state, taskId, nextDone, doneAt, {
+					viewId: options.kanbanViewId,
+					targetBucketId: options.targetBucketId,
+				}),
 				togglingTaskIds,
 				recentlyCompletedTaskIds: nextRecentlyCompletedTaskIds,
 				error: null,
@@ -624,11 +659,6 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 			)
 		}
 
-		const togglePayload: Partial<Task> = {
-			...snapshot,
-			done: nextDone,
-			done_at: nextDone ? doneAt : null,
-		}
 		const started = await get().startUndoableMutation({
 			notice: {
 				id: `task-done:${taskId}:${Date.now()}`,
@@ -638,6 +668,12 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 			},
 			durationMs: UNDOABLE_MUTATION_MS,
 			commit: async () => {
+				const latestTask = findTaskInAnyContext(taskId, getTaskCollections(get())) || snapshot
+				const togglePayload: Partial<Task> = {
+					...buildTaskProjectMovePayload(latestTask, latestTask.project_id),
+					done: nextDone,
+					done_at: nextDone ? doneAt : null,
+				}
 				await api(`/api/tasks/${taskId}`, {
 					method: 'POST',
 					body: togglePayload,
@@ -651,7 +687,10 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 					const nextRecentlyCompletedTaskIds = new Set(state.recentlyCompletedTaskIds)
 					nextRecentlyCompletedTaskIds.delete(taskId)
 					return {
-						...applyTaskDoneOptimisticUpdate(state, taskId, snapshot.done, snapshot.done_at || null),
+						...applyTaskDoneOptimisticUpdate(state, taskId, snapshot.done, snapshot.done_at || null, {
+							viewId: options.kanbanViewId,
+							targetBucketId: options.sourceBucketId,
+						}),
 						togglingTaskIds: nextTogglingTaskIds,
 						recentlyCompletedTaskIds: nextRecentlyCompletedTaskIds,
 					}
@@ -674,7 +713,10 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 					nextRecentlyCompletedTaskIds.delete(taskId)
 				}
 				return {
-					...applyTaskDoneOptimisticUpdate(state, taskId, snapshot.done, snapshot.done_at || null),
+					...applyTaskDoneOptimisticUpdate(state, taskId, snapshot.done, snapshot.done_at || null, {
+						viewId: options.kanbanViewId,
+						targetBucketId: options.sourceBucketId,
+					}),
 					togglingTaskIds: nextTogglingTaskIds,
 					recentlyCompletedTaskIds: nextRecentlyCompletedTaskIds,
 				}
@@ -773,84 +815,182 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 		return started
 	},
 
-	async moveTask(taskId, offset, taskListOverride) {
-		if (blockOfflineReadOnlyAction(get, set, 'reorder tasks')) {
+	async moveTask(intent) {
+		if (blockOfflineReadOnlyAction(get, set, 'move tasks')) {
 			return false
 		}
 
-		if (!offset) {
+		const taskId = Number(intent?.taskId || 0)
+		if (!taskId) {
 			return false
 		}
 
-		const task = findTaskInAnyContext(taskId, getTaskCollections(get()))
-		const activeSortBy = getTaskSortByForScreen(get().screen, get().taskFilters)
-		if (!task || !canTaskUsePositionReorder(task, activeSortBy)) {
+		const collections = getTaskCollections(get())
+		const task = findTaskInAnyContext(taskId, collections)
+		if (!task) {
 			return false
 		}
 
-		const taskList = Array.isArray(taskListOverride) && taskListOverride.length > 0
-			? taskListOverride
-			: getTaskCollectionForTask(task.id, task.project_id, getTaskCollections(get()))
-		const siblingTasks = getSiblingTasksForReorder(task, taskList)
-		const index = siblingTasks.findIndex(entry => entry.id === task.id)
-		const targetIndex = index + offset
-		if (index === -1 || targetIndex < 0 || targetIndex >= siblingTasks.length) {
+		const sourceTaskList = getTaskCollectionForTask(task.id, task.project_id, collections)
+		const taskList = intent.taskList === undefined ? sourceTaskList : intent.taskList
+		const relationTaskList = Array.isArray(taskList) ? taskList : sourceTaskList
+		const currentParentRefs = [...(task.related_tasks?.parenttask || [])]
+		const currentParentId = currentParentRefs[0]?.id || null
+		const nextParentTaskId = intent.parentTaskId === undefined
+			? currentParentId
+			: (Number(intent.parentTaskId || 0) || null)
+		if (nextParentTaskId && (nextParentTaskId === taskId || isTaskDescendant(taskId, nextParentTaskId, relationTaskList))) {
 			return false
 		}
 
-		const projectViewId = await get().resolveProjectTaskViewId(task.project_id)
-		if (!projectViewId) {
+		const parentTask = nextParentTaskId ? findTaskInAnyContext(nextParentTaskId, collections) : null
+		if (nextParentTaskId && !parentTask) {
 			return false
 		}
 
-		const reorderedSiblings = siblingTasks.slice()
-		const [movingTask] = reorderedSiblings.splice(index, 1)
-		reorderedSiblings.splice(targetIndex, 0, movingTask)
-		const previousSiblingPositions = getTaskPositionSnapshot(siblingTasks)
-
-		const beforeTask = reorderedSiblings[targetIndex - 1] || null
-		const afterTask = reorderedSiblings[targetIndex + 1] || null
-		const position = calculateTaskPosition(beforeTask?.position ?? null, afterTask?.position ?? null)
-
-		set(state => {
-			const movingTaskIds = new Set(state.movingTaskIds)
-			movingTaskIds.add(taskId)
-			return {
-				movingTaskIds,
-				openMenu: null,
-			}
-		})
-		applyLocalSiblingReorder(get(), reorderedSiblings, taskId, position)
-		set(getClonedTaskCollections(get()))
+		const targetProjectId = parentTask?.project_id || Number(intent.targetProjectId || task.project_id)
+		const context = resolveTaskDropViewContext(get, targetProjectId)
+		const explicitViewId = Number(intent.viewId || 0) || null
+		const projectViewId = explicitViewId || await resolveActiveProjectTaskViewId(get, targetProjectId, context)
+		const beforeTask = resolveTaskById(intent.beforeTaskId || null, collections)
+		const afterTask = resolveTaskById(intent.afterTaskId || null, collections)
+		const bucketId = intent.bucketId === undefined ? undefined : (Number(intent.bucketId || 0) || null)
+		const position = bucketId !== undefined
+			? resolveBucketMovePosition(get(), projectViewId, bucketId, task, beforeTask, afterTask)
+			: resolveMovedTaskPosition({
+				task,
+				parentTask,
+				beforeTask,
+				afterTask,
+				taskList: relationTaskList,
+			})
 
 		try {
-			const result = await api<{taskPosition?: {position?: number}}>(`/api/tasks/${taskId}/position`, {
-				method: 'POST',
-				body: {
-					project_view_id: projectViewId,
-					position,
-				},
+			set({openMenu: null})
+			markTaskDropTrace(intent.traceToken || null, 'optimistic-set-start', {
+				targetProjectId,
+				nextParentTaskId,
+				bucketId: bucketId ?? null,
 			})
-			const persistedPosition = Number(result?.taskPosition?.position)
-			if (Number.isFinite(persistedPosition) && persistedPosition !== position) {
-				applyLocalSiblingReorder(get(), reorderedSiblings, taskId, persistedPosition)
-				set(getClonedTaskCollections(get()))
+			const mutationSet = applyOptimisticTaskMove(get(), {
+				task,
+				sourceTaskList,
+				taskList: Array.isArray(taskList) ? taskList : null,
+				targetProjectId,
+				parentTask,
+				nextParentTaskId,
+				beforeTaskId: intent.beforeTaskId || null,
+				afterTaskId: intent.afterTaskId || null,
+				siblingIds: intent.siblingIds || null,
+				position,
+				bucketId,
+				viewId: projectViewId,
+			})
+			set(getSelectiveTaskCollectionUpdate(get(), mutationSet))
+			markTaskDropTrace(intent.traceToken || null, 'optimistic-set-end')
+
+			if (task.project_id !== targetProjectId) {
+				markTaskDropTrace(intent.traceToken || null, 'api-project-update-start')
+				await api(`/api/tasks/${taskId}`, {
+					method: 'POST',
+					body: buildTaskProjectMovePayload(task, targetProjectId),
+				})
+				markTaskDropTrace(intent.traceToken || null, 'api-project-update-end')
 			}
 
+			if (currentParentId !== nextParentTaskId) {
+				for (const parentRef of currentParentRefs) {
+					markTaskDropTrace(intent.traceToken || null, 'api-parent-relation-delete-start', {parentId: parentRef.id})
+					await api(`/api/tasks/${parentRef.id}/relations/subtask/${taskId}`, {
+						method: 'DELETE',
+					})
+					markTaskDropTrace(intent.traceToken || null, 'api-parent-relation-delete-end', {parentId: parentRef.id})
+				}
+
+				if (nextParentTaskId) {
+					markTaskDropTrace(intent.traceToken || null, 'api-parent-relation-add-start', {parentId: nextParentTaskId})
+					await api(`/api/tasks/${nextParentTaskId}/relations`, {
+						method: 'PUT',
+						body: {
+							other_task_id: taskId,
+							relation_kind: 'subtask',
+						},
+					})
+					markTaskDropTrace(intent.traceToken || null, 'api-parent-relation-add-end', {parentId: nextParentTaskId})
+				}
+			}
+
+			if (bucketId !== undefined && projectViewId && bucketId) {
+				markTaskDropTrace(intent.traceToken || null, 'api-bucket-update-start', {projectViewId, bucketId})
+				await api(`/api/projects/${targetProjectId}/views/${projectViewId}/buckets/${bucketId}/tasks`, {
+					method: 'POST',
+					body: {
+						task_id: taskId,
+						bucket_id: bucketId,
+						project_view_id: projectViewId,
+						project_id: targetProjectId,
+					},
+				})
+				markTaskDropTrace(intent.traceToken || null, 'api-bucket-update-end', {projectViewId, bucketId})
+			}
+
+			if (projectViewId && Number.isFinite(position)) {
+				markTaskDropTrace(intent.traceToken || null, 'api-position-update-start', {projectViewId})
+				const result = await api<{taskPosition?: {position?: number}}>(`/api/tasks/${taskId}/position`, {
+					method: 'POST',
+					body: {
+						project_view_id: projectViewId,
+						position,
+					},
+				})
+				const persistedPosition = Number(result?.taskPosition?.position)
+				if (Number.isFinite(persistedPosition) && persistedPosition !== position) {
+					markTaskDropTrace(intent.traceToken || null, 'api-position-normalized', {persistedPosition})
+					applyTaskPositionSnapshot(get(), new Map([[taskId, persistedPosition]]))
+					set(getClonedTaskCollections(get()))
+				}
+				markTaskDropTrace(intent.traceToken || null, 'api-position-update-end', {projectViewId})
+			}
+
+			if (shouldSkipFullRefreshForVisibleTaskDrop(get().screen)) {
+				markTaskDropTrace(intent.traceToken || null, 'skip-full-refresh-for-visible-task-drop', {
+					screen: get().screen,
+					crossProject: task.project_id !== targetProjectId,
+				})
+				const selectedProjectId = Number(get().selectedProjectId || 0) || null
+				const currentProjectViewId = Number(get().currentProjectViewId || 0) || null
+				const activeProjectViews = selectedProjectId ? get().projectViewsById[selectedProjectId] || [] : []
+				const activeProjectView =
+					currentProjectViewId && selectedProjectId
+						? activeProjectViews.find(view => view.id === currentProjectViewId) || null
+						: null
+				if (selectedProjectId && currentProjectViewId && activeProjectView?.view_kind === 'kanban') {
+					await get().loadProjectBuckets(selectedProjectId, currentProjectViewId, {force: true})
+				}
+				void refreshBackgroundVisibleTaskCollectionsAfterDrop(get, intent.traceToken || null)
+				if (get().taskDetailOpen && get().taskDetail?.id === taskId) {
+					void get().openTaskDetail(taskId)
+				}
+				return true
+			}
+
+			markTaskDropTrace(intent.traceToken || null, 'refresh-current-collections-start')
+			await get().refreshCurrentCollections()
+			markTaskDropTrace(intent.traceToken || null, 'refresh-current-collections-end')
+			if (get().taskDetailOpen && get().taskDetail?.id === taskId) {
+				markTaskDropTrace(intent.traceToken || null, 'task-detail-reload-start')
+				await get().openTaskDetail(taskId)
+				markTaskDropTrace(intent.traceToken || null, 'task-detail-reload-end')
+			}
 			return true
 		} catch (error) {
-			applyTaskPositionSnapshot(get(), previousSiblingPositions)
-			set(getClonedTaskCollections(get()))
-			set({
-				error: formatError(error as Error),
-			})
+			markTaskDropTrace(intent.traceToken || null, 'drop-failed', formatError(error as Error))
+			await get().refreshCurrentCollections()
+			if (get().taskDetailOpen && get().taskDetail?.id === taskId) {
+				await get().openTaskDetail(taskId)
+			}
+			set({error: formatError(error as Error)})
 			return false
-		} finally {
-			set(state => {
-				const movingTaskIds = new Set(state.movingTaskIds)
-				movingTaskIds.delete(taskId)
-				return {movingTaskIds}
-			})
 		}
 	},
 
@@ -898,162 +1038,6 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 			activeSubtaskParentId: state.activeSubtaskSource === 'focus' ? null : state.activeSubtaskParentId,
 			activeSubtaskSource: state.activeSubtaskSource === 'focus' ? null : state.activeSubtaskSource,
 		}))
-	},
-
-	async moveTaskToPlacement(taskId, options) {
-		if (blockOfflineReadOnlyAction(get, set, 'move tasks')) {
-			return false
-		}
-
-		const collections = getTaskCollections(get())
-		const task = findTaskInAnyContext(taskId, collections)
-		if (!task) {
-			return false
-		}
-
-		const nextParentTaskId = options.parentTaskId ? Number(options.parentTaskId) : null
-		const sourceTaskList = getTaskCollectionForTask(task.id, task.project_id, collections)
-		const taskList = options.taskList === undefined ? sourceTaskList : options.taskList
-		const relationTaskList = Array.isArray(taskList) ? taskList : sourceTaskList
-		if (nextParentTaskId && (nextParentTaskId === taskId || isTaskDescendant(taskId, nextParentTaskId, relationTaskList))) {
-			return false
-		}
-
-		const parentTask = nextParentTaskId ? findTaskInAnyContext(nextParentTaskId, collections) : null
-		if (nextParentTaskId && !parentTask) {
-			return false
-		}
-
-		const currentParentRefs = [...(task.related_tasks?.parenttask || [])]
-		const currentParentId = currentParentRefs[0]?.id || null
-		const targetProjectId = parentTask?.project_id || Number(options.targetProjectId || task.project_id)
-		const beforeTask = resolveTaskById(options.beforeTaskId || null, collections)
-		const afterTask = resolveTaskById(options.afterTaskId || null, collections)
-		const position = resolveMovedTaskPosition({
-			task,
-			parentTask,
-			beforeTask,
-			afterTask,
-			taskList: relationTaskList,
-		})
-
-		try {
-			set({openMenu: null})
-			markTaskDropTrace(options.traceToken || null, 'optimistic-set-start', {
-				targetProjectId,
-				nextParentTaskId,
-			})
-			const mutationSet = targetProjectId !== task.project_id
-				? applyOptimisticVisibleTaskPlacement(get(), {
-					task,
-					sourceTaskList,
-					taskList,
-					targetProjectId,
-					parentTask,
-					nextParentTaskId,
-					beforeTaskId: options.beforeTaskId || null,
-					afterTaskId: options.afterTaskId || null,
-					siblingIds: options.siblingIds || null,
-					position,
-				})
-				: applyOptimisticTaskPlacement(get(), {
-					task,
-					taskList: relationTaskList,
-					targetProjectId,
-					parentTask,
-					nextParentTaskId,
-					beforeTaskId: options.beforeTaskId || null,
-					afterTaskId: options.afterTaskId || null,
-					siblingIds: options.siblingIds || null,
-					position,
-				})
-			set(getSelectiveTaskCollectionUpdate(get(), mutationSet))
-			markTaskDropTrace(options.traceToken || null, 'optimistic-set-end')
-
-			if (task.project_id !== targetProjectId) {
-				markTaskDropTrace(options.traceToken || null, 'api-project-update-start')
-				await api(`/api/tasks/${taskId}`, {
-					method: 'POST',
-					body: buildTaskProjectMovePayload(task, targetProjectId),
-				})
-				markTaskDropTrace(options.traceToken || null, 'api-project-update-end')
-			}
-
-			if (currentParentId !== nextParentTaskId) {
-				for (const parentRef of currentParentRefs) {
-					markTaskDropTrace(options.traceToken || null, 'api-parent-relation-delete-start', {parentId: parentRef.id})
-					await api(`/api/tasks/${parentRef.id}/relations/subtask/${taskId}`, {
-						method: 'DELETE',
-					})
-					markTaskDropTrace(options.traceToken || null, 'api-parent-relation-delete-end', {parentId: parentRef.id})
-				}
-
-				if (nextParentTaskId) {
-					markTaskDropTrace(options.traceToken || null, 'api-parent-relation-add-start', {parentId: nextParentTaskId})
-					await api(`/api/tasks/${nextParentTaskId}/relations`, {
-						method: 'PUT',
-						body: {
-							other_task_id: taskId,
-							relation_kind: 'subtask',
-						},
-					})
-					markTaskDropTrace(options.traceToken || null, 'api-parent-relation-add-end', {parentId: nextParentTaskId})
-				}
-			}
-
-			const projectViewId = await get().resolveProjectTaskViewId(targetProjectId)
-			if (projectViewId && Number.isFinite(position)) {
-				markTaskDropTrace(options.traceToken || null, 'api-position-update-start', {projectViewId})
-				await api(`/api/tasks/${taskId}/position`, {
-					method: 'POST',
-					body: {
-						project_view_id: projectViewId,
-						position,
-					},
-				})
-				markTaskDropTrace(options.traceToken || null, 'api-position-update-end', {projectViewId})
-			}
-
-			if (shouldSkipFullRefreshForVisibleTaskDrop(get().screen)) {
-				markTaskDropTrace(options.traceToken || null, 'skip-full-refresh-for-visible-task-drop', {
-					screen: get().screen,
-					crossProject: task.project_id !== targetProjectId,
-				})
-				const selectedProjectId = Number(get().selectedProjectId || 0) || null
-				const currentProjectViewId = Number(get().currentProjectViewId || 0) || null
-				const activeProjectViews = selectedProjectId ? get().projectViewsById[selectedProjectId] || [] : []
-				const activeProjectView =
-					currentProjectViewId && selectedProjectId
-						? activeProjectViews.find(view => view.id === currentProjectViewId) || null
-						: null
-				if (selectedProjectId && currentProjectViewId && activeProjectView?.view_kind === 'kanban') {
-					await get().loadProjectBuckets(selectedProjectId, currentProjectViewId, {force: true})
-				}
-				void refreshBackgroundVisibleTaskCollectionsAfterDrop(get, options.traceToken || null)
-				if (get().taskDetailOpen && get().taskDetail?.id === taskId) {
-					void get().openTaskDetail(taskId)
-				}
-				return true
-			}
-
-			markTaskDropTrace(options.traceToken || null, 'refresh-current-collections-start')
-			await get().refreshCurrentCollections()
-			markTaskDropTrace(options.traceToken || null, 'refresh-current-collections-end')
-			if (get().taskDetailOpen && get().taskDetail?.id === taskId) {
-				markTaskDropTrace(options.traceToken || null, 'task-detail-reload-start')
-				await get().openTaskDetail(taskId)
-				markTaskDropTrace(options.traceToken || null, 'task-detail-reload-end')
-			}
-			return true
-		} catch (error) {
-			markTaskDropTrace(options.traceToken || null, 'drop-failed', formatError(error as Error))
-			await get().refreshCurrentCollections()
-			if (get().taskDetailOpen && get().taskDetail?.id === taskId) {
-				await get().openTaskDetail(taskId)
-			}
-			set({error: formatError(error as Error)})
-			return false
-		}
 	},
 
 	resetTasksState() {
@@ -1118,21 +1102,130 @@ async function loadProjectTasks(
 		sortBy = [],
 		orderBy = [],
 		useViewTasks = true,
+		previousTasks = [],
 	}: {
 		sortBy?: string[]
 		orderBy?: string[]
 		useViewTasks?: boolean
+		previousTasks?: Task[]
 	} = {},
 ) {
-	const normalizedSort = useViewTasks
-		? {sortBy, orderBy}
-		: sanitizeProjectTaskSort(sortBy, orderBy)
-	const query = buildProjectTaskQuery(normalizedSort.sortBy, normalizedSort.orderBy)
 	if (viewId && useViewTasks) {
-		return api<Task[]>(`/api/projects/${projectId}/views/${viewId}/tasks${query}`)
+		const fallbackSort = sanitizeTaskCollectionSort(sortBy, orderBy)
+		const [viewTasks, completedTasks] = await Promise.all([
+			api<Task[]>(`/api/projects/${projectId}/views/${viewId}/tasks${buildProjectTaskQuery(sortBy, orderBy)}`),
+			api<Task[]>(
+				`/api/projects/${projectId}/tasks${buildProjectTaskQuery(
+					fallbackSort.sortBy,
+					fallbackSort.orderBy,
+					buildTaskStatusFilter('done'),
+				)}`,
+			),
+		])
+
+		const normalizedViewTasks = normalizeTaskGraph(viewTasks)
+		const normalizedCompletedTasks = normalizeTaskGraph(completedTasks)
+		return isManualTaskSort(sortBy[0])
+			? mergeTaskListsWithStablePositions(
+				normalizedViewTasks,
+				normalizedCompletedTasks,
+				previousTasks,
+			)
+			: mergeTaskListsPreservingPrimaryOrder(
+				normalizedViewTasks,
+				normalizedCompletedTasks,
+			)
 	}
 
-	return api<Task[]>(`/api/projects/${projectId}/tasks${query}`)
+	const normalizedSort = sanitizeTaskCollectionSort(sortBy, orderBy)
+	return normalizeTaskGraph(
+		await api<Task[]>(`/api/projects/${projectId}/tasks${buildProjectTaskQuery(normalizedSort.sortBy, normalizedSort.orderBy)}`),
+	)
+}
+
+async function resolveActiveProjectTaskViewId(
+	get: () => AppStore,
+	projectId: number,
+	context: 'project' | 'inbox' | 'savedFilter',
+) {
+	const currentViewId = getCurrentProjectTaskViewId(get(), projectId, context)
+	if (currentViewId) {
+		return currentViewId
+	}
+
+	return get().resolveProjectTaskViewId(projectId)
+}
+
+function getCurrentProjectTaskViewId(
+	state: AppStore,
+	projectId: number,
+	context: 'project' | 'inbox' | 'savedFilter',
+) {
+	if (!projectId) {
+		return null
+	}
+
+	const candidateViewId = context === 'inbox'
+		? Number(state.currentInboxViewId || 0) || null
+		: context === 'savedFilter'
+			? Number(state.currentSavedFilterViewId || 0) || null
+			: Number(state.currentProjectViewId || 0) || null
+	if (!candidateViewId) {
+		return null
+	}
+
+	const projectViews = state.projectViewsById[projectId] || []
+	if (projectViews.length > 0 && projectViews.some(view => view.id === candidateViewId)) {
+		return candidateViewId
+	}
+
+	return null
+}
+
+function resolveTaskDropViewContext(get: () => AppStore, targetProjectId: number) {
+	const state = get()
+	if (targetProjectId && targetProjectId === state.resolveInboxProjectId()) {
+		return 'inbox' as const
+	}
+
+	if (targetProjectId && targetProjectId === Number(state.selectedSavedFilterProjectId || 0)) {
+		return 'savedFilter' as const
+	}
+
+	if (targetProjectId && targetProjectId === Number(state.selectedProjectId || 0)) {
+		return 'project' as const
+	}
+
+	return 'project' as const
+}
+
+function resolveBucketMovePosition(
+	state: AppStore,
+	viewId: number | null,
+	bucketId: number | null,
+	task: Task,
+	beforeTask: Task | null,
+	afterTask: Task | null,
+) {
+	if (beforeTask || afterTask) {
+		return calculateTaskPosition(beforeTask?.position ?? null, afterTask?.position ?? null)
+	}
+
+	if (!viewId || !bucketId) {
+		return Number(task.position || 0)
+	}
+
+	const buckets = state.projectBucketsByViewId[viewId] || []
+	const targetBucket = buckets.find(bucket => bucket.id === bucketId) || null
+	if (!targetBucket) {
+		return Number(task.position || 0)
+	}
+
+	const siblingTasks = targetBucket.tasks
+		.filter(candidate => candidate.id !== task.id)
+		.sort((left, right) => Number(left.position || 0) - Number(right.position || 0) || left.id - right.id)
+	const lastSiblingTask = siblingTasks[siblingTasks.length - 1] || null
+	return calculateTaskPosition(lastSiblingTask?.position ?? null, null)
 }
 
 async function resolveProjectViewKind(
@@ -1151,7 +1244,7 @@ async function resolveProjectViewKind(
 	return views.find(view => view.id === viewId)?.view_kind || 'list'
 }
 
-function sanitizeProjectTaskSort(sortBy: string[], orderBy: string[]) {
+function sanitizeTaskCollectionSort(sortBy: string[], orderBy: string[]) {
 	const pairs = sortBy.map((value, index) => ({
 		sortBy: value,
 		orderBy: orderBy[index] || 'asc',
@@ -1169,6 +1262,21 @@ function sanitizeProjectTaskSort(sortBy: string[], orderBy: string[]) {
 		sortBy: filteredPairs.map(pair => pair.sortBy),
 		orderBy: filteredPairs.map(pair => pair.orderBy),
 	}
+}
+
+function buildTodayTaskFilter(status: 'all' | 'open' | 'done' = 'all') {
+	const todayStart = new Date()
+	todayStart.setHours(0, 0, 0, 0)
+	const tomorrowStart = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000)
+	const conditions = [
+		`due_date >= "${todayStart.toISOString()}"`,
+		`due_date < "${tomorrowStart.toISOString()}"`,
+	]
+	const statusFilter = buildTaskStatusFilter(status)
+	if (statusFilter) {
+		conditions.push(statusFilter)
+	}
+	return conditions.join(' && ')
 }
 
 async function refreshTaskVisibilityAfterCompletion(get: () => AppStore, taskId: number) {

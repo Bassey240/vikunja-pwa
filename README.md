@@ -6,41 +6,57 @@ This project is a free, independent PWA client for the Vikunja API. It is not
 affiliated with, endorsed by, or maintained by the official Vikunja project or
 its maintainers.
 
-React-based mobile-first external Vikunja client prototype focused on faster
-task capture, nested project browsing, and Todoist-like continuous entry while
-staying on top of the real Vikunja API.
+Vikunja PWA is a mobile-first, installable client for self-hosted Vikunja
+instances. It keeps the real Vikunja API and data model, but wraps them in a
+faster touch-friendly shell with better task-tree handling, stronger
+cross-device ergonomics, and a same-origin backend for sessions and optional
+admin tooling.
+
+## Why This Client
+
+- drag-and-drop friendly task handling across supported project views
+- real project and task tree browsing instead of flattening everything into a single list
+- mobile-first interaction model that still scales up to tablet and desktop layouts
+- installable PWA shell with offline reopen support and browser notification setup
+- same-origin backend for safer session handling, share flows, and optional CLI-backed admin actions
 
 ## Current product state
 
-- mobile-first project browser with nested sub-projects
-- project screen that shows both child projects and task contents
-- continuous black-shell layout with global header pills and floating footer pill navigation
-- inline parent/child task tree with continuous add flows
-- Today is the default landing screen
-- dedicated Inbox and Upcoming screens plus inline global search on project-facing pages
-- account settings with backend-managed Vikunja sessions
-- admin user management backed by the Vikunja CLI bridge
-- collaboration settings, team management, and project sharing
-- project link shares plus a dedicated shared-project auth/shell flow
-- responsive desktop/tablet shell with retractable sidebar and inspector
-- installable PWA shell with validated Safari/iPhone install icons, service worker shell caching, and runtime status reporting
-- browser notification permission/setup and test alerts on supported desktop browsers, Safari desktop web apps, and installed HTTPS iPhone web apps
-- HTTPS-capable local/prototype server mode for secure mobile PWA testing
-- view-backed project task loading that prefers the real Vikunja list view
-- unrestricted server URL entry for any reachable Vikunja instance
-- March 21 structural cleanup completed across the task store, detail/settings screens, AppShell overlays, and CSS hygiene
-- March 21 security hardening pass completed for headers, JSON body sizing, trusted-proxy rate limiting, password-change coverage, and legacy-token warnings
-- March 21 open-source packaging pass completed for the code of conduct, package metadata, Docker examples, README onboarding, and admin bridge diagnostics
-- March 22 release-hygiene pass completed for `npm audit`, the final `.gitignore` review, and clean `dist/` / `.data/` history verification
-- March 25 deploy/runtime pass completed for public Docker defaults, desktop Safari notification testing, and task-move data preservation
+This is a working `0.2.0-alpha` prototype. It is feature-rich enough to use and
+evaluate, but it is not presented as a production-ready client.
 
-This is still a working prototype, not a production-ready client.
+- Today-first shell with Inbox, Upcoming, Projects, Search, Labels, and Settings
+- nested sub-project browsing with inline parent/child task trees and continuous add flows
+- list, Kanban, Table, and Gantt project views backed by the real Vikunja API
+- responsive desktop and tablet shell with sidebar and inspector behavior
+- collaboration flows for users, teams, project sharing, link shares, and shared-project access
+- backend-managed account sessions, onboarding flows, avatar management, and notification preferences
+- installable PWA runtime with offline reopen support, service-worker shell caching, and notification setup
+- optional admin control-plane features for user management, SMTP diagnostics, and deployment-aware apply/restart
 
-## 0.1 alpha scope
+Recent work has focused on stability and release readiness rather than flashy
+scope growth: structural cleanup, security hardening, open-source packaging,
+Docker/deploy polish, avatar parity, onboarding/auth flows, and the first pass
+of the admin control plane are all included in this alpha.
 
-The planned first public alpha is intentionally narrower than the full roadmap.
+## 0.2 alpha scope
 
-Included in `0.1.0-alpha`:
+The first public alpha is intentionally narrower than the full roadmap. The aim
+is to ship a coherent, open-source-shareable snapshot with strong core task
+handling, collaboration coverage, and a realistic deployment story.
+
+## What's New In 0.2.0-alpha
+
+- Full avatar management was added, including provider switching (`Default avatar`, `Initials`, `Gravatar`, `Marble`, `Upload`) and uploaded-avatar support.
+- Account onboarding now includes registration, forgot-password, reset-password, and reset-link handoff for single-instance deployments.
+- Email delivery can now be configured from the PWA through SMTP settings, test mail diagnostics, and apply/restart support instead of requiring manual server-side edits only.
+- Admin bridge access is now explicitly operator-gated, and the email/SMTP settings UI now reflects whether the current deployment is writable or read-only.
+- Mail diagnostics were tightened so email test failures are reported correctly even when the Vikunja CLI exits with status `0`.
+- The Docker release target was updated to Node 22, and the image now includes the Compose support needed for admin apply/restart flows.
+- The post-0.1 stabilization work also includes task-move and completion-refresh fixes across list, Kanban, Today, and cross-project drag/drop flows.
+- Smoke coverage was expanded for avatars, onboarding/auth, drag-and-drop, task detail, email admin flows, operator auth, compose apply, and mail diagnostics.
+
+Included in `0.2.0-alpha`:
 
 - mobile-first shell with Today, Inbox, Upcoming, Projects, Search, Labels, and Settings
 - nested project and task hierarchy handling
@@ -50,13 +66,30 @@ Included in `0.1.0-alpha`:
 - read-only offline restore and cached browsing
 - browser notification capability setup plus notification-center preferences
 - first-pass bulk task editing on list/tree task surfaces
+- first-pass onboarding and auth flows: registration, forgot password, reset password, and reset-link handoff
+- SMTP administration with operator-only bridge access, testmail diagnostics, and deploy-aware apply/restart
 
-Explicitly not in `0.1.0-alpha`:
+Explicitly not in `0.2.0-alpha`:
 
 - offline sync, queued edits, or conflict handling
 - real event-driven push delivery
 - saved-filter authoring/builder UI
 - richer post-v1 platform features like OIDC, share target, app-store packaging, or multi-account switching UX
+
+## Changes Since The GitHub v0.1.0-alpha Snapshot
+
+The last public GitHub snapshot is `v0.1.0-alpha` on `github/main`. Since that
+release, this repo has gained:
+
+- Full avatar management was added, including avatar-provider switching, uploaded avatars, live avatar-route compatibility, and regression coverage for that surface.
+- Registration, forgot-password, reset-password, and reset-link handoff were added so the app now covers the first pass of user onboarding instead of sign-in only.
+- Email delivery administration was added to the admin settings flow, including SMTP config inspection, save, apply/restart, and testmail diagnostics.
+- Admin bridge authorization no longer assumes a built-in Vikunja admin role and now uses an explicit operator email allowlist on the PWA side.
+- Writable admin config handling now supports real deployment sources instead of writing into the running container filesystem, and the email settings UI reflects writable versus read-only capability.
+- Mail diagnostics were corrected so SMTP/email delivery failures are surfaced even when the Vikunja CLI prints an error but still exits `0`.
+- The Docker/runtime path was updated to Node 22, the container now includes Compose support for apply/restart, and the build no longer emits the earlier engine warnings.
+- Task-move and completion-refresh stability improved after `v0.1.0-alpha`, with follow-up fixes for cross-project moves, list completion, Kanban completion, and Today due-date preservation.
+- The smoke suite broadened substantially after `v0.1.0-alpha`, adding coverage for avatars, onboarding/auth, drag-and-drop, project/task detail flows, email admin config, operator auth, compose apply, and mail diagnostics.
 
 ## Screenshots
 
@@ -185,8 +218,109 @@ Optional advanced Docker features stay in the same compose file and are enabled 
 - HTTPS: set `APP_HTTPS_CERT_PATH`, `APP_HTTPS_KEY_PATH`, and `APP_PUBLIC_ORIGIN`, then place the cert files in `./deploy/`
 - same-host admin bridge: set `VIKUNJA_BRIDGE_MODE=docker-exec`
 - remote admin bridge: set `VIKUNJA_BRIDGE_MODE=ssh-docker-exec` and the SSH vars, then place the SSH key in `./deploy/`
+- operator authorization: set `ADMIN_BRIDGE_ALLOWED_EMAILS=you@example.com`
+- writable SMTP/admin config:
+  - for local `docker-exec` deployments where this PWA also runs in Docker, set `VIKUNJA_ADMIN_SOURCE_HOST_PATH` to the authoritative upstream Vikunja deployment directory on the host
+  - then point `VIKUNJA_HOST_CONFIG_PATH` or `VIKUNJA_COMPOSE_PATH` at the mounted in-container path under `/app/admin-source`
+  - set `VIKUNJA_HOST_CONFIG_PATH` to a persistent Vikunja config file, or
+  - set `VIKUNJA_COMPOSE_PATH` to the authoritative upstream Vikunja `docker-compose.yml`
 
-Current note: the checked-in Dockerfile still builds on Node 18, so the container build may emit engine warnings from newer frontend dependencies even though the app still builds and runs.
+### Writable SMTP Setup
+
+If you want the SMTP form in the PWA to be editable and to support `Apply & Restart`,
+the PWA must be able to reach the real Vikunja deployment config source.
+
+The PWA does not write into the running Vikunja container filesystem.
+It writes to one of these authoritative sources instead:
+
+- a persistent Vikunja config file via `VIKUNJA_HOST_CONFIG_PATH`
+- the upstream Vikunja `docker-compose.yml` via `VIKUNJA_COMPOSE_PATH`
+
+#### Same-host Docker example
+
+Use this when:
+
+- the PWA runs in Docker
+- Vikunja runs in Docker on the same host
+- the PWA bridge mode is `docker-exec`
+
+Add these to the PWA `.env`:
+
+```env
+VIKUNJA_BRIDGE_MODE=docker-exec
+VIKUNJA_CONTAINER_NAME=vikunja-vikunja-1
+ADMIN_BRIDGE_ALLOWED_EMAILS=you@example.com
+VIKUNJA_ADMIN_SOURCE_HOST_PATH=/home/admin/docker/vikunja
+VIKUNJA_ADMIN_SOURCE_CONTAINER_PATH=/home/admin/docker/vikunja
+VIKUNJA_COMPOSE_PATH=/home/admin/docker/vikunja/docker-compose.yml
+```
+
+What this does:
+
+- `VIKUNJA_ADMIN_SOURCE_HOST_PATH` bind-mounts the real upstream Vikunja deployment directory into the PWA container
+- `VIKUNJA_ADMIN_SOURCE_CONTAINER_PATH` makes that directory available at the same absolute path inside the PWA container
+- `VIKUNJA_COMPOSE_PATH` points the PWA at that mounted in-container compose file
+
+Using the same absolute path matters when the upstream `docker-compose.yml` uses relative bind mounts like `./files` and `./db`.
+That lets `Apply & Restart` recreate Vikunja with the correct bind-source paths.
+
+Do not point `VIKUNJA_COMPOSE_PATH` at a raw host path like `/home/admin/docker/vikunja/docker-compose.yml` when the PWA itself runs in Docker unless that same host directory is also mounted into the PWA container at the same absolute path.
+
+#### SSH bridge example
+
+Use this when:
+
+- the PWA runs on a workstation or separate host
+- Vikunja runs on a remote Docker host
+- the PWA bridge mode is `ssh-docker-exec`
+
+Add these to the PWA `.env`:
+
+```env
+VIKUNJA_BRIDGE_MODE=ssh-docker-exec
+VIKUNJA_SSH_DESTINATION=admin@vikunja-host
+VIKUNJA_SSH_PORT=22
+VIKUNJA_SSH_KEY_PATH=/app/deploy/id_ed25519
+ADMIN_BRIDGE_ALLOWED_EMAILS=you@example.com
+VIKUNJA_COMPOSE_PATH=/home/admin/docker/vikunja/docker-compose.yml
+```
+
+In SSH mode, `VIKUNJA_COMPOSE_PATH` is a remote absolute path on the Vikunja host.
+You do not need `/app/admin-source` in this mode.
+
+#### After changing `.env`
+
+Rebuild and restart the PWA container:
+
+```bash
+docker compose build --no-cache
+docker compose up -d
+```
+
+Then verify:
+
+```bash
+curl -s http://127.0.0.1:4300/health
+curl -i -s http://127.0.0.1:4300/api/admin/config/mailer
+```
+
+The second command should return `401 Unauthorized` when not logged in, which confirms the route exists.
+
+#### Troubleshooting
+
+- SMTP form is read-only:
+  - `VIKUNJA_HOST_CONFIG_PATH` and `VIKUNJA_COMPOSE_PATH` are both unset, or the configured path is not reachable from the PWA runtime
+- Flashes `No services were found in the configured Docker Compose file`:
+  - the compose file path exists in config but the file is not actually readable from the PWA process, commonly because a Docker host path was used inside a container without a bind mount
+- Save works but `Apply & Restart` fails:
+  - in same-host `docker-exec` mode, the upstream Vikunja directory is mounted into the PWA container at a different path than the host path, so relative bind mounts in the upstream compose file cannot be recreated correctly
+  - set `VIKUNJA_ADMIN_SOURCE_CONTAINER_PATH` to the same absolute path as `VIKUNJA_ADMIN_SOURCE_HOST_PATH`, and point `VIKUNJA_COMPOSE_PATH` at that same absolute path
+- User administration says only authorized operator accounts may manage users:
+  - `ADMIN_BRIDGE_ALLOWED_EMAILS` is unset, or the signed-in Vikunja account email is not in that allowlist
+- Bridge features are unavailable:
+  - `VIKUNJA_BRIDGE_MODE`, container name, SSH destination, Docker socket access, or SSH key config is missing or unreachable
+
+The checked-in Dockerfile now builds on Node 22, which matches the current frontend toolchain requirements and keeps container builds free of Node engine warnings.
 
 Deployment safety note:
 
@@ -198,18 +332,29 @@ Deployment safety note:
 ## CLI Bridge (Optional)
 
 The Vikunja CLI bridge is optional. You only need it if you want to create,
-edit, disable, or delete Vikunja users from inside this app. Core task,
-project, sharing, offline, and notification flows all work without it.
+edit, disable, or delete Vikunja users from inside this app, run `testmail`,
+run `doctor`, or apply writable SMTP/admin-config changes. Core task, project,
+sharing, offline, and notification flows all work without it.
 
 - Why it exists: Vikunja does not expose instance user CRUD through its REST API, so this app uses the Vikunja CLI from the server side.
 - Supported modes:
   - `docker-exec` for same-host deployments where the app server can reach the Vikunja container runtime
   - `ssh-docker-exec` for a local workstation or separate app host reaching a remote Docker host over SSH
+- Authorization:
+  - set `ADMIN_BRIDGE_ALLOWED_EMAILS` to the signed-in Vikunja account emails that may use bridge/admin routes
+  - without that allowlist, the PWA treats bridge/admin features as unauthorized
+- SMTP/admin-config source modes:
+  - if `VIKUNJA_HOST_CONFIG_PATH` is set, SMTP becomes `file-backed` and the PWA can save config there
+  - if `VIKUNJA_COMPOSE_PATH` is set, SMTP becomes `compose-env` and the PWA manages the upstream Vikunja compose env for mailer settings
+  - if both are unset, SMTP stays `read-only`
+  - in local `docker-exec` mode the path must be readable from the app process/container, which usually means mounting the authoritative host directory into `/app/admin-source`
+  - in SSH mode the path is a remote absolute path on the Vikunja host
 - Trust implications:
   - `docker-exec` implies Docker/socket-level access on the host running the app server
   - `ssh-docker-exec` implies SSH key-based access to the remote Docker host
 - Without the bridge:
-  - the Settings admin-user section becomes read-only diagnostic UI
+  - user-management, `testmail`, and `doctor` stay unavailable
+  - SMTP stays read-only unless `VIKUNJA_HOST_CONFIG_PATH` or `VIKUNJA_COMPOSE_PATH` is configured locally
   - everything else in the app remains usable
 
 Detailed operational, deployment, audit, and planning notes are intentionally
@@ -222,7 +367,8 @@ kept outside this public repo.
 - For self-hosted Vikunja, the intended path is `Settings > Accounts` with username/password login.
 - API token mode still exists, but the token is submitted to the backend and kept out of browser storage.
 - Account sessions are now stored server-side in an encrypted local file, so ordinary backend restarts keep interactive sessions.
-- Admin user lifecycle actions run through a backend-only Vikunja CLI bridge; the browser never gets Docker or CLI access.
+- Admin user lifecycle actions and bridge-only admin operations run through a backend-only Vikunja CLI bridge; the browser never gets Docker or CLI access.
+- Deployment-level SMTP/admin config is only written to an explicit host config path. The running Vikunja container filesystem is never treated as the source of truth.
 - Shared project links authenticate into a dedicated public/shared shell instead of the normal signed-in app shell.
 - The app can also run directly over HTTPS with local certs for secure mobile PWA testing, including iPhone installed-app notification checks.
 - `VIKUNJA_DEFAULT_BASE_URL` or `VIKUNJA_BASE_URL` may be either:
@@ -330,7 +476,7 @@ Not supported:
 - This is still a prototype, not a production client.
 - Vikunja supports labels on tasks, but not project labels through the upstream API route set currently used here.
 - Saved filters are intentionally browse/open only in the client right now.
-- Admin user management still depends on the current bridge trust model around the primary Vikunja admin account.
+- Bridge/admin routes depend on an explicit operator email allowlist configured in the deployment environment.
 - The smoke suite now covers collaboration, shared-link, notification-preference, and bulk-edit flows. Continue maintaining selectors as the shell evolves.
 - Offline support now covers read-only cached browsing after one successful online load: the app shell, last signed-in state, and cached project/task views can reopen without a live connection, but edits remain disabled offline.
 - Browser notification setup and test alerts now work on supported desktop browsers and installed HTTPS iPhone web apps. Notification-center preferences are also shipped, but event-driven push delivery is still not built yet.
@@ -370,7 +516,7 @@ CI is wired for both GitHub Actions and Forgejo Actions in:
 
 ## Troubleshooting
 
-- If sign-in or other write operations fail from the browser, check `APP_PUBLIC_ORIGIN` and `APP_ALLOWED_ORIGINS`.
+- If the app is behind a trusted reverse proxy or Cloudflare Tunnel, set `APP_TRUST_PROXY=true` so same-origin mutation checks use the forwarded host and protocol.
 - If iPhone offline shell or browser notifications do not work, use a trusted HTTPS origin and add the app to the Home Screen from Safari.
 - If admin user management is unavailable, verify the optional CLI bridge environment variables on the server. The rest of the app should still work without it.
 - If UI smoke tests fail locally before the browser starts, run `npx playwright install chromium`.

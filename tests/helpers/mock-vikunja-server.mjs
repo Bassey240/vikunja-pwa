@@ -1,7 +1,15 @@
 import http from 'node:http'
 import {createMockFixture, cloneFixture} from './mock-data.mjs'
 
-export async function createMockVikunjaServer() {
+const ONE_PIXEL_PNG = Buffer.from(
+	'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO6V1x8AAAAASUVORK5CYII=',
+	'base64',
+)
+
+export async function createMockVikunjaServer({
+	avatarRouteStyle = 'suffix',
+	hideAuthenticatedUserEmail = false,
+} = {}) {
 	const initialFixture = createMockFixture()
 	let state = buildMutableState(initialFixture)
 
@@ -16,6 +24,22 @@ export async function createMockVikunjaServer() {
 			const route = url.pathname.replace(/^\/api\/v1\//, '')
 			const isMultipart = `${req.headers['content-type'] || ''}`.toLowerCase().includes('multipart/form-data')
 			const body = req.method === 'GET' || req.method === 'DELETE' || isMultipart ? null : await readJsonBody(req)
+			const avatarSuffixMatch = route.match(/^([^/]+)\/avatar$/)
+			const avatarPrefixMatch = route.match(/^avatar\/([^/]+)$/)
+
+			const avatarRouteMatches = (
+				(avatarRouteStyle === 'suffix' && avatarSuffixMatch) ||
+				(avatarRouteStyle === 'prefix' && avatarPrefixMatch) ||
+				(avatarRouteStyle === 'both' && (avatarPrefixMatch || avatarSuffixMatch))
+			)
+
+			if (avatarRouteMatches && req.method === 'GET') {
+				sendBuffer(res, 200, ONE_PIXEL_PNG, {
+					'Content-Type': 'image/png',
+					'Cache-Control': 'no-store',
+				})
+				return
+			}
 
 			if (route === 'info' && req.method === 'GET') {
 				sendJson(res, 200, {
@@ -23,7 +47,45 @@ export async function createMockVikunjaServer() {
 					frontend_url: 'http://127.0.0.1',
 					link_sharing_enabled: true,
 					public_teams_enabled: true,
+					email_reminders_enabled: true,
 				})
+				return
+			}
+
+			if (route === 'register' && req.method === 'POST') {
+				const username = `${body?.username || ''}`.trim()
+				const email = `${body?.email || ''}`.trim().toLowerCase()
+				const password = `${body?.password || ''}`
+				if (!username || !email || !password) {
+					sendJson(res, 400, {error: 'Username, email, and password are required.'})
+					return
+				}
+				if (password.length < 8) {
+					sendJson(res, 412, {error: 'The password must have at least 8 characters.'})
+					return
+				}
+				if (state.users.some(user => `${user.username || ''}`.trim() === username)) {
+					sendJson(res, 400, {error: 'A user with this username already exists.'})
+					return
+				}
+				if (state.users.some(user => `${user.email || ''}`.trim().toLowerCase() === email)) {
+					sendJson(res, 400, {error: 'A user with this email already exists.'})
+					return
+				}
+
+				const now = new Date().toISOString()
+				const nextUser = {
+					id: state.nextUserId++,
+					name: username,
+					username,
+					email,
+					created: now,
+					updated: now,
+					settings: buildDefaultUserSettings(),
+				}
+				state.users.push(nextUser)
+				state.passwordsByUsername[username] = password
+				sendJson(res, 200, {message: 'The user was created successfully.'})
 				return
 			}
 
@@ -34,7 +96,8 @@ export async function createMockVikunjaServer() {
 					sendJson(res, 400, {error: 'Username and password are required.'})
 					return
 				}
-				if (username !== 'smoke-user' || password !== state.currentPassword) {
+				const expectedPassword = `${state.passwordsByUsername[username] || ''}`
+				if (!expectedPassword || password !== expectedPassword) {
 					sendJson(res, 401, {error: 'Wrong username or password.'})
 					return
 				}
@@ -67,7 +130,11 @@ export async function createMockVikunjaServer() {
 			}
 
 			if (route === 'user' && req.method === 'GET') {
-				sendJson(res, 200, state.user)
+				const authenticatedUser = getAuthenticatedUserProfile(req)
+				sendJson(res, 200, {
+					...authenticatedUser,
+					email: hideAuthenticatedUserEmail ? '' : `${authenticatedUser?.email || ''}`.trim(),
+				})
 				return
 			}
 
@@ -98,13 +165,14 @@ export async function createMockVikunjaServer() {
 			}
 
 			if (route === 'user/password' && req.method === 'POST') {
+				const authenticatedUser = getAuthenticatedUserProfile(req)
 				const oldPassword = `${body?.old_password || ''}`
 				const newPassword = `${body?.new_password || ''}`
 				if (!oldPassword) {
 					sendJson(res, 400, {error: 'The old password is empty.'})
 					return
 				}
-				if (oldPassword !== state.currentPassword) {
+				if (oldPassword !== `${state.passwordsByUsername[authenticatedUser.username] || ''}`) {
 					sendJson(res, 401, {error: 'Wrong username or password.'})
 					return
 				}
@@ -116,22 +184,114 @@ export async function createMockVikunjaServer() {
 					sendJson(res, 412, {error: 'The new password must have at least 8 characters.'})
 					return
 				}
-				state.currentPassword = newPassword
+				state.passwordsByUsername[authenticatedUser.username] = newPassword
+				if (authenticatedUser.username === 'smoke-user') {
+					state.currentPassword = newPassword
+				}
 				state.sessions = []
 				sendJson(res, 200, {message: 'The password was updated successfully.'})
 				return
 			}
 
+			if (route === 'user/password/token' && req.method === 'POST') {
+				const email = `${body?.email || ''}`.trim().toLowerCase()
+				if (!email) {
+					sendJson(res, 400, {error: 'Email is required.'})
+					return
+				}
+
+				const user = state.users.find(entry => `${entry.email || ''}`.trim().toLowerCase() === email)
+				if (user) {
+					const token = `reset-token-${state.nextPasswordResetTokenId++}`
+					state.passwordResetTokens[token] = `${user.username || ''}`.trim()
+				}
+
+				sendJson(res, 200, {message: 'If the account exists, a reset link has been sent.'})
+				return
+			}
+
+			if (route === 'user/password/reset' && req.method === 'POST') {
+				const token = `${body?.token || ''}`.trim()
+				const newPassword = `${body?.new_password || ''}`
+				if (!token || !newPassword) {
+					sendJson(res, 400, {error: 'Token and password are required.'})
+					return
+				}
+				if (newPassword.length < 8) {
+					sendJson(res, 412, {error: 'The new password must have at least 8 characters.'})
+					return
+				}
+
+				const username = `${state.passwordResetTokens[token] || ''}`.trim()
+				if (!username) {
+					sendJson(res, 400, {error: 'Invalid or expired password reset token.'})
+					return
+				}
+
+				state.passwordsByUsername[username] = newPassword
+				if (username === 'smoke-user') {
+					state.currentPassword = newPassword
+				}
+				delete state.passwordResetTokens[token]
+				sendJson(res, 200, {message: 'The password was updated successfully.'})
+				return
+			}
+
 			if (route === 'user/settings/general' && req.method === 'POST') {
-				state.user = {
-					...state.user,
-					name: typeof body?.name === 'string' ? body.name : state.user.name,
+				const authenticatedUser = getAuthenticatedUserProfile(req)
+				updateUserProfile(authenticatedUser.username, profile => ({
+					...profile,
+					name: typeof body?.name === 'string' ? body.name : profile.name,
 					settings: {
-						...(state.user.settings || {}),
+						...(profile.settings || {}),
 						...(body || {}),
 					},
-				}
+				}))
 				sendJson(res, 200, {message: 'The settings were updated successfully.'})
+				return
+			}
+
+			if (route === 'user/settings/avatar' && req.method === 'GET') {
+				const authenticatedUser = getAuthenticatedUserProfile(req)
+				sendJson(res, 200, {
+					avatar_provider: `${authenticatedUser?.settings?.avatar_provider || 'default'}`,
+				})
+				return
+			}
+
+			if (route === 'user/settings/avatar' && req.method === 'POST') {
+				const authenticatedUser = getAuthenticatedUserProfile(req)
+				const avatarProvider = `${body?.avatar_provider || ''}`.trim()
+				if (!avatarProvider) {
+					sendJson(res, 400, {error: 'avatar_provider is required.'})
+					return
+				}
+				updateUserProfile(authenticatedUser.username, profile => ({
+					...profile,
+					settings: {
+						...(profile.settings || {}),
+						avatar_provider: avatarProvider,
+					},
+				}))
+				sendJson(res, 200, {message: 'The avatar provider was updated successfully.'})
+				return
+			}
+
+			if (route === 'user/settings/avatar/upload' && req.method === 'PUT') {
+				const authenticatedUser = getAuthenticatedUserProfile(req)
+				const uploadedFiles = parseMultipartFiles(await readRawBody(req), `${req.headers['content-type'] || ''}`)
+				if (uploadedFiles.length === 0) {
+					sendJson(res, 400, {error: 'At least one file is required.'})
+					return
+				}
+				updateUserProfile(authenticatedUser.username, profile => ({
+					...profile,
+					settings: {
+						...(profile.settings || {}),
+						avatar_provider: 'upload',
+					},
+				}))
+				sendJson(res, 200, {message: 'The avatar was uploaded successfully.'})
 				return
 			}
 
@@ -638,6 +798,27 @@ export async function createMockVikunjaServer() {
 				return
 			}
 
+			const subscriptionMatch = route.match(/^subscriptions\/([^/]+)\/(\d+)$/)
+			if (subscriptionMatch && (req.method === 'PUT' || req.method === 'DELETE')) {
+				const entity = `${subscriptionMatch[1] || ''}`.trim()
+				const entityId = Number(subscriptionMatch[2] || 0)
+				const subscribed = req.method === 'PUT'
+				if (entity === 'task') {
+					const task = getTask(entityId)
+					task.subscription = {subscribed}
+					sendJson(res, 200, {ok: true, subscribed})
+					return
+				}
+				if (entity === 'project') {
+					const project = getProject(entityId)
+					project.subscription = {subscribed}
+					sendJson(res, 200, {ok: true, subscribed})
+					return
+				}
+				sendJson(res, 412, {error: 'Invalid subscription entity.'})
+				return
+			}
+
 			if (route === 'tasks' && req.method === 'GET') {
 				sendJson(res, 200, paginate(filterTasks(url.searchParams), url))
 				return
@@ -686,6 +867,17 @@ export async function createMockVikunjaServer() {
 			}
 
 			const taskMatch = route.match(/^tasks\/(\d+)$/)
+			const taskReadMatch = route.match(/^tasks\/(\d+)\/read$/)
+			if (taskReadMatch && req.method === 'POST') {
+				const task = getTask(Number(taskReadMatch[1]))
+				const readAt = new Date().toISOString()
+				task.read = true
+				task.read_at = readAt
+				task.updated = readAt
+				sendJson(res, 200, {ok: true})
+				return
+			}
+
 			if (taskMatch && req.method === 'GET') {
 				sendJson(res, 200, serializeTask(getTask(Number(taskMatch[1])), {includeComments: true, includeAttachments: true}))
 				return
@@ -713,6 +905,8 @@ export async function createMockVikunjaServer() {
 					done_at: body?.done_at === undefined
 						? (previousDone !== nextDone ? (nextDone ? now : null) : (nextDone ? task.done_at || now : null))
 						: body.done_at || null,
+					read: body?.read === undefined ? Boolean(task.read) : Boolean(body.read),
+					read_at: body?.read_at === undefined ? task.read_at || null : body.read_at || null,
 					position: body?.position === undefined ? Number(task.position || 0) : Number(body.position || 0),
 					priority: body?.priority === undefined ? Number(task.priority || 0) : Number(body.priority || 0),
 					percent_done: body?.percent_done === undefined
@@ -1068,6 +1262,9 @@ export async function createMockVikunjaServer() {
 		reset() {
 			state = buildMutableState(initialFixture)
 		},
+		getState() {
+			return structuredClone(state)
+		},
 		close() {
 			return new Promise((resolve, reject) => {
 				server.close(error => {
@@ -1098,12 +1295,7 @@ export async function createMockVikunjaServer() {
 	}
 
 	function listTasksForProjectView(projectId, viewId, searchParams = new URLSearchParams()) {
-		const tasks = listTasksForProject(projectId, searchParams)
-		if (projectId === 1 && viewId === 11) {
-			return tasks.filter(task => !task.done)
-		}
-
-		return tasks
+		return listTasksForProject(projectId, searchParams)
 	}
 
 	function filterTasks(searchParams) {
@@ -1168,6 +1360,8 @@ export async function createMockVikunjaServer() {
 			done_at: task.done_at || null,
 			created: task.created || null,
 			updated: task.updated || null,
+			read: Boolean(task.read),
+			read_at: normalizeDateString(task.read_at || null) || null,
 			position: task.position,
 			priority: task.priority,
 			percent_done: normalizePercentDone(task.percent_done),
@@ -1179,6 +1373,7 @@ export async function createMockVikunjaServer() {
 			comment_count: comments.length,
 			attachments: includeAttachments ? attachments.map(attachment => ({...attachment, created_by: {...attachment.created_by}, file: {...attachment.file}})) : null,
 			labels,
+			subscription: task.subscription ? {subscribed: Boolean(task.subscription.subscribed)} : null,
 			related_tasks: {
 				parenttask: task.parentTaskId ? [makeTaskRef(getTask(task.parentTaskId))] : [],
 				subtask: state.tasks
@@ -1264,6 +1459,52 @@ export async function createMockVikunjaServer() {
 			throw error
 		}
 		return getUser(user.id)
+	}
+
+	function getUserProfileByUsername(username) {
+		const normalizedUsername = `${username || ''}`.trim()
+		const user =
+			state.users.find(entry => `${entry?.username || ''}`.trim() === normalizedUsername) ||
+			(`${state.user?.username || ''}`.trim() === normalizedUsername ? state.user : null)
+		if (!user) {
+			const error = new Error(`User profile ${normalizedUsername} not found.`)
+			error.statusCode = 404
+			throw error
+		}
+
+		return normalizeUserProfile(user)
+	}
+
+	function getAuthenticatedUsername(req) {
+		const authorization = `${req.headers.authorization || ''}`.trim()
+		const token = authorization.replace(/^Bearer\s+/i, '')
+		const subject = decodeTokenSubject(token)
+		if (subject && state.users.some(entry => `${entry?.username || ''}`.trim() === subject)) {
+			return subject
+		}
+		return `${state.user?.username || ''}`.trim()
+	}
+
+	function getAuthenticatedUserProfile(req) {
+		return getUserProfileByUsername(getAuthenticatedUsername(req))
+	}
+
+	function updateUserProfile(username, updater) {
+		const normalizedUsername = `${username || ''}`.trim()
+		const userIndex = state.users.findIndex(entry => `${entry?.username || ''}`.trim() === normalizedUsername)
+		if (userIndex === -1) {
+			const error = new Error(`User profile ${normalizedUsername} not found.`)
+			error.statusCode = 404
+			throw error
+		}
+
+		const currentProfile = normalizeUserProfile(state.users[userIndex])
+		const nextProfile = normalizeUserProfile(updater(currentProfile))
+		state.users[userIndex] = nextProfile
+		if (`${state.user?.username || ''}`.trim() === normalizedUsername) {
+			state.user = nextProfile
+		}
+		return nextProfile
 	}
 
 	function getTeam(teamId) {
@@ -1481,7 +1722,24 @@ export async function createMockVikunjaServer() {
 
 function buildMutableState(fixture) {
 	const state = cloneFixture(fixture)
+	state.user = normalizeUserProfile(state.user)
+	state.users = Array.isArray(state.users)
+		? state.users.map(user =>
+			`${user?.username || ''}`.trim() === `${state.user?.username || ''}`.trim()
+				? normalizeUserProfile({
+					...user,
+					settings: state.user?.settings || buildDefaultUserSettings(),
+				})
+				: normalizeUserProfile(user),
+		)
+		: []
 	state.currentPassword = 'smoke-password'
+	state.passwordsByUsername = {
+		'smoke-user': 'smoke-password',
+	}
+	state.passwordResetTokens = {}
+	state.nextUserId = Math.max(0, ...(state.users || []).map(user => Number(user.id || 0))) + 1
+	state.nextPasswordResetTokenId = 1
 	state.nextProjectId = Math.max(...state.projects.filter(project => project.id > 0).map(project => project.id), 0) + 1
 	state.nextTeamId = Math.max(0, ...(state.teams || []).map(team => Number(team.id || 0))) + 1
 	state.nextLinkShareId = Math.max(0, ...(state.linkShares || []).map(share => Number(share.id || 0))) + 1
@@ -1501,6 +1759,45 @@ function buildMutableState(fixture) {
 	state.nextLabelId = Math.max(...state.labels.map(label => label.id), 0) + 1
 	state.nextSavedFilterId = Math.max(...(state.savedFilters || []).map(savedFilter => savedFilter.id), -1) + 1
 	return state
+}
+
+function buildDefaultUserSettings() {
+	return {
+		default_project_id: 1,
+		timezone: 'Europe/Amsterdam',
+		avatar_provider: 'default',
+		email_reminders_enabled: false,
+		overdue_tasks_reminders_enabled: false,
+		overdue_tasks_reminders_time: '07:00',
+	}
+}
+
+function normalizeUserProfile(user) {
+	return {
+		...user,
+		id: Number(user?.id || 0),
+		name: `${user?.name || ''}`.trim(),
+		username: `${user?.username || ''}`.trim(),
+		email: `${user?.email || ''}`.trim(),
+		settings: {
+			...buildDefaultUserSettings(),
+			...(user?.settings || {}),
+		},
+	}
+}
+
+function decodeTokenSubject(token) {
+	const normalizedToken = `${token || ''}`.trim()
+	if (!normalizedToken.includes('.')) {
+		return ''
+	}
+
+	try {
+		const payload = JSON.parse(Buffer.from(normalizedToken.split('.')[1], 'base64url').toString('utf8'))
+		return `${payload?.sub || ''}`.trim()
+	} catch {
+		return ''
+	}
 }
 
 function normalizeSharePermission(value) {
@@ -1655,6 +1952,8 @@ function buildTask(task) {
 		done_at: done ? task.done_at || now : task.done_at || null,
 		created: task.created || now,
 		updated: task.updated || task.created || now,
+		read: Boolean(task.read),
+		read_at: normalizeDateString(task.read_at || null) || null,
 		position: Number(task.position || 0),
 		priority: Number(task.priority || 0),
 		percent_done: normalizePercentDone(task.percent_done),
@@ -1664,6 +1963,7 @@ function buildTask(task) {
 		assignees: normalizeTaskAssignees(task.assignees),
 		comments: normalizeTaskComments(task.comments),
 		attachments: normalizeTaskAttachments(task.attachments),
+		subscription: task?.subscription ? {subscribed: Boolean(task.subscription.subscribed)} : null,
 		labelIds: Array.isArray(task.labelIds) ? task.labelIds.map(Number) : [],
 		parentTaskId: task.parentTaskId ? Number(task.parentTaskId) : null,
 	}

@@ -13,6 +13,7 @@ export default function FiltersScreen() {
 	const selectedSavedFilterProjectId = useAppStore(state => state.selectedSavedFilterProjectId)
 	const savedFilterTasks = useAppStore(state => state.savedFilterTasks)
 	const loadingSavedFilterTasks = useAppStore(state => state.loadingSavedFilterTasks)
+	const taskFilters = useAppStore(state => state.taskFilters)
 	const focusedTaskId = useAppStore(state => state.focusedTaskId)
 	const focusedTaskSourceScreen = useAppStore(state => state.focusedTaskSourceScreen)
 	const loadSavedFilterTasks = useAppStore(state => state.loadSavedFilterTasks)
@@ -92,7 +93,7 @@ export default function FiltersScreen() {
 						{selectedSavedFilter ? (
 							<section className="saved-filter-results">
 								{loadingSavedFilterTasks && savedFilterTasks.length === 0 ? <div className="empty-state">Loading saved filter tasks...</div> : null}
-								{savedFilterTasks.length > 0 ? <TaskTree taskList={savedFilterTasks} compact={true} /> : null}
+								{savedFilterTasks.length > 0 ? <TaskTree taskList={savedFilterTasks} compact={true} sortBy={taskFilters.sortBy} /> : null}
 								{!loadingSavedFilterTasks && savedFilterTasks.length === 0 ? <div className="empty-state">This saved filter does not currently return any open root tasks.</div> : null}
 							</section>
 						) : null}

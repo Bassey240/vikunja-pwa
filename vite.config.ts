@@ -7,6 +7,32 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 export default defineConfig({
 	plugins: [react()],
+	build: {
+		rollupOptions: {
+			output: {
+				manualChunks(id) {
+					if (!id.includes('node_modules')) {
+						return undefined
+					}
+
+					if (id.includes('@dnd-kit/')) {
+						return 'dnd-vendor'
+					}
+
+					if (
+						id.includes('/react/') ||
+						id.includes('/react-dom/') ||
+						id.includes('/react-router') ||
+						id.includes('/scheduler/')
+					) {
+						return 'react-vendor'
+					}
+
+					return 'vendor'
+				},
+			},
+		},
+	},
 	resolve: {
 		alias: {
 			'@': path.resolve(__dirname, 'src'),

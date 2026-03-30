@@ -11,6 +11,7 @@ export default function SearchScreen() {
 	const searchQuery = useAppStore(state => state.searchQuery)
 	const searchHasRun = useAppStore(state => state.searchHasRun)
 	const loadingSearch = useAppStore(state => state.loadingSearch)
+	const taskFilters = useAppStore(state => state.taskFilters)
 	const focusedTaskId = useAppStore(state => state.focusedTaskId)
 	const focusedTaskSourceScreen = useAppStore(state => state.focusedTaskSourceScreen)
 	const loadSearchTasks = useAppStore(state => state.loadSearchTasks)
@@ -91,7 +92,9 @@ export default function SearchScreen() {
 							</div>
 						) : null}
 						{searchHasRun && !searchQuery ? <div className="empty-state">Enter a search term to see matching tasks.</div> : null}
-						{searchHasRun && searchQuery && filteredSearchTasks.length > 0 ? <TaskTree taskList={filteredSearchTasks} compact={true} matcher={searchMatcher} /> : null}
+						{searchHasRun && searchQuery && filteredSearchTasks.length > 0 ? (
+							<TaskTree taskList={filteredSearchTasks} compact={true} matcher={searchMatcher} sortBy={taskFilters.sortBy} />
+						) : null}
 						{searchHasRun && searchQuery && !loadingSearch && filteredSearchTasks.length === 0 ? <div className="empty-state">No tasks matched this search.</div> : null}
 					</div>
 				</section>

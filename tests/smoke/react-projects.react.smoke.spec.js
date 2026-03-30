@@ -176,6 +176,13 @@ test('project detail manages direct shares team shares and link shares', async (
 	await page.locator('[data-menu-root="true"] [data-action="share-project"][data-project-id="2"]').click()
 	await expect(page.getByText('Shared Users')).toBeVisible()
 	await expect(page.locator('.detail-label').filter({hasText: 'Link Shares'})).toBeVisible()
+	await expect(page.locator('[data-action="toggle-project-subscription"]')).toHaveText('Subscribe')
+	await page.locator('[data-action="toggle-project-subscription"]').click()
+	await expect(page.locator('[data-action="toggle-project-subscription"]')).toHaveText('Subscribed')
+	await expect.poll(async () => {
+		const project = await stack.mockApi('projects/2')
+		return project.subscription?.subscribed ?? null
+	}).toBe(true)
 	await page.locator('[data-detail-section-toggle="sharedUsers"]').click()
 	await page.locator('[data-detail-section-toggle="sharedTeams"]').click()
 	await page.locator('[data-detail-section-toggle="linkShares"]').click()
@@ -183,8 +190,10 @@ test('project detail manages direct shares team shares and link shares', async (
 	await page.locator('input[placeholder="Search users"]').fill('jamie')
 	const jamieResult = page.locator('.detail-assignee-search-result').filter({hasText: 'Jamie Rivers'})
 	await expect(jamieResult).toBeVisible()
+	await expect(jamieResult.locator('img.user-avatar')).toHaveCount(1)
 	await jamieResult.click()
 	await expect(page.locator('.project-share-row').filter({hasText: 'Jamie Rivers'})).toBeVisible()
+	await expect(page.locator('.project-share-row').filter({hasText: 'Jamie Rivers'}).locator('img.user-avatar')).toHaveCount(1)
 	await expect.poll(async () => {
 		const shares = await stack.mockApi('projects/2/users')
 		return shares.some(user => user.username === 'jamie')
@@ -406,4 +415,41 @@ test('shared link mobile view menu stays inside the viewport and kanban content 
 	expect(firstLaneBox).not.toBeNull()
 	expect((firstLaneBox?.x || 0)).toBeGreaterThanOrEqual((headerBox?.x || 0) - 6)
 	expect((firstLaneBox?.x || 0) + (firstLaneBox?.width || 0)).toBeLessThanOrEqual((headerBox?.x || 0) + (headerBox?.width || 0) + 6)
+})
+
+test('kanban completion and reactivation do not surface bucket ownership errors', async ({page}) => {
+	const pageErrors = []
+	page.on('pageerror', error => {
+		pageErrors.push(error.message)
+	})
+
+	await openProjects(page)
+
+	const workNode = page.locator('[data-project-node-id="2"]')
+	await workNode.locator('[data-action="select-project"][data-project-id="2"]').click()
+	await expect(page.getByRole('heading', {name: 'Work'})).toBeVisible()
+
+	await page.locator('[data-action="toggle-project-view-menu"]').click()
+	await page.locator('[data-action="select-project-view"][data-project-id="2"][data-view-id="15"]').click()
+	await expect(page.locator('.kanban-lane-head').first()).toBeVisible()
+
+	const todoLaneTask = page.locator('[data-kanban-lane-id="151"] [data-task-row-id="201"]')
+	const doneLaneTask = page.locator('[data-kanban-lane-id="152"] [data-task-row-id="201"]')
+	const errorCard = page.locator('.status-card.danger')
+
+	await expect(todoLaneTask).toHaveCount(1)
+	await todoLaneTask.locator('[data-action="toggle-done"]').click()
+	await expect(errorCard).toHaveCount(0)
+	await expect(doneLaneTask).toHaveCount(1)
+
+	await page.waitForTimeout(4500)
+	await expect(errorCard).toHaveCount(0)
+
+	await doneLaneTask.locator('[data-action="toggle-done"]').click()
+	await expect(errorCard).toHaveCount(0)
+	await expect(todoLaneTask).toHaveCount(1)
+
+	await page.waitForTimeout(4500)
+	await expect(errorCard).toHaveCount(0)
+	expect(pageErrors).toEqual([])
 })

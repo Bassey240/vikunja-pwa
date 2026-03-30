@@ -1,11 +1,11 @@
 import {api} from '@/api'
+import UserAvatar from '@/components/common/UserAvatar'
 import DetailSheet from '@/components/common/DetailSheet'
 import {useAppStore} from '@/store'
 import type {ProjectLinkShare, SharePermission, TaskAssignee, Team} from '@/types'
 import {
 	getColorInputValue,
 	getUserDisplayName,
-	getUserInitials,
 	normalizeHexColor,
 } from '@/utils/formatting'
 import {type ReactNode, useEffect, useState} from 'react'
@@ -37,11 +37,14 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 	const projectLinkShares = useAppStore(state => state.projectLinkShares)
 	const projectSharingLoading = useAppStore(state => state.projectSharingLoading)
 	const projectSharingSubmitting = useAppStore(state => state.projectSharingSubmitting)
+	const subscriptionsByEntity = useAppStore(state => state.subscriptionsByEntity)
+	const subscriptionMutatingKeys = useAppStore(state => state.subscriptionMutatingKeys)
 	const closeProjectDetail = useAppStore(state => state.closeProjectDetail)
 	const getAvailableParentProjects = useAppStore(state => state.getAvailableParentProjects)
 	const getProjectAncestors = useAppStore(state => state.getProjectAncestors)
 	const saveProjectDetailPatch = useAppStore(state => state.saveProjectDetailPatch)
 	const loadProjectSharing = useAppStore(state => state.loadProjectSharing)
+	const toggleSubscription = useAppStore(state => state.toggleSubscription)
 	const addProjectUserShare = useAppStore(state => state.addProjectUserShare)
 	const updateProjectUserShare = useAppStore(state => state.updateProjectUserShare)
 	const removeProjectUserShare = useAppStore(state => state.removeProjectUserShare)
@@ -193,6 +196,9 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 	}, [projectDetail?.id, projectSharedTeams, teamShareQuery])
 
 	const parentOptions = projectDetail ? getAvailableParentProjects(projectDetail.id) : []
+	const projectSubscriptionKey = projectDetail ? `project:${projectDetail.id}` : ''
+	const projectSubscribed = projectSubscriptionKey ? (subscriptionsByEntity[projectSubscriptionKey] ?? null) : null
+	const projectSubscriptionSubmitting = projectSubscriptionKey ? subscriptionMutatingKeys.has(projectSubscriptionKey) : false
 
 	async function handleTitleBlur() {
 		if (!projectDetail) {
@@ -337,10 +343,23 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 			onClose={closeProjectDetail}
 			mode={mode}
 		>
-			<div className="sheet-head">
+			<div className="sheet-head detail-sheet-head">
 				<div>
 					<div className="panel-label">Project Detail</div>
 					<div className="panel-title">{projectDetail ? projectDetail.title : 'Loading…'}</div>
+				</div>
+				<div className="panel-action-row">
+					{projectDetail && projectSubscribed !== null ? (
+						<button
+							className={`pill-button ${projectSubscribed ? 'is-active' : ''}`.trim()}
+							data-action="toggle-project-subscription"
+							type="button"
+							disabled={projectSubscriptionSubmitting}
+							onClick={() => void toggleSubscription('project', projectDetail.id)}
+						>
+							{projectSubscriptionSubmitting ? 'Saving…' : projectSubscribed ? 'Subscribed' : 'Subscribe'}
+						</button>
+					) : null}
 				</div>
 			</div>
 			{projectDetailLoading && !projectDetail ? <div className="empty-state">Loading project details…</div> : null}
@@ -495,7 +514,9 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 												disabled={projectSharingSubmitting}
 												onClick={() => void handleAddUserShare(user.username)}
 											>
-												<span className="detail-assignee-search-token">{getUserInitials(user)}</span>
+												<span className="detail-assignee-search-token">
+													<UserAvatar user={user} size={30} />
+												</span>
 												<span className="detail-assignee-search-copy">
 													<span className="detail-assignee-search-name">{getUserDisplayName(user)}</span>
 													<span className="detail-meta">{user.username}</span>
@@ -512,7 +533,9 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 										{projectSharedUsers.map(user => (
 											<div key={user.id} className="detail-assignee-row project-share-row">
 												<div className="detail-assignee-pill">
-													<span className="detail-assignee-pill-token">{getUserInitials(user)}</span>
+													<span className="detail-assignee-pill-token">
+														<UserAvatar user={user} size={30} />
+													</span>
 													<span className="detail-assignee-pill-name">
 														<span className="detail-assignee-primary">{getUserDisplayName(user)}</span>
 														<span className="detail-meta">{user.username}</span>

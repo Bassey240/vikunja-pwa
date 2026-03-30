@@ -552,6 +552,30 @@ select {
 	line-height: 1.38;
 }
 
+.auth-link-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.75rem 1rem;
+}
+
+.auth-text-link {
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: var(--brand-accent-strong);
+	font: inherit;
+	font-size: 0.92rem;
+	font-weight: 600;
+	text-align: left;
+	cursor: pointer;
+}
+
+.auth-text-link:hover,
+.auth-text-link:focus-visible {
+	color: var(--brand-accent);
+	text-decoration: underline;
+}
+
 .surface {
 	display: grid;
 	gap: 0;
@@ -1133,6 +1157,38 @@ select {
 	gap: var(--detail-density-action-gap, 0.4rem);
 }
 
+.settings-avatar-row {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+}
+
+.settings-avatar-copy {
+	min-inline-size: 0;
+	display: grid;
+	gap: 0.14rem;
+}
+
+.settings-avatar-provider-grid {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.4rem;
+}
+
+.settings-avatar-provider-button {
+	min-block-size: 2rem;
+}
+
+.settings-avatar-upload-row {
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+}
+
+.settings-avatar-upload-copy {
+	max-inline-size: 30rem;
+}
+
 .panel-head-actions {
 	display: flex;
 	align-items: center;
@@ -1165,6 +1221,11 @@ select {
 	padding: 0.42rem 0.68rem;
 	background: var(--surface-card-strong);
 	border: 1.5px solid var(--line-ui);
+}
+
+.pill-button.is-active {
+	background: color-mix(in srgb, var(--accent) 18%, var(--surface-card-strong));
+	border-color: color-mix(in srgb, var(--accent) 46%, var(--line-ui));
 }
 
 .icon-only,
@@ -1210,6 +1271,11 @@ select {
 .status-card.danger {
 	background: rgba(255, 146, 134, 0.12);
 	color: var(--danger);
+}
+
+.status-card.success {
+	background: rgba(95, 201, 149, 0.14);
+	color: var(--success);
 }
 
 .runtime-status-banner {
@@ -1575,6 +1641,7 @@ select {
 	block-size: 1.42rem;
 	padding: 0;
 	border-radius: 50%;
+	overflow: hidden;
 	font-size: 0.74rem;
 	font-weight: 600;
 	line-height: 1;
@@ -2602,6 +2669,17 @@ select {
 	padding-block-end: 0.1rem;
 }
 
+.detail-sheet-head {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 0.75rem;
+}
+
+.detail-sheet-head > :first-child {
+	min-inline-size: 0;
+}
+
 .sheet-head .panel-title {
 	font-size: clamp(1rem, 3.6vw, 1.24rem);
 	line-height: 1.16;
@@ -3083,6 +3161,7 @@ select {
 	block-size: 1.9rem;
 	padding: 0;
 	border-radius: 50%;
+	overflow: hidden;
 	border: 1.5px solid var(--line-strong);
 	color: var(--text);
 	line-height: 1;
@@ -3166,6 +3245,7 @@ select {
 	inline-size: 1.7rem;
 	block-size: 1.7rem;
 	border-radius: 50%;
+	overflow: hidden;
 	border: 1.5px solid var(--line-strong);
 	color: var(--text);
 	font-size: 0.72rem;
@@ -3195,6 +3275,34 @@ select {
 	min-block-size: 1.9rem;
 	padding: 0.18rem 0.46rem;
 	font-size: 0.76rem;
+}
+
+.user-avatar {
+	display: block;
+	border-radius: 50%;
+	object-fit: cover;
+	background: var(--surface-card);
+	border: 1.5px solid var(--line-strong);
+	color: var(--text);
+}
+
+.user-avatar-initials {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 0.78rem;
+	font-weight: 700;
+	line-height: 1;
+}
+
+.task-assignee-chip .user-avatar,
+.detail-assignee-pill-token .user-avatar,
+.detail-assignee-search-token .user-avatar,
+.detail-comment-token .user-avatar {
+	inline-size: 100% !important;
+	block-size: 100% !important;
+	border: 0;
+	background: transparent;
 }
 
 .detail-attachment-input {
@@ -3782,6 +3890,29 @@ select {
 .settings-admin-user-protection-note {
 	margin: 0;
 	padding: 0;
+}
+
+.settings-mail-diagnostics-result {
+	display: grid;
+	gap: 0.48rem;
+}
+
+.settings-mail-diagnostics-output {
+	margin: 0;
+	padding: 0.7rem 0.78rem;
+	border-radius: var(--radius-md);
+	background: var(--surface-field);
+	border: 1.5px solid var(--line-ui);
+	font-family: var(--font-mono, 'SFMono-Regular', ui-monospace, monospace);
+	font-size: 0.85rem;
+	line-height: 1.4;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.settings-mail-diagnostics-output.is-error {
+	border-color: color-mix(in srgb, var(--danger, #c04444) 28%, var(--line-ui));
+	background: color-mix(in srgb, var(--danger, #c04444) 10%, var(--surface-field));
 }
 
 .settings-dialog-actions {
