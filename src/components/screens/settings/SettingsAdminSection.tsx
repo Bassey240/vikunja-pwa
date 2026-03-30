@@ -1,19 +1,41 @@
 import DetailSheet from '@/components/common/DetailSheet'
-import type {AdminRuntimeHealth, AdminUser} from '@/types'
+import type {
+	AdminMailDiagnosticsResult,
+	AdminRuntimeHealth,
+	AdminUser,
+	MailerCapabilityReasonCode,
+	MailerConfig,
+	MailerConfigField,
+	MailerConfigInput,
+} from '@/types'
 import {
 	getProtectedAdminUserMessage,
 	isCurrentAdminUser,
-	isPrimaryAdminUser,
 	type SettingsSectionId,
 } from '@/utils/settings-helpers'
-import {type FormEvent, useState} from 'react'
+import {type FormEvent, useEffect, useState} from 'react'
 import SettingsSection from './SettingsSection'
+
+const knownMailerAuthTypes = ['plain', 'login', 'cram-md5']
+
+const defaultMailerConfigForm: MailerConfigInput = {
+	enabled: false,
+	host: '',
+	port: 587,
+	authType: 'plain',
+	username: '',
+	password: '',
+	skipTlsVerify: false,
+	fromEmail: '',
+	forceSsl: false,
+}
 
 export default function SettingsAdminSection({
 	open,
 	onToggle,
 	accountUser,
 	accountIsAdmin,
+	adminBridgeConfigured,
 	canManageUsers,
 	adminUsers,
 	adminUsersLoading,
@@ -22,6 +44,13 @@ export default function SettingsAdminSection({
 	adminRuntimeHealth,
 	adminBridgeFailedChecks,
 	adminRuntimeHealthLoading,
+	mailDiagnosticsSubmitting,
+	mailDiagnosticsResult,
+	mailerConfig,
+	mailerConfigLoadAttempted,
+	mailerConfigLoading,
+	mailerConfigSubmitting,
+	mailerConfigRestarting,
 	onReloadRuntimeHealth,
 	onReloadUsers,
 	onCreateAdminUser,
@@ -29,6 +58,10 @@ export default function SettingsAdminSection({
 	onSetAdminUserEnabled,
 	onResetAdminUserPassword,
 	onDeleteAdminUser,
+	onSendTestmail,
+	onLoadMailerConfig,
+	onSaveMailerConfig,
+	onApplyMailerConfig,
 }: {
 	open: boolean
 	onToggle: (section: SettingsSectionId) => void
@@ -38,6 +71,7 @@ export default function SettingsAdminSection({
 		email?: string | null
 	} | null | undefined
 	accountIsAdmin: boolean
+	adminBridgeConfigured: boolean
 	canManageUsers: boolean
 	adminUsers: AdminUser[]
 	adminUsersLoading: boolean
@@ -46,6 +80,13 @@ export default function SettingsAdminSection({
 	adminRuntimeHealth: AdminRuntimeHealth | null
 	adminBridgeFailedChecks: string[]
 	adminRuntimeHealthLoading: boolean
+	mailDiagnosticsSubmitting: boolean
+	mailDiagnosticsResult: AdminMailDiagnosticsResult | null
+	mailerConfig: MailerConfig | null
+	mailerConfigLoadAttempted: boolean
+	mailerConfigLoading: boolean
+	mailerConfigSubmitting: boolean
+	mailerConfigRestarting: boolean
 	onReloadRuntimeHealth: () => void
 	onReloadUsers: () => void
 	onCreateAdminUser: (payload: {username: string; email: string; password: string}) => Promise<boolean>
@@ -53,6 +94,10 @@ export default function SettingsAdminSection({
 	onSetAdminUserEnabled: (identifier: number | string, enabled: boolean) => Promise<boolean>
 	onResetAdminUserPassword: (identifier: number | string, password: string) => Promise<boolean>
 	onDeleteAdminUser: (identifier: number | string) => Promise<boolean>
+	onSendTestmail: (email: string) => Promise<boolean>
+	onLoadMailerConfig: () => Promise<void>
+	onSaveMailerConfig: (settings: MailerConfigInput) => Promise<boolean>
+	onApplyMailerConfig: () => Promise<boolean>
 }) {
 	const [userDialogMode, setUserDialogMode] = useState<'create' | 'edit' | null>(null)
 	const [userDialogForm, setUserDialogForm] = useState({
@@ -62,12 +107,24 @@ export default function SettingsAdminSection({
 		password: '',
 	})
 	const [selectedAdminUserId, setSelectedAdminUserId] = useState<number | null>(null)
+	const [smtpForm, setSmtpForm] = useState<MailerConfigInput>(defaultMailerConfigForm)
+	const [smtpFormDirty, setSmtpFormDirty] = useState(false)
+	const [testmailEmail, setTestmailEmail] = useState('')
 
 	const adminBridgeReady = Boolean(
 		adminRuntimeHealth?.dockerReachable &&
 		adminRuntimeHealth?.vikunjaContainerFound &&
 		adminRuntimeHealth?.vikunjaCliReachable,
 	)
+	const showBridgeHealthLoading = !accountIsAdmin && adminBridgeConfigured && adminRuntimeHealthLoading
+	const showBridgeUnavailableMessage = !accountIsAdmin && (
+		!adminBridgeConfigured ||
+		Boolean(adminRuntimeHealth && !adminBridgeReady)
+	)
+	const showUnauthorizedOperatorMessage = !accountIsAdmin &&
+		adminBridgeConfigured &&
+		!adminRuntimeHealthLoading &&
+		(!adminRuntimeHealth || adminBridgeReady)
 	const showAdminUserFallback = canManageUsers && !adminBridgeReady && Boolean(accountUser)
 	const userDialogOpen = userDialogMode !== null
 	const selectedAdminUser = selectedAdminUserId
@@ -76,10 +133,52 @@ export default function SettingsAdminSection({
 	const selectedAdminUserIsCurrent = selectedAdminUser
 		? isCurrentAdminUser(accountUser, selectedAdminUser.id, selectedAdminUser.username, selectedAdminUser.email)
 		: false
-	const selectedAdminUserIsPrimary = selectedAdminUser ? isPrimaryAdminUser(selectedAdminUser.id) : false
 	const selectedAdminUserProtectedMessage = selectedAdminUser
-		? getProtectedAdminUserMessage(selectedAdminUserIsCurrent, selectedAdminUserIsPrimary)
+		? getProtectedAdminUserMessage(selectedAdminUserIsCurrent)
 		: ''
+	const mailerCapabilities = mailerConfig?.capabilities || {
+		canInspect: false,
+		canWrite: false,
+		canApply: false,
+		reasonCode: null,
+	}
+	const mailerEnvOverrides = new Set<MailerConfigField>(mailerConfig?.envOverrides || [])
+	const showCustomAuthType = smtpForm.authType && !knownMailerAuthTypes.includes(smtpForm.authType)
+	const showMailerConfigForm = Boolean(mailerConfig) && !mailerConfigLoading && mailerCapabilities.canInspect
+	const mailerUnavailableMessage = getMailerCapabilityMessage(mailerCapabilities.reasonCode, 'inspect')
+	const mailerReadOnlyMessage = !mailerCapabilities.canWrite
+		? getMailerCapabilityMessage(mailerCapabilities.reasonCode, 'write')
+		: ''
+	const mailerApplyBlockedMessage = mailerCapabilities.canWrite && !mailerCapabilities.canApply
+		? getMailerCapabilityMessage(mailerCapabilities.reasonCode, 'apply')
+		: ''
+
+	useEffect(() => {
+		if (!mailerConfig) {
+			return
+		}
+
+		setSmtpForm({
+			enabled: mailerConfig.enabled,
+			host: mailerConfig.host,
+			port: mailerConfig.port,
+			authType: mailerConfig.authType,
+			username: mailerConfig.username,
+			password: '',
+			skipTlsVerify: mailerConfig.skipTlsVerify,
+			fromEmail: mailerConfig.fromEmail,
+			forceSsl: mailerConfig.forceSsl,
+		})
+		setSmtpFormDirty(false)
+	}, [mailerConfig])
+
+	useEffect(() => {
+		if (!open || !canManageUsers || mailerConfigLoadAttempted || mailerConfig || mailerConfigLoading) {
+			return
+		}
+
+		void onLoadMailerConfig()
+	}, [canManageUsers, mailerConfig, mailerConfigLoadAttempted, mailerConfigLoading, onLoadMailerConfig, open])
 
 	function openCreateUserDialog() {
 		setSelectedAdminUserId(null)
@@ -153,6 +252,42 @@ export default function SettingsAdminSection({
 		await onResetAdminUserPassword(userId, password)
 	}
 
+	async function handleSubmitTestmail(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault()
+		await onSendTestmail(testmailEmail)
+	}
+
+	function updateMailerField<K extends keyof MailerConfigInput>(field: K, value: MailerConfigInput[K]) {
+		if (!mailerCapabilities.canWrite) {
+			return
+		}
+
+		setSmtpForm(state => ({
+			...state,
+			[field]: value,
+		}))
+		setSmtpFormDirty(true)
+	}
+
+	function isMailerFieldOverridden(field: MailerConfigField) {
+		return mailerEnvOverrides.has(field)
+	}
+
+	async function handleSubmitMailerConfig(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault()
+		const success = await onSaveMailerConfig(smtpForm)
+		if (success) {
+			setSmtpFormDirty(false)
+		}
+	}
+
+	async function handleApplyMailerConfig() {
+		const success = await onApplyMailerConfig()
+		if (success) {
+			setSmtpFormDirty(false)
+		}
+	}
+
 	return (
 		<>
 			<SettingsSection
@@ -172,6 +307,7 @@ export default function SettingsAdminSection({
 								if (adminBridgeReady) {
 									onReloadUsers()
 								}
+								void onLoadMailerConfig()
 							}}
 						>
 							Reload
@@ -189,9 +325,17 @@ export default function SettingsAdminSection({
 					</>
 				}
 			>
-				{!accountIsAdmin ? (
+				{showBridgeUnavailableMessage ? (
 					<div className="empty-state compact">
-						Only the primary Vikunja admin account can manage instance users from the PWA app.
+						User administration requires the Vikunja CLI bridge to be configured and reachable on the server.
+					</div>
+				) : null}
+				{showBridgeHealthLoading ? (
+					<div className="empty-state compact">Checking bridge health…</div>
+				) : null}
+				{showUnauthorizedOperatorMessage ? (
+					<div className="empty-state compact">
+						Only authorized operator accounts can manage instance users from the PWA app.
 					</div>
 				) : null}
 				{canManageUsers ? (
@@ -232,7 +376,7 @@ export default function SettingsAdminSection({
 									<div className="settings-admin-user-copy">
 										<div className="detail-value">{accountUser?.username || 'Unknown user'}</div>
 										<div className="detail-meta">
-											{accountUser?.email || 'No email'} · Connected primary Vikunja admin
+											{accountUser?.email || 'No email'} · Connected operator account
 										</div>
 									</div>
 									<div className="settings-admin-user-actions">
@@ -249,8 +393,7 @@ export default function SettingsAdminSection({
 							<div className="settings-session-list">
 								{adminUsers.map(user => {
 									const isCurrentUser = isCurrentAdminUser(accountUser, user.id, user.username, user.email)
-									const isPrimaryAdmin = isPrimaryAdminUser(user.id)
-									const protectedMessage = getProtectedAdminUserMessage(isCurrentUser, isPrimaryAdmin)
+									const protectedMessage = getProtectedAdminUserMessage(isCurrentUser)
 
 									return (
 										<div key={user.id} className="settings-admin-user-row">
@@ -259,7 +402,6 @@ export default function SettingsAdminSection({
 												<div className="detail-meta">
 													{user.email || 'No email'}
 													{isCurrentUser ? ' · Current account' : ''}
-													{isPrimaryAdmin ? ' · Primary admin' : ''}
 													{protectedMessage ? ' · Protected' : ''}
 												</div>
 											</div>
@@ -281,6 +423,265 @@ export default function SettingsAdminSection({
 								})}
 							</div>
 						) : null}
+						<div className="detail-core-card settings-subsection">
+							<div className="panel-label">SMTP configuration</div>
+							<div className="empty-state compact">
+								Configure email delivery for this Vikunja instance when a writable admin-config
+								source is configured on the server.
+							</div>
+							{mailerConfig?.envOverrides?.length ? (
+								<div className="detail-helper-text">
+									Some fields are overridden by environment variables and stay read-only here.
+									Update them in docker-compose if you need to change the effective value.
+								</div>
+							) : null}
+							{mailerConfigLoadAttempted && !mailerConfigLoading && mailerConfig && !mailerCapabilities.canInspect ? (
+								<div className="detail-helper-text">
+									{mailerUnavailableMessage}
+								</div>
+							) : null}
+							{mailerConfigLoading ? (
+								<div className="empty-state compact">Loading SMTP configuration…</div>
+							) : null}
+							{mailerConfigLoadAttempted && !mailerConfigLoading && !mailerConfig ? (
+								<div className="detail-helper-text">
+									SMTP configuration could not be loaded. Use Reload after fixing bridge access or config-file access.
+								</div>
+							) : null}
+							{showMailerConfigForm ? (
+								<form className="detail-grid settings-form" data-form="mailer-config" onSubmit={handleSubmitMailerConfig}>
+									{mailerReadOnlyMessage ? (
+										<div className="detail-item detail-item-full detail-helper-text">
+											{mailerReadOnlyMessage}
+										</div>
+									) : null}
+									<div className="detail-item detail-item-full detail-field settings-checkbox-field">
+										<div className="detail-label">Email delivery</div>
+										<label className="settings-checkbox-row">
+											<input
+												data-mailer-field="enabled"
+												type="checkbox"
+												checked={smtpForm.enabled}
+												disabled={mailerConfigSubmitting || mailerConfigRestarting || !mailerCapabilities.canWrite || isMailerFieldOverridden('enabled')}
+												onChange={event => updateMailerField('enabled', event.currentTarget.checked)}
+											/>
+											<span>Enable SMTP delivery for this Vikunja instance.</span>
+										</label>
+										{isMailerFieldOverridden('enabled') ? (
+											<div className="detail-helper-text">
+												Set via environment variable. Change it in docker-compose to edit the
+												effective value.
+											</div>
+										) : null}
+									</div>
+									<label className="detail-item detail-field">
+										<div className="detail-label">SMTP host</div>
+										<input
+											className="detail-input"
+											data-mailer-field="host"
+											type="text"
+											value={smtpForm.host}
+											disabled={mailerConfigSubmitting || mailerConfigRestarting || !mailerCapabilities.canWrite || isMailerFieldOverridden('host')}
+											placeholder="smtp.example.com"
+											onChange={event => updateMailerField('host', event.currentTarget.value)}
+										/>
+										{isMailerFieldOverridden('host') ? (
+											<div className="detail-helper-text">Overridden by environment variable.</div>
+										) : null}
+									</label>
+									<label className="detail-item detail-field">
+										<div className="detail-label">Port</div>
+										<input
+											className="detail-input"
+											data-mailer-field="port"
+											type="number"
+											min="1"
+											value={smtpForm.port}
+											disabled={mailerConfigSubmitting || mailerConfigRestarting || !mailerCapabilities.canWrite || isMailerFieldOverridden('port')}
+											onChange={event => updateMailerField('port', Number(event.currentTarget.value) || 0)}
+										/>
+										{isMailerFieldOverridden('port') ? (
+											<div className="detail-helper-text">Overridden by environment variable.</div>
+										) : null}
+									</label>
+									<label className="detail-item detail-field">
+										<div className="detail-label">Auth type</div>
+										<select
+											className="detail-input"
+											data-mailer-field="authType"
+											value={smtpForm.authType}
+											disabled={mailerConfigSubmitting || mailerConfigRestarting || !mailerCapabilities.canWrite || isMailerFieldOverridden('authType')}
+											onChange={event => updateMailerField('authType', event.currentTarget.value)}
+										>
+											{showCustomAuthType ? (
+												<option value={smtpForm.authType}>{smtpForm.authType.toUpperCase()}</option>
+											) : null}
+											{knownMailerAuthTypes.map(option => (
+												<option key={option} value={option}>{option.toUpperCase()}</option>
+											))}
+										</select>
+										{isMailerFieldOverridden('authType') ? (
+											<div className="detail-helper-text">Overridden by environment variable.</div>
+										) : null}
+									</label>
+									<label className="detail-item detail-field">
+										<div className="detail-label">Username</div>
+										<input
+											className="detail-input"
+											data-mailer-field="username"
+											type="text"
+											value={smtpForm.username}
+											disabled={mailerConfigSubmitting || mailerConfigRestarting || !mailerCapabilities.canWrite || isMailerFieldOverridden('username')}
+											onChange={event => updateMailerField('username', event.currentTarget.value)}
+										/>
+										{isMailerFieldOverridden('username') ? (
+											<div className="detail-helper-text">Overridden by environment variable.</div>
+										) : null}
+									</label>
+									<label className="detail-item detail-field">
+										<div className="detail-label">Password</div>
+										<input
+											className="detail-input"
+											data-mailer-field="password"
+											type="password"
+											value={smtpForm.password}
+											disabled={mailerConfigSubmitting || mailerConfigRestarting || !mailerCapabilities.canWrite || isMailerFieldOverridden('password')}
+											placeholder={mailerConfig?.passwordConfigured ? 'Configured already. Leave blank to keep it.' : 'Optional if your SMTP relay requires it.'}
+											onChange={event => updateMailerField('password', event.currentTarget.value)}
+										/>
+										{isMailerFieldOverridden('password') ? (
+											<div className="detail-helper-text">Overridden by environment variable.</div>
+										) : null}
+									</label>
+									<label className="detail-item detail-item-full detail-field">
+										<div className="detail-label">From email</div>
+										<input
+											className="detail-input"
+											data-mailer-field="fromEmail"
+											type="email"
+											value={smtpForm.fromEmail}
+											disabled={mailerConfigSubmitting || mailerConfigRestarting || !mailerCapabilities.canWrite || isMailerFieldOverridden('fromEmail')}
+											placeholder="vikunja@example.com"
+											onChange={event => updateMailerField('fromEmail', event.currentTarget.value)}
+										/>
+										{isMailerFieldOverridden('fromEmail') ? (
+											<div className="detail-helper-text">Overridden by environment variable.</div>
+										) : null}
+									</label>
+									<div className="detail-item detail-item-full detail-field settings-checkbox-field">
+										<div className="detail-label">TLS & transport</div>
+										<label className="settings-checkbox-row">
+											<input
+												data-mailer-field="forceSsl"
+												type="checkbox"
+												checked={smtpForm.forceSsl}
+												disabled={mailerConfigSubmitting || mailerConfigRestarting || !mailerCapabilities.canWrite || isMailerFieldOverridden('forceSsl')}
+												onChange={event => updateMailerField('forceSsl', event.currentTarget.checked)}
+											/>
+											<span>Force SSL for SMTP connections.</span>
+										</label>
+										{isMailerFieldOverridden('forceSsl') ? (
+											<div className="detail-helper-text">Overridden by environment variable.</div>
+										) : null}
+										<label className="settings-checkbox-row">
+											<input
+												data-mailer-field="skipTlsVerify"
+												type="checkbox"
+												checked={smtpForm.skipTlsVerify}
+												disabled={mailerConfigSubmitting || mailerConfigRestarting || !mailerCapabilities.canWrite || isMailerFieldOverridden('skipTlsVerify')}
+												onChange={event => updateMailerField('skipTlsVerify', event.currentTarget.checked)}
+											/>
+											<span>Skip TLS certificate verification.</span>
+										</label>
+										{isMailerFieldOverridden('skipTlsVerify') ? (
+											<div className="detail-helper-text">Overridden by environment variable.</div>
+										) : null}
+									</div>
+									<div className="detail-item detail-item-full detail-field">
+										<div className="settings-action-row">
+											{mailerCapabilities.canWrite ? (
+												<button
+													className="composer-submit"
+													data-action="save-mailer-config"
+													type="submit"
+													disabled={mailerConfigSubmitting || mailerConfigRestarting || !smtpFormDirty}
+												>
+													{mailerConfigSubmitting ? 'Saving…' : 'Save'}
+												</button>
+											) : null}
+											{mailerCapabilities.canWrite ? (
+												<button
+													className="pill-button subtle"
+													data-action="apply-mailer-config"
+													type="button"
+													disabled={mailerConfigSubmitting || mailerConfigRestarting || !mailerCapabilities.canApply || smtpFormDirty}
+													onClick={() => {
+														void handleApplyMailerConfig()
+													}}
+												>
+													{mailerConfigRestarting ? 'Restarting Vikunja…' : 'Apply & Restart'}
+												</button>
+											) : null}
+										</div>
+										{mailerApplyBlockedMessage ? (
+											<div className="detail-helper-text">{mailerApplyBlockedMessage}</div>
+										) : null}
+									</div>
+								</form>
+							) : null}
+						</div>
+						<div className="detail-core-card settings-subsection">
+							<div className="panel-label">Mail diagnostics</div>
+							<div className="empty-state compact">
+								Send a test email to verify that this Vikunja instance can deliver mail.
+								SMTP must be configured on the server first.
+							</div>
+							<form className="detail-grid settings-form" data-form="admin-testmail" onSubmit={handleSubmitTestmail}>
+								<label className="detail-item detail-item-full detail-field">
+									<div className="detail-label">Recipient email</div>
+									<input
+										className="detail-input"
+										data-admin-field="testmail-email"
+										type="email"
+										value={testmailEmail}
+										disabled={mailDiagnosticsSubmitting || mailerConfigRestarting || !adminBridgeReady}
+										placeholder="recipient@example.com"
+										onChange={event => {
+											setTestmailEmail(event.currentTarget.value)
+										}}
+									/>
+								</label>
+								<div className="detail-item detail-item-full detail-field">
+									<button
+										className="composer-submit"
+										data-action="send-testmail"
+										type="submit"
+										disabled={mailDiagnosticsSubmitting || mailerConfigRestarting || !adminBridgeReady || !testmailEmail.trim()}
+										title={!adminBridgeReady ? 'Unavailable until this backend can reach the configured Vikunja container and CLI.' : undefined}
+									>
+										{mailDiagnosticsSubmitting ? 'Sending…' : 'Send test mail'}
+									</button>
+								</div>
+							</form>
+							{!adminBridgeReady ? (
+								<div className="detail-helper-text">
+									Mail diagnostics require the Vikunja CLI bridge to be available first.
+								</div>
+							) : null}
+							{mailDiagnosticsResult ? (
+								<div className="settings-mail-diagnostics-result">
+									<div className={`settings-status-chip ${mailDiagnosticsResult.success ? 'is-active' : 'is-disabled'}`.trim()}>
+										{mailDiagnosticsResult.success ? 'Mail sent successfully' : 'Mail delivery failed'}
+									</div>
+									{mailDiagnosticsResult.stdout ? (
+										<pre className="settings-mail-diagnostics-output">{mailDiagnosticsResult.stdout}</pre>
+									) : null}
+									{mailDiagnosticsResult.stderr ? (
+										<pre className="settings-mail-diagnostics-output is-error">{mailDiagnosticsResult.stderr}</pre>
+									) : null}
+								</div>
+							) : null}
+						</div>
 					</>
 				) : null}
 			</SettingsSection>
@@ -387,7 +788,6 @@ export default function SettingsAdminSection({
 										<div className="detail-meta">
 											Protected account
 											{selectedAdminUserIsCurrent ? ' · Current signed-in account' : ''}
-											{selectedAdminUserIsPrimary ? ' · Primary admin' : ''}
 										</div>
 									) : null}
 								</div>
@@ -449,4 +849,24 @@ export default function SettingsAdminSection({
 			</DetailSheet>
 		</>
 	)
+}
+
+function getMailerCapabilityMessage(
+	reasonCode: MailerCapabilityReasonCode | null,
+	context: 'inspect' | 'write' | 'apply',
+) {
+	switch (reasonCode) {
+		case 'no_bridge':
+			return context === 'apply'
+				? 'Apply & Restart requires the Vikunja admin bridge to be configured and reachable.'
+				: 'SMTP inspection requires the Vikunja admin bridge to be configured and reachable.'
+		case 'no_config_path':
+			return 'SMTP settings are read-only because no writable deployment config source is configured on the server.'
+		case 'unsupported_source_mode':
+			return 'SMTP settings are unavailable because the configured admin-config source is incomplete.'
+		case 'not_authorized':
+			return 'This account is not allowed to manage SMTP settings.'
+		default:
+			return ''
+	}
 }

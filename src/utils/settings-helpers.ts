@@ -74,19 +74,9 @@ export function isCurrentAdminUser(
 	)
 }
 
-export function isPrimaryAdminUser(userId: number) {
-	return Number(userId || 0) === 1
-}
-
-export function getProtectedAdminUserMessage(isCurrentUser: boolean, isPrimaryAdmin: boolean) {
-	if (isCurrentUser && isPrimaryAdmin) {
-		return 'The signed-in primary Vikunja admin cannot be disabled or deleted from this app.'
-	}
+export function getProtectedAdminUserMessage(isCurrentUser: boolean) {
 	if (isCurrentUser) {
 		return 'You cannot disable or delete the account you are currently signed in with.'
-	}
-	if (isPrimaryAdmin) {
-		return 'The primary Vikunja admin cannot be disabled or deleted from this app.'
 	}
 	return ''
 }

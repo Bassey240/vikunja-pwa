@@ -373,12 +373,16 @@ async function loadInstanceFeatures(client) {
 				info?.public_teams_enabled ?? info?.publicTeamsEnabled ?? null,
 			),
 			frontendUrl: normalizeFrontendUrl(info?.frontend_url ?? info?.frontendUrl ?? null),
+			emailRemindersEnabled: normalizeNullableBoolean(
+				info?.email_reminders_enabled ?? info?.emailRemindersEnabled ?? null,
+			),
 		}
 	} catch {
 		return {
 			linkSharingEnabled: null,
 			publicTeamsEnabled: null,
 			frontendUrl: null,
+			emailRemindersEnabled: null,
 		}
 	}
 }

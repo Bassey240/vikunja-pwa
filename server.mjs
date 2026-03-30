@@ -5,6 +5,7 @@ import {randomUUID} from 'node:crypto'
 import path from 'node:path'
 import {fileURLToPath} from 'node:url'
 import {createAdminBridge} from './server/admin-bridge.mjs'
+import {createAdminConfig} from './server/admin-config.mjs'
 import {loadConfig, normalizeBaseUrl} from './server/config.mjs'
 import {parseCookies, serializeCookie, clearCookie} from './server/cookies.mjs'
 import {readJsonBody, readRawBody, sendBuffer, sendJson} from './server/http.mjs'
@@ -30,7 +31,6 @@ const {
 	vikunjaBaseUrl,
 	vikunjaApiToken,
 	defaultVikunjaBaseUrl,
-	appAllowedOrigins,
 	appTrustProxy,
 	publicAppOrigin,
 	cookieSecure,
@@ -49,6 +49,9 @@ const {
 	vikunjaSshDestination,
 	vikunjaSshPort,
 	vikunjaSshKeyPath,
+	vikunjaHostConfigPath,
+	vikunjaComposePath,
+	adminBridgeAllowedEmails,
 	bridgeTimeoutMs,
 } = loadConfig(__dirname)
 
@@ -69,7 +72,7 @@ const sessionMutationRateLimiter = createRateLimiter({
 	max: sessionMutationRateLimitMax,
 })
 const legacyConfigured = Boolean(vikunjaBaseUrl && vikunjaApiToken)
-const buildId = '2026-03-15-production-ready-1'
+const buildId = '2026-03-30-alpha-0.2.0'
 const adminBridge = createAdminBridge({
 	bridgeMode: vikunjaBridgeMode,
 	vikunjaContainerName,
@@ -77,7 +80,18 @@ const adminBridge = createAdminBridge({
 	vikunjaSshDestination,
 	vikunjaSshPort,
 	vikunjaSshKeyPath,
+	adminBridgeAllowedEmails,
 	bridgeTimeoutMs,
+})
+const adminConfig = createAdminConfig({
+	bridgeMode: vikunjaBridgeMode,
+	vikunjaContainerName,
+	vikunjaSshDestination,
+	vikunjaSshPort,
+	vikunjaSshKeyPath,
+	bridgeTimeoutMs,
+	hostConfigPath: vikunjaHostConfigPath,
+	composePath: vikunjaComposePath,
 })
 
 const requestHandler = async (req, res) => {
@@ -93,6 +107,17 @@ const requestHandler = async (req, res) => {
 
 		if (url.pathname === '/health' && req.method === 'GET') {
 			await handleHealth(req, res)
+			return
+		}
+
+		const resetRedirect = url.pathname.match(/^\/user\/password\/reset\/([^/]+)$/)
+		if (resetRedirect && req.method === 'GET') {
+			const token = encodeURIComponent(resetRedirect[1])
+			const baseUrl = encodeURIComponent(normalizeBaseUrl(defaultVikunjaBaseUrl || ''))
+			res.writeHead(302, {
+				Location: `/auth/reset-password?token=${token}&baseUrl=${baseUrl}`,
+			})
+			res.end()
 			return
 		}
 
@@ -136,7 +161,6 @@ server.listen(port, host, () => {
 		port,
 		buildId,
 		defaultVikunjaBaseUrl: defaultVikunjaBaseUrl || null,
-		allowedOrigins: appAllowedOrigins,
 	})
 	if (legacyConfigured) {
 		logWarn('server.legacy_mode', {
@@ -182,7 +206,7 @@ async function handleApi(req, res, url) {
 	}
 
 	if (url.pathname === '/api/session' && req.method === 'GET') {
-		const context = await getVikunjaContext(req)
+		const context = await getVikunjaContext(req, res)
 		if (!context) {
 			sendJson(res, 200, {
 				connected: false,
@@ -226,6 +250,7 @@ async function handleApi(req, res, url) {
 				username,
 				password,
 			})
+			account = await hydrateOperatorAccountIdentity(account)
 		} else {
 			const apiToken = `${body.apiToken || ''}`.trim()
 			if (!apiToken) {
@@ -254,13 +279,7 @@ async function handleApi(req, res, url) {
 			},
 			{
 				'Set-Cookie': [
-					serializeCookie(appSessionCookieName, nextSessionId, {
-						httpOnly: true,
-						sameSite: 'Strict',
-						secure: cookieSecure,
-						path: '/',
-						maxAge: appSessionTtlSeconds,
-					}),
+					buildAppSessionCookie(nextSessionId),
 					clearCookie(ignoreLegacyCookieName, {
 						httpOnly: true,
 						sameSite: 'Strict',
@@ -270,6 +289,156 @@ async function handleApi(req, res, url) {
 				],
 			},
 		)
+		return
+	}
+
+	if (url.pathname === '/api/session/register' && req.method === 'POST') {
+		if (!enforceRateLimit(req, res, loginRateLimiter, 'register')) {
+			return
+		}
+
+		const body = await readJsonBody(req)
+		const baseUrl = normalizeBaseUrl(body.baseUrl || '')
+		if (!baseUrl) {
+			sendJson(res, 400, {error: 'A Vikunja base URL is required.'})
+			return
+		}
+
+		const username = `${body.username || ''}`.trim()
+		const email = `${body.email || ''}`.trim()
+		const password = `${body.password || ''}`
+		if (!username || !email || !password) {
+			sendJson(res, 400, {error: 'Username, email, and password are required.'})
+			return
+		}
+
+		const registerRes = await fetch(new URL('register', `${baseUrl}/`), {
+			method: 'POST',
+			headers: {
+				Accept: 'application/json',
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({
+				username,
+				email,
+				password,
+			}),
+		})
+
+		if (!registerRes.ok) {
+			const payload = await registerRes.json().catch(() => ({}))
+			sendJson(res, registerRes.status, {
+				error: payload.message || payload.error || 'Registration failed.',
+			})
+			return
+		}
+
+		const account = await createPasswordAccount({
+			baseUrl,
+			username,
+			password,
+		})
+		const hydratedAccount = await hydrateOperatorAccountIdentity(account)
+
+		const currentSessionId = getAppSessionId(req)
+		if (currentSessionId) {
+			sessionStore.delete(currentSessionId)
+		}
+
+		const nextSessionId = sessionStore.create({account: hydratedAccount})
+		sendJson(
+			res,
+			200,
+			{
+				connected: true,
+				account: summarizeAccount(hydratedAccount, 'account'),
+			},
+			{
+				'Set-Cookie': [
+					buildAppSessionCookie(nextSessionId),
+					clearCookie(ignoreLegacyCookieName, {
+						httpOnly: true,
+						sameSite: 'Strict',
+						secure: cookieSecure,
+						path: '/',
+					}),
+				],
+			},
+		)
+		return
+	}
+
+	if (url.pathname === '/api/session/forgot-password' && req.method === 'POST') {
+		if (!enforceRateLimit(req, res, loginRateLimiter, 'forgot-password')) {
+			return
+		}
+
+		const body = await readJsonBody(req)
+		const baseUrl = normalizeBaseUrl(body.baseUrl || '')
+		if (!baseUrl) {
+			sendJson(res, 400, {error: 'A Vikunja base URL is required.'})
+			return
+		}
+
+		const email = `${body.email || ''}`.trim()
+		if (!email) {
+			sendJson(res, 400, {error: 'Email is required.'})
+			return
+		}
+
+		await fetch(new URL('user/password/token', `${baseUrl}/`), {
+			method: 'POST',
+			headers: {
+				Accept: 'application/json',
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({email}),
+		}).catch(() => {})
+
+		sendJson(res, 200, {ok: true})
+		return
+	}
+
+	if (url.pathname === '/api/session/reset-password' && req.method === 'POST') {
+		if (!enforceRateLimit(req, res, loginRateLimiter, 'reset-password')) {
+			return
+		}
+
+		const body = await readJsonBody(req)
+		const baseUrl = normalizeBaseUrl(body.baseUrl || '')
+		if (!baseUrl) {
+			sendJson(res, 400, {error: 'A Vikunja base URL is required.'})
+			return
+		}
+
+		const token = `${body.token || ''}`.trim()
+		const password = `${body.password || ''}`
+		if (!token || !password) {
+			sendJson(res, 400, {error: 'Token and new password are required.'})
+			return
+		}
+
+		const resetRes = await fetch(new URL('user/password/reset', `${baseUrl}/`), {
+			method: 'POST',
+			headers: {
+				Accept: 'application/json',
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({
+				token,
+				new_password: password,
+			}),
+		})
+
+		if (!resetRes.ok) {
+			const payload = await resetRes.json().catch(() => ({}))
+			sendJson(res, resetRes.status, {
+				error: payload.message || payload.error || 'Password reset failed.',
+			})
+			return
+		}
+
+		sendJson(res, 200, {ok: true})
 		return
 	}
 
@@ -378,13 +547,7 @@ async function handleApi(req, res, url) {
 			},
 			{
 				'Set-Cookie': [
-					serializeCookie(appSessionCookieName, nextSessionId, {
-						httpOnly: true,
-						sameSite: 'Strict',
-						secure: cookieSecure,
-						path: '/',
-						maxAge: appSessionTtlSeconds,
-					}),
+					buildAppSessionCookie(nextSessionId),
 					clearCookie(ignoreLegacyCookieName, {
 						httpOnly: true,
 						sameSite: 'Strict',
@@ -450,14 +613,14 @@ async function handleApi(req, res, url) {
 	}
 
 	if (url.pathname === '/api/session/sessions' && req.method === 'GET') {
-		const context = requireInteractiveSession(req)
+		const context = await requireInteractiveSession(req, res)
 		const sessions = await context.client.fetchAllPages('user/sessions')
 		sendJson(res, 200, {sessions})
 		return
 	}
 
 	if (url.pathname === '/api/session/timezones' && req.method === 'GET') {
-		const context = await requireVikunjaContext(req)
+		const context = await requireVikunjaContext(req, res)
 		const timezones = await context.client.request('user/timezones')
 		sendJson(res, 200, {timezones})
 		return
@@ -469,7 +632,7 @@ async function handleApi(req, res, url) {
 			return
 		}
 
-		const context = requireInteractiveSession(req)
+		const context = await requireInteractiveSession(req, res)
 		await context.client.request(`user/sessions/${remoteSessionMatch[1]}`, {
 			method: 'DELETE',
 		})
@@ -482,7 +645,7 @@ async function handleApi(req, res, url) {
 			return
 		}
 
-		const context = requireInteractiveSession(req)
+		const context = await requireInteractiveSession(req, res, {refreshCookie: false})
 		const body = await readJsonBody(req)
 		const oldPassword = `${body.oldPassword || body.old_password || ''}`
 		const newPassword = `${body.newPassword || body.new_password || ''}`
@@ -529,7 +692,7 @@ async function handleApi(req, res, url) {
 	}
 
 	if (url.pathname === '/api/session/settings/general' && req.method === 'POST') {
-		const context = await requireVikunjaContext(req)
+		const context = await requireVikunjaContext(req, res)
 		const body = await readJsonBody(req)
 
 		await context.client.request('user/settings/general', {
@@ -543,8 +706,85 @@ async function handleApi(req, res, url) {
 		return
 	}
 
+	if (url.pathname === '/api/session/settings/avatar' && req.method === 'GET') {
+		const context = await requireVikunjaContext(req, res)
+		const avatarSettings = await context.client.request('user/settings/avatar')
+		sendJson(res, 200, {
+			avatar_provider: avatarSettings?.avatar_provider || null,
+		})
+		return
+	}
+
+	if (url.pathname === '/api/session/settings/avatar' && req.method === 'POST') {
+		if (!enforceRateLimit(req, res, sessionMutationRateLimiter, 'session-mutation')) {
+			return
+		}
+
+		const context = await requireVikunjaContext(req, res)
+		const body = await readJsonBody(req)
+		const avatarProvider = `${body.avatar_provider || body.avatarProvider || ''}`.trim()
+		if (!avatarProvider) {
+			sendJson(res, 400, {error: 'avatar_provider is required.'})
+			return
+		}
+
+		await context.client.request('user/settings/avatar', {
+			method: 'POST',
+			body: {
+				avatar_provider: avatarProvider,
+			},
+		})
+
+		const [avatarSettings, user] = await Promise.all([
+			context.client.request('user/settings/avatar'),
+			context.client.request('user'),
+		])
+		updateSessionUser(context, user)
+		sendJson(res, 200, {
+			ok: true,
+			user,
+			avatar_provider: avatarSettings?.avatar_provider || avatarProvider,
+		})
+		return
+	}
+
+	if (url.pathname === '/api/session/settings/avatar/upload' && req.method === 'PUT') {
+		if (!enforceRateLimit(req, res, sessionMutationRateLimiter, 'session-mutation')) {
+			return
+		}
+
+		const context = await requireVikunjaContext(req, res)
+		const contentType = `${req.headers['content-type'] || ''}`.trim()
+		if (!contentType.toLowerCase().includes('multipart/form-data')) {
+			sendJson(res, 400, {error: 'multipart/form-data is required.'})
+			return
+		}
+
+		const rawBody = await readRawBody(req)
+		await context.client.request('user/settings/avatar/upload', {
+			method: 'PUT',
+			rawBody,
+			headers: {
+				Accept: 'application/json',
+				'Content-Type': contentType,
+			},
+		})
+
+		const [avatarSettings, user] = await Promise.all([
+			context.client.request('user/settings/avatar'),
+			context.client.request('user'),
+		])
+		updateSessionUser(context, user)
+		sendJson(res, 200, {
+			ok: true,
+			user,
+			avatar_provider: avatarSettings?.avatar_provider || 'upload',
+		})
+		return
+	}
+
 	if (url.pathname === '/api/admin/runtime/health' && req.method === 'GET') {
-		const context = requireAdminSession(req, {allowBridgeUnavailable: true})
+		const context = await requireAdminSession(req, res, {allowBridgeUnavailable: true})
 		const health = await adminBridge.getRuntimeHealth()
 		sendJson(res, 200, {
 			...health,
@@ -553,15 +793,22 @@ async function handleApi(req, res, url) {
 		return
 	}
 
+	if (url.pathname === '/api/admin/runtime/status' && req.method === 'GET') {
+		await requireInteractiveSession(req, res)
+		const health = await adminBridge.getRuntimeHealth()
+		sendJson(res, 200, health)
+		return
+	}
+
 	if (url.pathname === '/api/admin/users' && req.method === 'GET') {
-		requireAdminSession(req)
+		await requireAdminSession(req, res)
 		const users = await adminBridge.listUsers()
 		sendJson(res, 200, {items: users})
 		return
 	}
 
 	if (url.pathname === '/api/admin/users' && req.method === 'POST') {
-		requireAdminSession(req)
+		await requireAdminSession(req, res)
 		const body = await readJsonBody(req)
 		const user = await adminBridge.createUser({
 			username: body.username,
@@ -577,7 +824,7 @@ async function handleApi(req, res, url) {
 	const adminUserPasswordMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/password$/)
 
 	if (adminUserMatch && req.method === 'PATCH') {
-		requireAdminSession(req)
+		await requireAdminSession(req, res)
 		const body = await readJsonBody(req)
 		const identifier = decodeURIComponent(adminUserMatch[1])
 		const user = await adminBridge.updateUser(identifier, {
@@ -590,7 +837,7 @@ async function handleApi(req, res, url) {
 	}
 
 	if (adminUserStatusMatch && req.method === 'PATCH') {
-		const context = requireAdminSession(req)
+		const context = await requireAdminSession(req, res)
 		const body = await readJsonBody(req)
 		const enabled = body.enabled !== false
 		const identifier = decodeURIComponent(adminUserStatusMatch[1])
@@ -601,7 +848,7 @@ async function handleApi(req, res, url) {
 	}
 
 	if (adminUserPasswordMatch && req.method === 'POST') {
-		requireAdminSession(req)
+		await requireAdminSession(req, res)
 		const body = await readJsonBody(req)
 		const identifier = decodeURIComponent(adminUserPasswordMatch[1])
 		await adminBridge.resetUserPassword(identifier, body.password)
@@ -610,7 +857,7 @@ async function handleApi(req, res, url) {
 	}
 
 	if (adminUserMatch && req.method === 'DELETE') {
-		const context = requireAdminSession(req)
+		const context = await requireAdminSession(req, res)
 		const identifier = decodeURIComponent(adminUserMatch[1])
 		assertAdminUserMutationAllowed(context.account, identifier, 'delete')
 		await adminBridge.deleteUser(identifier)
@@ -618,8 +865,61 @@ async function handleApi(req, res, url) {
 		return
 	}
 
-	const context = await requireVikunjaContext(req)
+	if (url.pathname === '/api/admin/testmail' && req.method === 'POST') {
+		await requireAdminSession(req, res)
+		const body = await readJsonBody(req)
+		const result = await adminBridge.runTestmail(body.email)
+		sendJson(res, 200, result)
+		return
+	}
+
+	if (url.pathname === '/api/admin/doctor' && req.method === 'POST') {
+		await requireAdminSession(req, res)
+		const result = await adminBridge.runDoctor()
+		sendJson(res, 200, result)
+		return
+	}
+
+	if (url.pathname === '/api/admin/config/mailer' && req.method === 'GET') {
+		await requireAdminSession(req, res, {allowBridgeUnavailable: true})
+		const config = await adminConfig.readMailerConfig()
+		sendJson(res, 200, config)
+		return
+	}
+
+	if (url.pathname === '/api/admin/config/mailer' && req.method === 'POST') {
+		await requireAdminSession(req, res, {allowBridgeUnavailable: true})
+		const body = await readJsonBody(req)
+		const config = await adminConfig.writeMailerConfig({
+			enabled: body.enabled,
+			host: body.host,
+			port: body.port,
+			authType: body.authType,
+			username: body.username,
+			password: body.password,
+			skipTlsVerify: body.skipTlsVerify,
+			fromEmail: body.fromEmail,
+			forceSsl: body.forceSsl,
+		})
+		sendJson(res, 200, config)
+		return
+	}
+
+	if (url.pathname === '/api/admin/config/mailer/apply' && req.method === 'POST') {
+		await requireAdminSession(req, res, {allowBridgeUnavailable: true})
+		const result = await adminConfig.restartVikunja()
+		const config = await adminConfig.readMailerConfig()
+		sendJson(res, 200, {
+			...result,
+			config,
+		})
+		return
+	}
+
+	const context = await requireVikunjaContext(req, res)
 	const vikunja = context.client
+	const avatarMatch = url.pathname.match(/^\/api\/avatar\/([^/]+)$/)
+	const subscriptionMatch = url.pathname.match(/^\/api\/subscriptions\/([^/]+)\/(\d+)$/)
 
 	if (url.pathname === '/api/user' && req.method === 'GET') {
 		const user = await vikunja.request('user')
@@ -633,6 +933,70 @@ async function handleApi(req, res, url) {
 		const users = await vikunja.fetchAllPages('users', search ? {s: search} : {})
 		sendJson(res, 200, {users})
 		return
+	}
+
+	if (avatarMatch && req.method === 'GET') {
+		const username = decodeURIComponent(avatarMatch[1])
+		const requestedSize = Number(url.searchParams.get('size') || 64)
+		const size = Number.isFinite(requestedSize) && requestedSize > 0 ? Math.round(requestedSize) : 64
+		const avatarRouteCandidates = [
+			`avatar/${encodeURIComponent(username)}`,
+			`${encodeURIComponent(username)}/avatar`,
+		]
+		let response = null
+		for (const route of avatarRouteCandidates) {
+			const candidate = await vikunja.requestRaw(route, {
+				method: 'GET',
+				params: {size},
+				headers: {
+					Accept: '*/*',
+				},
+			})
+			if (candidate.status !== 404) {
+				response = candidate
+				break
+			}
+		}
+		if (!response) {
+			response = await vikunja.requestRaw(`avatar/${encodeURIComponent(username)}`, {
+				method: 'GET',
+				params: {size},
+				headers: {
+					Accept: '*/*',
+				},
+			})
+		}
+		const buffer = Buffer.from(await response.arrayBuffer())
+		sendBuffer(res, response.status, buffer, {
+			'Content-Type': response.headers.get('content-type') || 'image/png',
+			'Cache-Control': 'no-store',
+		})
+		return
+	}
+
+	if (subscriptionMatch) {
+		const entity = `${subscriptionMatch[1] || ''}`.trim()
+		const entityId = Number(subscriptionMatch[2] || 0)
+		if (!entityId || (entity !== 'task' && entity !== 'project')) {
+			sendJson(res, 400, {error: 'A valid subscription entity and id are required.'})
+			return
+		}
+
+		if (req.method === 'PUT') {
+			await vikunja.request(`subscriptions/${entity}/${entityId}`, {
+				method: 'PUT',
+			})
+			sendJson(res, 200, {ok: true, subscribed: true})
+			return
+		}
+
+		if (req.method === 'DELETE') {
+			await vikunja.request(`subscriptions/${entity}/${entityId}`, {
+				method: 'DELETE',
+			})
+			sendJson(res, 200, {ok: true, subscribed: false})
+			return
+		}
 	}
 
 	const teamsCollectionMatch = url.pathname.match(/^\/api\/teams$/)
@@ -1389,6 +1753,7 @@ async function handleApi(req, res, url) {
 	const taskMatch = url.pathname.match(/^\/api\/tasks\/(\d+)$/)
 	const taskPositionMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/position$/)
 	const taskDuplicateMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/duplicate$/)
+	const taskReadMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/read$/)
 	const taskRelationsMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/relations$/)
 	const taskRelationDeleteMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/relations\/(\w+)\/(\d+)$/)
 	const taskAssigneesMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/assignees$/)
@@ -1637,6 +2002,12 @@ async function handleApi(req, res, url) {
 			return
 		}
 
+		logInfo('task.position.forward', {
+			taskId,
+			projectViewId,
+			position,
+		})
+
 		const taskPosition = await vikunja.request(`tasks/${taskId}/position`, {
 			method: 'POST',
 			body: {
@@ -1644,6 +2015,11 @@ async function handleApi(req, res, url) {
 				project_view_id: projectViewId,
 				position,
 			},
+		})
+		logInfo('task.position.result', {
+			taskId,
+			projectViewId,
+			position: Number(taskPosition?.position),
 		})
 		sendJson(res, 200, {taskPosition})
 		return
@@ -1709,6 +2085,15 @@ async function handleApi(req, res, url) {
 		return
 	}
 
+	if (taskReadMatch && req.method === 'POST') {
+		const taskId = Number(taskReadMatch[1])
+		await vikunja.request(`tasks/${taskId}/read`, {
+			method: 'POST',
+		})
+		sendJson(res, 200, {ok: true})
+		return
+	}
+
 	if (taskMatch && req.method === 'GET') {
 		const taskId = Number(taskMatch[1])
 		const task = await vikunja.request(`tasks/${taskId}`, {
@@ -1769,18 +2154,49 @@ function getAppSessionId(req) {
 	return cookies[appSessionCookieName] || ''
 }
 
-async function getVikunjaContext(req) {
+function buildAppSessionCookie(sessionId) {
+	return serializeCookie(appSessionCookieName, sessionId, {
+		httpOnly: true,
+		sameSite: 'Strict',
+		secure: cookieSecure,
+		path: '/',
+		maxAge: appSessionTtlSeconds,
+	})
+}
+
+function refreshAppSessionCookie(res, sessionId) {
+	if (!res || !sessionId || res.headersSent) {
+		return
+	}
+
+	const nextCookie = buildAppSessionCookie(sessionId)
+	const existing = res.getHeader('Set-Cookie')
+	if (!existing) {
+		res.setHeader('Set-Cookie', nextCookie)
+		return
+	}
+
+	const existingCookies = Array.isArray(existing) ? existing : [existing]
+	const otherCookies = existingCookies.filter(cookie => {
+		const serialized = `${cookie || ''}`
+		return !serialized.startsWith(`${encodeURIComponent(appSessionCookieName)}=`)
+	})
+	res.setHeader('Set-Cookie', [...otherCookies, nextCookie])
+}
+
+async function getVikunjaContext(req, res = null) {
 	const cookies = parseCookies(req.headers.cookie || '')
 	const ignoreLegacy = cookies[ignoreLegacyCookieName] === '1'
 	const appSessionId = getAppSessionId(req)
 	const session = sessionStore.get(appSessionId)
 	if (session?.account) {
-		return {
+		refreshAppSessionCookie(res, appSessionId)
+		return await hydrateOperatorAccountContext({
 			source: 'account',
 			sessionId: appSessionId,
 			account: session.account,
 			client: createAccountClient(session.account, appSessionId),
-		}
+		})
 	}
 
 	// Legacy API-token mode is retained as a development-only fallback.
@@ -1806,8 +2222,8 @@ async function getVikunjaContext(req) {
 	return null
 }
 
-async function requireVikunjaContext(req) {
-	const context = await getVikunjaContext(req)
+async function requireVikunjaContext(req, res = null) {
+	const context = await getVikunjaContext(req, res)
 	if (!context) {
 		const error = new Error('Connect a Vikunja account in Settings first.')
 		error.statusCode = 401
@@ -1817,7 +2233,7 @@ async function requireVikunjaContext(req) {
 	return context
 }
 
-function requireInteractiveSession(req) {
+async function requireInteractiveSession(req, res = null, {refreshCookie = true} = {}) {
 	const appSessionId = getAppSessionId(req)
 	const session = sessionStore.get(appSessionId)
 	if (!session?.account) {
@@ -1832,18 +2248,22 @@ function requireInteractiveSession(req) {
 		throw error
 	}
 
-	return {
+	if (refreshCookie) {
+		refreshAppSessionCookie(res, appSessionId)
+	}
+
+	return await hydrateOperatorAccountContext({
 		source: 'account',
 		sessionId: appSessionId,
 		account: session.account,
 		client: createAccountClient(session.account, appSessionId),
-	}
+	})
 }
 
-function requireAdminSession(req, {allowBridgeUnavailable = false} = {}) {
-	const context = requireInteractiveSession(req)
-	if (!adminBridge.isAdminAccount(context.account)) {
-		const error = new Error('This action requires the primary Vikunja admin account.')
+async function requireAdminSession(req, res = null, {allowBridgeUnavailable = false} = {}) {
+	const context = await requireInteractiveSession(req, res)
+	if (!adminBridge.isOperatorAccount(context.account)) {
+		const error = new Error('This action requires an authorized operator account.')
 		error.statusCode = 403
 		throw error
 	}
@@ -1857,6 +2277,74 @@ function requireAdminSession(req, {allowBridgeUnavailable = false} = {}) {
 	return context
 }
 
+async function hydrateOperatorAccountContext(context) {
+	if (!context?.account || context.account.authMode !== 'password') {
+		return context
+	}
+
+	const hydratedAccount = await hydrateOperatorAccountIdentity(context.account, context.sessionId)
+	if (hydratedAccount === context.account) {
+		return context
+	}
+
+	return {
+		...context,
+		account: hydratedAccount,
+	}
+}
+
+async function hydrateOperatorAccountIdentity(account, sessionId = '') {
+	if (!account || account.authMode !== 'password' || !adminBridge.enabled) {
+		return account
+	}
+
+	const currentEmail = `${account.user?.email || ''}`.trim()
+	if (currentEmail) {
+		return account
+	}
+
+	const currentUsername = `${account.user?.username || ''}`.trim().toLowerCase()
+	const currentUserId = Number(account.user?.id || 0)
+	if (!currentUsername && currentUserId <= 0) {
+		return account
+	}
+
+	let matchedUser = null
+	try {
+		const users = await adminBridge.listUsers()
+		matchedUser = users.find(user =>
+			(currentUserId > 0 && Number(user.id || 0) === currentUserId) ||
+			(currentUsername && `${user.username || ''}`.trim().toLowerCase() === currentUsername),
+		) || null
+	} catch {
+		return account
+	}
+
+	const hydratedEmail = `${matchedUser?.email || ''}`.trim()
+	if (!hydratedEmail) {
+		return account
+	}
+
+	const hydratedAccount = {
+		...account,
+		user: {
+			...(account.user || {}),
+			email: hydratedEmail,
+		},
+	}
+
+	if (sessionId) {
+		const current = sessionStore.get(sessionId)
+		if (current) {
+			sessionStore.update(sessionId, {
+				account: hydratedAccount,
+			})
+		}
+	}
+
+	return hydratedAccount
+}
+
 function assertAdminUserMutationAllowed(account, identifier, action) {
 	const normalizedIdentifier = `${identifier || ''}`.trim().toLowerCase()
 	const currentUserId = String(Number(account?.user?.id || 0))
@@ -1868,16 +2356,9 @@ function assertAdminUserMutationAllowed(account, identifier, action) {
 				(currentUsername && normalizedIdentifier === currentUsername) ||
 				(currentEmail && normalizedIdentifier === currentEmail)),
 	)
-	const targetsPrimaryAdmin = normalizedIdentifier === '1'
 
 	if (targetsCurrentUser && (action === 'disable' || action === 'delete')) {
 		const error = new Error('You cannot disable or delete the account you are currently signed in with.')
-		error.statusCode = 400
-		throw error
-	}
-
-	if (targetsPrimaryAdmin && (action === 'disable' || action === 'delete')) {
-		const error = new Error('The primary Vikunja admin cannot be disabled or deleted from this app.')
 		error.statusCode = 400
 		throw error
 	}
@@ -1916,10 +2397,15 @@ function updateSessionUser(context, user) {
 		return
 	}
 
+	const nextEmail = `${user?.email || ''}`.trim() || `${current.account?.user?.email || ''}`.trim()
+
 	sessionStore.update(context.sessionId, {
 		account: {
 			...current.account,
-			user,
+			user: {
+				...(user || {}),
+				email: nextEmail,
+			},
 		},
 	})
 }
@@ -1937,7 +2423,7 @@ function summarizeAccount(account, source) {
 		isAdmin:
 			source === 'account' &&
 			account.authMode === 'password' &&
-			adminBridge.isAdminAccount(account),
+			adminBridge.isOperatorAccount(account),
 		instanceFeatures: account.instanceFeatures
 			? {
 				linkSharingEnabled:
@@ -1949,6 +2435,10 @@ function summarizeAccount(account, source) {
 						? account.instanceFeatures.publicTeamsEnabled
 						: null,
 				frontendUrl: `${account.instanceFeatures.frontendUrl || ''}`.trim() || null,
+				emailRemindersEnabled:
+					typeof account.instanceFeatures.emailRemindersEnabled === 'boolean'
+						? account.instanceFeatures.emailRemindersEnabled
+						: null,
 			}
 			: null,
 		user: account.user
@@ -2226,7 +2716,7 @@ function assertTrustedOrigin(req) {
 		return
 	}
 
-	if (appAllowedOrigins.includes(candidateOrigin)) {
+	if (isSameOriginRequest(req, candidateOrigin)) {
 		return
 	}
 
@@ -2234,13 +2724,45 @@ function assertTrustedOrigin(req) {
 	error.statusCode = 403
 	error.details = {
 		origin: candidateOrigin,
-		allowedOrigins: appAllowedOrigins,
+		expectedOrigin: getExpectedRequestOrigin(req),
 	}
 	throw error
 }
 
 function isUnsafeMethod(method) {
 	return ['POST', 'PUT', 'PATCH', 'DELETE'].includes(`${method || ''}`.toUpperCase())
+}
+
+function isSameOriginRequest(req, candidateOrigin) {
+	const expectedOrigin = getExpectedRequestOrigin(req)
+	if (!expectedOrigin) {
+		return false
+	}
+
+	try {
+		return new URL(candidateOrigin).origin === expectedOrigin
+	} catch {
+		return false
+	}
+}
+
+function getExpectedRequestOrigin(req) {
+	const forwardedHost = appTrustProxy ? getFirstForwardedValue(req.headers['x-forwarded-host']) : ''
+	const forwardedProto = appTrustProxy ? getFirstForwardedValue(req.headers['x-forwarded-proto']) : ''
+	const host = forwardedHost || `${req.headers.host || ''}`.trim()
+	if (!host) {
+		return ''
+	}
+
+	const protocol = forwardedProto || (req.socket?.encrypted ? 'https' : 'http')
+	return `${protocol}://${host}`
+}
+
+function getFirstForwardedValue(value) {
+	return `${value || ''}`
+		.split(',')[0]
+		.trim()
+		.toLowerCase()
 }
 
 function getRequestOrigin(req) {

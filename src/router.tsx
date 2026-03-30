@@ -1,3 +1,4 @@
+import ResetPasswordScreen from '@/components/auth/ResetPasswordScreen'
 import FiltersScreen from '@/components/screens/FiltersScreen'
 import AppShell from '@/components/layout/AppShell'
 import LinkShareAuthScreen from '@/components/sharing/LinkShareAuthScreen'
@@ -12,6 +13,10 @@ import UpcomingScreen from '@/components/screens/UpcomingScreen'
 import {createBrowserRouter} from 'react-router-dom'
 
 export const router = createBrowserRouter([
+	{
+		path: '/auth/reset-password',
+		element: <ResetPasswordScreen />,
+	},
 	{
 		path: '/share/:share/auth',
 		element: <LinkShareAuthScreen />,

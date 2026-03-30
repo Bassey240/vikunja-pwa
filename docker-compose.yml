@@ -10,27 +10,46 @@ services:
     ports:
       - "${PORT:-4300}:${PORT:-4300}"
     environment:
-      HOST: 0.0.0.0
+      HOST: ${HOST:-0.0.0.0}
       PORT: ${PORT:-4300}
       APP_PUBLIC_ORIGIN: ${APP_PUBLIC_ORIGIN:-}
-      APP_ALLOWED_ORIGINS: ${APP_ALLOWED_ORIGINS:-}
       COOKIE_SECURE: ${COOKIE_SECURE:-}
-      APP_SESSION_STORE_PATH: .data/app-sessions.enc
-      APP_SESSION_KEY_PATH: .data/app-sessions.key
+      APP_SESSION_STORE_PATH: ${APP_SESSION_STORE_PATH:-.data/app-sessions.enc}
+      APP_SESSION_KEY_PATH: ${APP_SESSION_KEY_PATH:-.data/app-sessions.key}
+      APP_SESSION_TTL_SECONDS: ${APP_SESSION_TTL_SECONDS:-2592000}
+      APP_TRUST_PROXY: ${APP_TRUST_PROXY:-false}
       APP_HTTPS_CERT_PATH: ${APP_HTTPS_CERT_PATH:-}
       APP_HTTPS_KEY_PATH: ${APP_HTTPS_KEY_PATH:-}
-      VIKUNJA_DEFAULT_BASE_URL: ${VIKUNJA_DEFAULT_BASE_URL}
+      LOG_REQUESTS: ${LOG_REQUESTS:-true}
+      HEALTHCHECK_UPSTREAM_TIMEOUT_MS: ${HEALTHCHECK_UPSTREAM_TIMEOUT_MS:-3000}
+      LOGIN_RATE_LIMIT_WINDOW_SECONDS: ${LOGIN_RATE_LIMIT_WINDOW_SECONDS:-300}
+      LOGIN_RATE_LIMIT_MAX: ${LOGIN_RATE_LIMIT_MAX:-10}
+      SESSION_MUTATION_RATE_LIMIT_WINDOW_SECONDS: ${SESSION_MUTATION_RATE_LIMIT_WINDOW_SECONDS:-60}
+      SESSION_MUTATION_RATE_LIMIT_MAX: ${SESSION_MUTATION_RATE_LIMIT_MAX:-30}
+      VIKUNJA_BASE_URL: ${VIKUNJA_BASE_URL:-}
+      VIKUNJA_API_TOKEN: ${VIKUNJA_API_TOKEN:-}
+      VIKUNJA_DEFAULT_BASE_URL: ${VIKUNJA_DEFAULT_BASE_URL:-}
       VIKUNJA_BRIDGE_MODE: ${VIKUNJA_BRIDGE_MODE:-}
       VIKUNJA_CONTAINER_NAME: ${VIKUNJA_CONTAINER_NAME:-vikunja}
       VIKUNJA_CLI_PATH: ${VIKUNJA_CLI_PATH:-/app/vikunja/vikunja}
       VIKUNJA_SSH_DESTINATION: ${VIKUNJA_SSH_DESTINATION:-}
       VIKUNJA_SSH_PORT: ${VIKUNJA_SSH_PORT:-22}
       VIKUNJA_SSH_KEY_PATH: ${VIKUNJA_SSH_KEY_PATH:-}
+      VIKUNJA_BRIDGE_TIMEOUT_MS: ${VIKUNJA_BRIDGE_TIMEOUT_MS:-10000}
+      ADMIN_BRIDGE_ALLOWED_EMAILS: ${ADMIN_BRIDGE_ALLOWED_EMAILS:-}
+      VIKUNJA_HOST_CONFIG_PATH: ${VIKUNJA_HOST_CONFIG_PATH:-}
+      VIKUNJA_COMPOSE_PATH: ${VIKUNJA_COMPOSE_PATH:-}
     volumes:
       - app_data:/app/.data
       # Optional runtime files. Keep certs or SSH keys in ./deploy and point the
       # corresponding env vars at /app/deploy/<filename> when you need them.
       - ./deploy:/app/deploy:ro
+      # Optional writable bind mount for the authoritative upstream Vikunja
+      # config source when using docker-exec source modes from inside this
+      # container. In same-host compose-backed setups with relative bind paths
+      # in the upstream compose file, set VIKUNJA_ADMIN_SOURCE_CONTAINER_PATH
+      # to the same absolute path as VIKUNJA_ADMIN_SOURCE_HOST_PATH.
+      - ${VIKUNJA_ADMIN_SOURCE_HOST_PATH:-./deploy/admin-source}:${VIKUNJA_ADMIN_SOURCE_CONTAINER_PATH:-/app/admin-source}
       # Only used when VIKUNJA_BRIDGE_MODE=docker-exec.
       - /var/run/docker.sock:/var/run/docker.sock
 

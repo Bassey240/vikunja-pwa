@@ -7,9 +7,17 @@ export function createAdminBridge({
 	vikunjaSshDestination,
 	vikunjaSshPort,
 	vikunjaSshKeyPath,
+	adminBridgeAllowedEmails = [],
 	bridgeTimeoutMs,
 }) {
 	const mode = normalizeBridgeMode(bridgeMode)
+	const allowedEmails = new Set(
+		Array.isArray(adminBridgeAllowedEmails)
+			? adminBridgeAllowedEmails
+				.map(value => `${value || ''}`.trim().toLowerCase())
+				.filter(Boolean)
+			: [],
+	)
 	const enabled = Boolean(
 		mode &&
 		`${vikunjaContainerName || ''}`.trim() &&
@@ -27,12 +35,13 @@ export function createAdminBridge({
 			}
 		},
 
-		isAdminAccount(account) {
-			if (!account?.user) {
+		isOperatorAccount(account) {
+			const email = `${account?.user?.email || ''}`.trim().toLowerCase()
+			if (!email || allowedEmails.size === 0) {
 				return false
 			}
 
-			return Number(account.user.id || 0) === 1
+			return allowedEmails.has(email)
 		},
 
 		async getRuntimeHealth() {
@@ -91,6 +100,33 @@ export function createAdminBridge({
 			}
 
 			return health
+		},
+
+		async runTestmail(email) {
+			const nextEmail = `${email || ''}`.trim()
+			assertRequired(nextEmail, 'Email address is required.')
+
+			const result = await runVikunjaCli(['testmail', nextEmail], bridgeTimeoutMs, {
+				allowFailure: true,
+			})
+			const stdout = `${result.stdout || ''}`.trim() || null
+			const stderr = `${result.stderr || ''}`.trim() || null
+			return {
+				success: didTestmailSucceed(result.exitCode, stdout, stderr),
+				stdout,
+				stderr,
+			}
+		},
+
+		async runDoctor() {
+			const result = await runVikunjaCli(['doctor'], bridgeTimeoutMs, {
+				allowFailure: true,
+			})
+			return {
+				exitCode: result.exitCode,
+				stdout: `${result.stdout || ''}`.trim() || null,
+				stderr: `${result.stderr || ''}`.trim() || null,
+			}
 		},
 
 		async listUsers({email = ''} = {}) {
@@ -200,14 +236,24 @@ export function createAdminBridge({
 	}
 
 	async function runVikunjaCli(args, timeoutMs, {allowFailure = false} = {}) {
+		const dockerExecArgs = [
+			'exec',
+			'-e',
+			'HOME=/tmp',
+			'-e',
+			'XDG_CACHE_HOME=/tmp/.cache',
+			vikunjaContainerName,
+			vikunjaCliPath,
+			...args,
+		]
 		const result = mode === 'ssh-docker-exec'
 			? await runSshCommand(
-				['docker', 'exec', vikunjaContainerName, vikunjaCliPath, ...args],
+				['docker', ...dockerExecArgs],
 				{timeoutMs},
 			)
 			: await runCommand(
 				'docker',
-				['exec', vikunjaContainerName, vikunjaCliPath, ...args],
+				dockerExecArgs,
 				{timeoutMs},
 			)
 
@@ -234,6 +280,27 @@ export function createAdminBridge({
 		sshArgs.push(buildShellCommand(remoteArgs))
 		return runCommand('ssh', sshArgs, {timeoutMs})
 	}
+}
+
+function didTestmailSucceed(exitCode, stdout, stderr) {
+	if (Number(exitCode || 0) !== 0) {
+		return false
+	}
+
+	const combinedOutput = `${stdout || ''}\n${stderr || ''}`.toLowerCase()
+	if (!combinedOutput.trim()) {
+		return true
+	}
+
+	if (combinedOutput.includes('error sending test mail')) {
+		return false
+	}
+
+	if (combinedOutput.includes('level=error') && combinedOutput.includes('test mail')) {
+		return false
+	}
+
+	return true
 }
 
 function normalizeBridgeMode(value) {

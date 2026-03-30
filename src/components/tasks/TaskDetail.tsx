@@ -38,6 +38,8 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 	const taskDetailOpen = useAppStore(state => state.taskDetailOpen)
 	const taskDetailLoading = useAppStore(state => state.taskDetailLoading)
 	const taskDetail = useAppStore(state => state.taskDetail)
+	const subscriptionsByEntity = useAppStore(state => state.subscriptionsByEntity)
+	const subscriptionMutatingKeys = useAppStore(state => state.subscriptionMutatingKeys)
 	const currentUserId = useAppStore(state => Number(state.account?.user?.id || 0))
 	const offlineReadOnlyMode = useAppStore(state => state.offlineReadOnlyMode)
 	const projects = useAppStore(state => state.projects)
@@ -69,6 +71,7 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 	const addLabelToTask = useAppStore(state => state.addLabelToTask)
 	const removeLabelFromTask = useAppStore(state => state.removeLabelFromTask)
 	const removeTaskRelation = useAppStore(state => state.removeTaskRelation)
+	const toggleSubscription = useAppStore(state => state.toggleSubscription)
 	const openFocusedTask = useAppStore(state => state.openFocusedTask)
 	const [title, setTitle] = useState('')
 	const [description, setDescription] = useState('')
@@ -264,6 +267,9 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 	const repeatAfterValue = normalizeRepeatAfter(taskDetail?.repeat_after)
 	const repeatSummary = formatRepeatSummary(taskDetail?.repeat_after, taskDetail?.repeat_from_current_date)
 	const quickReminderOptions = useMemo(() => buildQuickReminderOptions(new Date()), [taskDetail?.id])
+	const taskSubscriptionKey = taskDetail ? `task:${taskDetail.id}` : ''
+	const taskSubscribed = taskSubscriptionKey ? (subscriptionsByEntity[taskSubscriptionKey] ?? null) : null
+	const taskSubscriptionSubmitting = taskSubscriptionKey ? subscriptionMutatingKeys.has(taskSubscriptionKey) : false
 
 	useEffect(() => {
 		const normalizedQuery = `${assigneeQuery || ''}`.trim()
@@ -708,10 +714,23 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 
 	return (
 		<DetailSheet open={taskDetailOpen} closeAction="close-task-detail" onClose={closeTaskDetail} mode={mode}>
-			<div className="sheet-head">
+			<div className="sheet-head detail-sheet-head">
 				<div>
 					<div className="panel-label">Task Detail</div>
 					<div className="panel-title">{taskDetail ? taskDetail.title : 'Loading…'}</div>
+				</div>
+				<div className="panel-action-row">
+					{taskDetail && taskSubscribed !== null ? (
+						<button
+							className={`pill-button ${taskSubscribed ? 'is-active' : ''}`.trim()}
+							data-action="toggle-task-subscription"
+							type="button"
+							disabled={taskSubscriptionSubmitting}
+							onClick={() => void toggleSubscription('task', taskDetail.id)}
+						>
+							{taskSubscriptionSubmitting ? 'Saving…' : taskSubscribed ? 'Subscribed' : 'Subscribe'}
+						</button>
+					) : null}
 				</div>
 			</div>
 			{taskDetailLoading && !taskDetail ? <div className="empty-state">Loading task details…</div> : null}

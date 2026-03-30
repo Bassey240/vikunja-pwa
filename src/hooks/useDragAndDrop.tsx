@@ -615,8 +615,17 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 		return
 	}
 
-	if (dragContext?.dropTargetProjectId) {
-		const targetProjectId = dragContext.dropTargetProjectId
+	const releaseProjectTarget =
+		dragContext && dragContext.lastX != null && dragContext.lastY != null
+			? hitTestProjectRows(dragContext, dragContext.lastX, dragContext.lastY)
+			: null
+	const releaseTaskTarget =
+		dragContext && dragContext.lastX != null && dragContext.lastY != null
+			? hitTestTaskRows(dragContext, dragContext.lastX, dragContext.lastY)
+			: null
+
+	if (releaseProjectTarget?.projectId) {
+		const targetProjectId = releaseProjectTarget.projectId
 		const visibleTaskList = getVisibleTaskListForTaskDrop(store, taskId, targetProjectId, collections)
 		const traceToken = beginTaskDropTrace({
 			taskId,
@@ -627,18 +636,19 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 		await commitTaskDrop(event, {
 			traceToken,
 			suppressRollbackFlash: targetProjectId !== task.project_id,
-			commitMove: () => store.moveTaskToPlacement(taskId, {
-			parentTaskId: null,
-			targetProjectId,
-			traceToken,
-			taskList: visibleTaskList,
+			commitMove: () => store.moveTask({
+				taskId,
+				parentTaskId: null,
+				targetProjectId,
+				traceToken,
+				taskList: visibleTaskList,
 			}),
 		})
 		return
 	}
 
-	if (dragContext?.dropTargetTaskId) {
-		const targetTaskId = dragContext.dropTargetTaskId
+	if (releaseTaskTarget?.taskId) {
+		const targetTaskId = releaseTaskTarget.taskId
 		const targetParentTask = findTaskInAnyContext(targetTaskId, collections)
 		const traceToken = beginTaskDropTrace({
 			taskId,
@@ -649,7 +659,8 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 		await commitTaskDrop(event, {
 			traceToken,
 			suppressRollbackFlash: Boolean(targetParentTask && targetParentTask.project_id !== task.project_id),
-			commitMove: () => store.moveTaskToPlacement(taskId, {
+			commitMove: () => store.moveTask({
+				taskId,
 				parentTaskId: targetTaskId,
 				traceToken,
 			}),
@@ -661,24 +672,29 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 	if (kanbanBucketId) {
 		const siblingIds = getSiblingTaskIdsFromContainer(event.to)
 		const movedIndex = siblingIds.indexOf(taskId)
-		const viewId = store.currentProjectViewId
-		if (movedIndex === -1 || !viewId) {
+		const traceToken = beginTaskDropTrace({
+			taskId,
+			sourceProjectId: task.project_id,
+			targetProjectId: task.project_id,
+			targetParentTaskId: null,
+		})
+		if (movedIndex === -1 || !store.currentProjectViewId) {
 			restoreSortableDomPosition(event)
 			return
 		}
 
 		await commitTaskDrop(event, {
-			traceToken: beginTaskDropTrace({
-				taskId,
-				sourceProjectId: task.project_id,
-				targetProjectId: task.project_id,
-				targetParentTaskId: null,
-			}),
+			traceToken,
 			suppressRollbackFlash: false,
 			commitMove: () =>
-				store.moveTaskToBucket(task.project_id, viewId, taskId, kanbanBucketId, {
+				store.moveTask({
+					taskId,
+					targetProjectId: task.project_id,
+					viewId: store.currentProjectViewId,
+					bucketId: kanbanBucketId,
 					beforeTaskId: siblingIds[movedIndex - 1] || null,
 					afterTaskId: siblingIds[movedIndex + 1] || null,
+					traceToken,
 				}),
 		})
 		return
@@ -714,7 +730,8 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 	await commitTaskDrop(event, {
 		traceToken,
 		suppressRollbackFlash: targetProjectId !== task.project_id,
-		commitMove: () => store.moveTaskToPlacement(taskId, {
+		commitMove: () => store.moveTask({
+			taskId,
 			parentTaskId,
 			targetProjectId,
 			beforeTaskId: siblingIds[movedIndex - 1] || null,
@@ -798,21 +815,29 @@ async function handleSortableProjectEnd(event: SortableEvent) {
 }
 
 function getSiblingTaskIdsFromContainer(container: HTMLElement) {
-	return Array.from(container.querySelectorAll(':scope > .task-branch, :scope > .kanban-task-item'))
-		.map(branch => {
-			if (branch instanceof HTMLElement && branch.dataset.taskRowId) {
-				return Number(branch.dataset.taskRowId || 0)
+	return Array.from(container.children)
+		.map(child => {
+			if (!(child instanceof HTMLElement)) {
+				return 0
 			}
 
-			const row = branch.querySelector('[data-task-row-id]')
+			if (child.classList.contains('kanban-task-item')) {
+				return Number(child.dataset.taskRowId || 0)
+			}
+
+			if (!child.classList.contains('task-branch')) {
+				return 0
+			}
+
+			const row = child.querySelector('.task-row[data-task-row-id]')
 			return Number(row instanceof HTMLElement ? row.dataset.taskRowId || 0 : 0)
 		})
 		.filter(taskId => taskId > 0)
 }
 
 function getSiblingProjectIdsFromContainer(container: HTMLElement) {
-	return Array.from(container.querySelectorAll(':scope > .project-node[data-project-node-id]'))
-		.map(node => Number(node instanceof HTMLElement ? node.dataset.projectNodeId || 0 : 0))
+	return Array.from(container.children)
+		.map(node => Number(node instanceof HTMLElement && node.classList.contains('project-node') ? node.dataset.projectNodeId || 0 : 0))
 		.filter(projectId => projectId > 0)
 }
 
@@ -931,7 +956,8 @@ async function commitSidebarProjectDrop(context: DragContext) {
 			targetParentTaskId: null,
 		})
 		markTaskDropTrace(traceToken, 'sidebar-drop-commit-start')
-		await store.moveTaskToPlacement(task.id, {
+		await store.moveTask({
+			taskId: task.id,
 			parentTaskId: null,
 			targetProjectId,
 			traceToken,

@@ -53,6 +53,13 @@ export default function SettingsScreen() {
 	const adminUserSubmitting = useAppStore(state => state.adminUserSubmitting)
 	const adminRuntimeHealth = useAppStore(state => state.adminRuntimeHealth)
 	const adminRuntimeHealthLoading = useAppStore(state => state.adminRuntimeHealthLoading)
+	const mailDiagnosticsSubmitting = useAppStore(state => state.mailDiagnosticsSubmitting)
+	const mailDiagnosticsResult = useAppStore(state => state.mailDiagnosticsResult)
+	const mailerConfig = useAppStore(state => state.mailerConfig)
+	const mailerConfigLoadAttempted = useAppStore(state => state.mailerConfigLoadAttempted)
+	const mailerConfigLoading = useAppStore(state => state.mailerConfigLoading)
+	const mailerConfigSubmitting = useAppStore(state => state.mailerConfigSubmitting)
+	const mailerConfigRestarting = useAppStore(state => state.mailerConfigRestarting)
 	const teams = useAppStore(state => state.teams)
 	const teamsLoaded = useAppStore(state => state.teamsLoaded)
 	const teamsLoading = useAppStore(state => state.teamsLoading)
@@ -78,6 +85,10 @@ export default function SettingsScreen() {
 	const openRootComposer = useAppStore(state => state.openRootComposer)
 	const loadAdminUsers = useAppStore(state => state.loadAdminUsers)
 	const loadAdminRuntimeHealth = useAppStore(state => state.loadAdminRuntimeHealth)
+	const sendTestmail = useAppStore(state => state.sendTestmail)
+	const loadMailerConfig = useAppStore(state => state.loadMailerConfig)
+	const saveMailerConfig = useAppStore(state => state.saveMailerConfig)
+	const applyMailerConfig = useAppStore(state => state.applyMailerConfig)
 	const createAdminUser = useAppStore(state => state.createAdminUser)
 	const updateAdminUser = useAppStore(state => state.updateAdminUser)
 	const setAdminUserEnabled = useAppStore(state => state.setAdminUserEnabled)
@@ -85,7 +96,15 @@ export default function SettingsScreen() {
 	const deleteAdminUser = useAppStore(state => state.deleteAdminUser)
 	const saveCollaborationSettings = useAppStore(state => state.saveCollaborationSettings)
 	const notificationPreferencesSubmitting = useAppStore(state => state.notificationPreferencesSubmitting)
+	const avatarProvider = useAppStore(state => state.avatarProvider)
+	const avatarProviderLoaded = useAppStore(state => state.avatarProviderLoaded)
+	const avatarProviderLoading = useAppStore(state => state.avatarProviderLoading)
+	const avatarProviderSubmitting = useAppStore(state => state.avatarProviderSubmitting)
+	const avatarUploadSubmitting = useAppStore(state => state.avatarUploadSubmitting)
 	const saveNotificationPreferences = useAppStore(state => state.saveNotificationPreferences)
+	const loadAvatarProvider = useAppStore(state => state.loadAvatarProvider)
+	const updateAvatarProvider = useAppStore(state => state.updateAvatarProvider)
+	const uploadAvatar = useAppStore(state => state.uploadAvatar)
 	const loadTeams = useAppStore(state => state.loadTeams)
 	const createTeam = useAppStore(state => state.createTeam)
 	const updateTeam = useAppStore(state => state.updateTeam)
@@ -105,6 +124,7 @@ export default function SettingsScreen() {
 	})
 
 	const canManageUsers = Boolean(account?.authMode === 'password' && account?.isAdmin)
+	const adminBridgeConfigured = Boolean(serverConfig?.features?.adminBridgeMode)
 	const adminBridgeReady = Boolean(
 		adminRuntimeHealth?.dockerReachable &&
 		adminRuntimeHealth?.vikunjaContainerFound &&
@@ -137,7 +157,15 @@ export default function SettingsScreen() {
 	}, [account?.authMode, connected, loadTimezoneOptions, timezoneOptionsLoaded, timezoneOptionsLoading])
 
 	useEffect(() => {
-		if (!canManageUsers) {
+		if (!connected || !account?.user || avatarProviderLoaded || avatarProviderLoading) {
+			return
+		}
+
+		void loadAvatarProvider()
+	}, [account?.user, avatarProviderLoaded, avatarProviderLoading, connected, loadAvatarProvider])
+
+	useEffect(() => {
+		if (!openSections.userAdministration || account?.authMode !== 'password') {
 			return
 		}
 
@@ -147,8 +175,9 @@ export default function SettingsScreen() {
 	}, [
 		adminRuntimeHealth,
 		adminRuntimeHealthLoading,
-		canManageUsers,
+		account?.authMode,
 		loadAdminRuntimeHealth,
+		openSections.userAdministration,
 	])
 
 	useEffect(() => {
@@ -259,6 +288,11 @@ export default function SettingsScreen() {
 							showPasswordForm={showPasswordForm}
 							canChangePassword={canChangePassword}
 							canLogout={canLogout}
+							avatarProvider={avatarProvider}
+							avatarProviderLoaded={avatarProviderLoaded}
+							avatarProviderLoading={avatarProviderLoading}
+							avatarProviderSubmitting={avatarProviderSubmitting}
+							avatarUploadSubmitting={avatarUploadSubmitting}
 							onDisconnect={handleDisconnect}
 							onLogout={() => {
 								void logoutAccount()
@@ -274,6 +308,15 @@ export default function SettingsScreen() {
 							}}
 							onSetChangePasswordField={setChangePasswordField}
 							onPasswordChange={handlePasswordChange}
+							onReloadAvatarProvider={() => {
+								void loadAvatarProvider()
+							}}
+							onUpdateAvatarProvider={provider => {
+								void updateAvatarProvider(provider)
+							}}
+							onUploadAvatar={file => {
+								void uploadAvatar(file)
+							}}
 						/>
 						{account ? (
 							<SettingsPreferencesSection
@@ -312,6 +355,10 @@ export default function SettingsScreen() {
 								open={openSections.notifications}
 								onToggle={toggleSection}
 								frontendSettings={account.user?.settings?.frontend_settings}
+								emailDeliveryAvailable={account.instanceFeatures?.emailRemindersEnabled === true}
+								emailRemindersEnabled={Boolean(account.user?.settings?.email_reminders_enabled)}
+								overdueTasksRemindersEnabled={Boolean(account.user?.settings?.overdue_tasks_reminders_enabled)}
+								accountIsAdmin={Boolean(account.isAdmin)}
 								pushManagerSupported={pushManagerSupported}
 								isSecureContext={isSecureContext}
 								standaloneWebApp={standaloneDisplayMode}
@@ -348,6 +395,7 @@ export default function SettingsScreen() {
 								onToggle={toggleSection}
 								accountUser={account.user}
 								accountIsAdmin={Boolean(account.isAdmin)}
+								adminBridgeConfigured={adminBridgeConfigured}
 								canManageUsers={canManageUsers}
 								adminUsers={adminUsers}
 								adminUsersLoading={adminUsersLoading}
@@ -356,6 +404,13 @@ export default function SettingsScreen() {
 								adminRuntimeHealth={adminRuntimeHealth}
 								adminBridgeFailedChecks={adminBridgeFailedChecks}
 								adminRuntimeHealthLoading={adminRuntimeHealthLoading}
+								mailDiagnosticsSubmitting={mailDiagnosticsSubmitting}
+								mailDiagnosticsResult={mailDiagnosticsResult}
+								mailerConfig={mailerConfig}
+								mailerConfigLoadAttempted={mailerConfigLoadAttempted}
+								mailerConfigLoading={mailerConfigLoading}
+								mailerConfigSubmitting={mailerConfigSubmitting}
+								mailerConfigRestarting={mailerConfigRestarting}
 								onReloadRuntimeHealth={() => {
 									void loadAdminRuntimeHealth()
 								}}
@@ -367,6 +422,10 @@ export default function SettingsScreen() {
 								onSetAdminUserEnabled={setAdminUserEnabled}
 								onResetAdminUserPassword={resetAdminUserPassword}
 								onDeleteAdminUser={deleteAdminUser}
+								onSendTestmail={sendTestmail}
+								onLoadMailerConfig={loadMailerConfig}
+								onSaveMailerConfig={saveMailerConfig}
+								onApplyMailerConfig={applyMailerConfig}
 							/>
 						) : null}
 						{account ? (

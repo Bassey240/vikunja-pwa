@@ -128,7 +128,13 @@ export default function CollectionScreen({
 						{unavailableMessage ? <div className="empty-state">{unavailableMessage}</div> : null}
 						{!unavailableMessage && loading && rootTasks.length === 0 ? <div className="empty-state">{loadingMessage}</div> : null}
 						{!unavailableMessage && taskListEnabled && rootTasks.length > 0 ? (
-							<TaskTree taskList={taskList} compact={compact} matcher={taskMatcher} bulkMode={bulkMode} />
+							<TaskTree
+								taskList={taskList}
+								compact={compact}
+								matcher={taskMatcher}
+								sortBy={taskFilters.sortBy}
+								bulkMode={bulkMode}
+							/>
 						) : null}
 						{!unavailableMessage && taskListEnabled && !loading && rootTasks.length === 0 ? (
 							<div className="empty-state">{emptyMessage}</div>

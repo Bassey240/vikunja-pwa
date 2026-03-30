@@ -1,10 +1,10 @@
 import {Fragment} from 'react'
+import UserAvatar from '@/components/common/UserAvatar'
 import type {Task} from '@/types'
 import {
 	formatRepeatInterval,
 	formatShortDate,
 	getUserDisplayName,
-	getUserInitials,
 	normalizePercentDone,
 	normalizeRepeatAfter,
 	normalizeTaskDateValue,
@@ -109,7 +109,7 @@ export default function TaskCard({task, childCount, compact = false}: TaskCardPr
 							title={getUserDisplayName(assignee)}
 							data-task-assignee-pill={assignee.id}
 						>
-							{getUserInitials(assignee)}
+							<UserAvatar user={assignee} size={22} />
 						</span>
 					))}
 					{assigneeOverflowCount > 0 ? (

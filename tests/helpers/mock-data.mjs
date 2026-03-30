@@ -1,4 +1,5 @@
 const DAY_MS = 24 * 60 * 60 * 1000
+const unsubscribedState = {subscribed: false}
 
 export function createMockFixture(referenceDate = new Date()) {
 	const today = atHour(referenceDate, 10)
@@ -16,6 +17,10 @@ export function createMockFixture(referenceDate = new Date()) {
 			settings: {
 				default_project_id: 1,
 				timezone: 'Europe/Amsterdam',
+				avatar_provider: 'default',
+				email_reminders_enabled: false,
+				overdue_tasks_reminders_enabled: false,
+				overdue_tasks_reminders_time: '07:00',
 			},
 		},
 		users: [
@@ -210,6 +215,7 @@ export function createMockFixture(referenceDate = new Date()) {
 				identifier: 'WORK',
 				is_favorite: false,
 				is_archived: false,
+				subscription: {...unsubscribedState},
 			},
 			{
 				id: 3,
@@ -236,6 +242,7 @@ export function createMockFixture(referenceDate = new Date()) {
 			1: [{id: 11, project_id: 1, title: 'List', view_kind: 'list'}],
 			2: [
 				{id: 12, project_id: 2, title: 'List', view_kind: 'list'},
+				{id: 16, project_id: 2, title: 'Alt List', view_kind: 'list'},
 				{id: 15, project_id: 2, title: 'Board', view_kind: 'kanban', default_bucket_id: 151, done_bucket_id: 152},
 			],
 			3: [{id: 13, project_id: 3, title: 'List', view_kind: 'list'}],
@@ -278,6 +285,9 @@ export function createMockFixture(referenceDate = new Date()) {
 				created: yesterday.toISOString(),
 				updated: today.toISOString(),
 				done_at: null,
+				read: false,
+				read_at: null,
+				subscription: {...unsubscribedState},
 				labelIds: [2],
 				parentTaskId: null,
 			},
@@ -295,6 +305,9 @@ export function createMockFixture(referenceDate = new Date()) {
 				created: yesterday.toISOString(),
 				updated: laterToday.toISOString(),
 				done_at: null,
+				read: false,
+				read_at: null,
+				subscription: {...unsubscribedState},
 				labelIds: [1],
 				parentTaskId: null,
 			},
@@ -379,6 +392,9 @@ export function createMockFixture(referenceDate = new Date()) {
 				created: yesterday.toISOString(),
 				updated: laterToday.toISOString(),
 				done_at: null,
+				read: false,
+				read_at: null,
+				subscription: {subscribed: true},
 				labelIds: [1],
 				parentTaskId: null,
 			},

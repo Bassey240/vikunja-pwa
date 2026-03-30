@@ -248,7 +248,9 @@ export function setTaskFilterField(
 }
 
 export function getTaskSortByForScreen(screen: Screen, filters: Pick<TaskFilters, 'sortBy'>) {
-	return screen === 'tasks' ? filters.sortBy : defaultTaskFilters.sortBy
+	return ['tasks', 'today', 'inbox', 'upcoming', 'search', 'filters'].includes(screen)
+		? filters.sortBy
+		: defaultTaskFilters.sortBy
 }
 
 export function setProjectFilterField(

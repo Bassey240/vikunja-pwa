@@ -1,6 +1,7 @@
+import UserAvatar from '@/components/common/UserAvatar'
 import type {FormEvent} from 'react'
 import type {Label, TaskAssignee} from '@/types'
-import {getUserDisplayName, getUserInitials} from '@/utils/formatting'
+import {getUserDisplayName} from '@/utils/formatting'
 import {pickLabelTextColor, type TaskDetailSection} from '@/utils/task-detail-helpers'
 import CollapsibleSection from './CollapsibleSection'
 
@@ -97,7 +98,9 @@ export default function TaskDetailOrganization({
 							{taskAssignees.length > 0 ? taskAssignees.map(assignee => (
 								<div key={assignee.id} className="detail-assignee-row">
 									<div className="detail-assignee-pill" data-task-assignee={assignee.id}>
-										<span className="detail-assignee-pill-token">{getUserInitials(assignee)}</span>
+										<span className="detail-assignee-pill-token">
+											<UserAvatar user={assignee} size={30} />
+										</span>
 										<span className="detail-assignee-pill-name">{getUserDisplayName(assignee)}</span>
 									</div>
 									<button
@@ -136,7 +139,9 @@ export default function TaskDetailOrganization({
 										type="button"
 										onClick={() => void onAddAssignee(assignee)}
 									>
-										<span className="detail-assignee-search-token">{getUserInitials(assignee)}</span>
+										<span className="detail-assignee-search-token">
+											<UserAvatar user={assignee} size={30} />
+										</span>
 										<span className="detail-assignee-search-copy">
 											<span className="detail-assignee-search-name">{getUserDisplayName(assignee)}</span>
 											<span className="detail-meta">{assignee.username}</span>

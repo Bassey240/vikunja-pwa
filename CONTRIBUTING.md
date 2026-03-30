@@ -21,6 +21,12 @@ developer, so these guidelines help keep things manageable.
    functionality, add or update the relevant smoke tests.
 5. **Write a clear PR description.** Explain what you changed and why.
 
+Maintainer note: this project keeps full day-to-day development history on
+Forgejo and uses GitHub as a curated public release mirror. That means accepted
+PRs may be rebased, rewritten, squashed, or manually reapplied before they are
+included in a public GitHub release snapshot. The maintained workflow is
+documented in [docs/public-release-workflow.md](docs/public-release-workflow.md).
+
 ## What gets merged
 
 This project follows a Benevolent Dictator governance model. The maintainer has

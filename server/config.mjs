@@ -14,17 +14,25 @@ export function loadConfig(rootDir) {
 	const httpsEnabled = Boolean(httpsKeyPath && httpsCertPath)
 	const legacyBaseUrl = normalizeBaseUrl(env.VIKUNJA_BASE_URL || '')
 	const defaultBaseUrl = normalizeBaseUrl(env.VIKUNJA_DEFAULT_BASE_URL || env.VIKUNJA_BASE_URL || '')
-	const explicitAllowedOrigins = parseOriginList(env.APP_ALLOWED_ORIGINS || '')
-	const fallbackAllowedOrigins = buildLocalAllowedOrigins(host, port, httpsEnabled ? 'https' : 'http')
 	const bridgeMode = normalizeBridgeMode(env.VIKUNJA_BRIDGE_MODE || (env.VIKUNJA_SSH_DESTINATION ? 'ssh-docker-exec' : ''))
+	const hostConfigPathValue = `${env.VIKUNJA_HOST_CONFIG_PATH || ''}`.trim()
+	const composePathValue = `${env.VIKUNJA_COMPOSE_PATH || ''}`.trim()
+	const hostConfigPath = hostConfigPathValue
+		? bridgeMode === 'ssh-docker-exec'
+			? hostConfigPathValue
+			: resolveDataPath(rootDir, hostConfigPathValue)
+		: ''
+	const composePath = composePathValue
+		? bridgeMode === 'ssh-docker-exec'
+			? composePathValue
+			: resolveDataPath(rootDir, composePathValue)
+		: ''
 	const publicAppOrigin =
 		normalizeOrigin(env.APP_PUBLIC_ORIGIN || '') ||
-		pickPublicOrigin(explicitAllowedOrigins) ||
-		pickPublicOrigin(fallbackAllowedOrigins) ||
 		normalizeOrigin(`127.0.0.1:${port}`) ||
 		null
 
-		return {
+	return {
 		env,
 		host,
 		port,
@@ -34,14 +42,10 @@ export function loadConfig(rootDir) {
 		vikunjaBaseUrl: legacyBaseUrl,
 		vikunjaApiToken: env.VIKUNJA_API_TOKEN || '',
 		defaultVikunjaBaseUrl: defaultBaseUrl,
-		appAllowedOrigins: dedupe([
-			...explicitAllowedOrigins,
-			...fallbackAllowedOrigins,
-		]),
 		appTrustProxy: parseBoolean(env.APP_TRUST_PROXY, false),
 		publicAppOrigin,
 		cookieSecure: parseBoolean(env.COOKIE_SECURE, httpsEnabled),
-		appSessionTtlSeconds: Number(env.APP_SESSION_TTL_SECONDS || 43200),
+		appSessionTtlSeconds: Number(env.APP_SESSION_TTL_SECONDS || 2592000),
 		appSessionStorePath: resolveDataPath(rootDir, env.APP_SESSION_STORE_PATH || '.data/app-sessions.enc'),
 		appSessionKeyPath: resolveDataPath(rootDir, env.APP_SESSION_KEY_PATH || '.data/app-sessions.key'),
 		logRequests: parseBoolean(env.LOG_REQUESTS, true),
@@ -56,7 +60,10 @@ export function loadConfig(rootDir) {
 		vikunjaSshDestination: `${env.VIKUNJA_SSH_DESTINATION || ''}`.trim(),
 		vikunjaSshPort: Number(env.VIKUNJA_SSH_PORT || 22),
 		vikunjaSshKeyPath: `${env.VIKUNJA_SSH_KEY_PATH || ''}`.trim(),
-		bridgeTimeoutMs: Number(env.VCANYA_BRIDGE_TIMEOUT_MS || 10000),
+		vikunjaHostConfigPath: hostConfigPath,
+		vikunjaComposePath: composePath,
+		adminBridgeAllowedEmails: parseCommaSeparatedList(env.ADMIN_BRIDGE_ALLOWED_EMAILS || ''),
+		bridgeTimeoutMs: Number(env.VIKUNJA_BRIDGE_TIMEOUT_MS || env.VCANYA_BRIDGE_TIMEOUT_MS || 10000),
 	}
 }
 
@@ -117,13 +124,6 @@ function normalizeBaseUrl(value) {
 	return normalized
 }
 
-function parseOriginList(value) {
-	return `${value || ''}`
-		.split(',')
-		.map(entry => normalizeOrigin(entry))
-		.filter(Boolean)
-}
-
 function parseBoolean(value, fallback) {
 	if (typeof value === 'undefined' || value === null || value === '') {
 		return fallback
@@ -170,36 +170,11 @@ function normalizeOrigin(value) {
 	}
 }
 
-function buildLocalAllowedOrigins(host, port, scheme = 'http') {
-	if (!port) {
-		return []
-	}
-
-	const origins = [
-		`${scheme}://127.0.0.1:${port}`,
-		`${scheme}://localhost:${port}`,
-	]
-
-	if (host && host !== '0.0.0.0' && host !== '::') {
-		origins.push(normalizeOrigin(`${scheme}://${host}:${port}`))
-	}
-
-	return origins.filter(Boolean)
-}
-
-function dedupe(values) {
-	return [...new Set(values.filter(Boolean))]
-}
-
-function pickPublicOrigin(origins) {
-	return origins.find(origin => {
-		try {
-			const hostname = new URL(origin).hostname
-			return hostname !== 'localhost' && hostname !== '127.0.0.1' && hostname !== '::1'
-		} catch {
-			return false
-		}
-	}) || null
+function parseCommaSeparatedList(value) {
+	return `${value || ''}`
+		.split(',')
+		.map(entry => entry.trim().toLowerCase())
+		.filter(Boolean)
 }
 
 export {normalizeBaseUrl}

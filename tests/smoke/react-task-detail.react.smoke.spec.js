@@ -24,6 +24,12 @@ test.beforeEach(async ({page}) => {
 	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
 })
 
+async function expandSettingsSection(page, sectionId) {
+	const section = page.locator(`.settings-section[data-settings-section="${sectionId}"]`)
+	await section.locator(`[data-settings-section-toggle="${sectionId}"]`).first().click()
+	return section
+}
+
 test('task detail edits title, priority, favorite state, and labels', async ({page}) => {
 	await page.locator('.task-row').filter({hasText: 'Prepare daily summary'}).locator('[data-action="open-task-focus"]').click()
 	await page.locator('[data-action="open-focused-task-detail"]').click()
@@ -256,4 +262,57 @@ test('root composer creates tasks and inline subtask composer creates subtasks',
 	await expect(page.locator('[data-root-input]')).toHaveCount(0)
 	await page.locator('[data-form="detail-relation"]').getByRole('button', {name: 'Done'}).click()
 	await expect(page.locator('.detail-subtask-title').filter({hasText: 'Nested follow-up'})).toHaveCount(1)
+})
+
+test('task detail renders avatars, marks tasks read, and toggles subscriptions', async ({page}) => {
+	await page.goto(`${stack.appUrl}/projects`)
+	await expect(page.getByRole('heading', {name: 'Projects'})).toBeVisible()
+	await page.locator('[data-project-node-id="2"] [data-action="select-project"][data-project-id="2"]').click()
+	await expect(page.getByRole('heading', {name: 'Work'})).toBeVisible()
+
+	await page.locator('.task-row').filter({hasText: 'Smoke suite rollout'}).locator('[data-action="open-task-focus"]').click()
+	await page.locator('[data-action="open-focused-task-detail"]').click()
+	await expect(page.locator('[data-detail-title]')).toHaveValue('Smoke suite rollout')
+
+	await expect
+		.poll(async () => {
+			const task = await stack.mockApi('tasks/201')
+			return task.read_at || null
+		})
+		.not.toBeNull()
+
+	await page.locator('[data-detail-section-toggle="assignees"]').click()
+	await page.locator('[data-detail-section-toggle="comments"]').click()
+	await expect(page.locator('[data-task-assignee="2"] img.user-avatar')).toHaveCount(1)
+	await expect(page.locator('[data-task-comment="1"] img.user-avatar')).toHaveCount(1)
+
+	await expect(page.locator('[data-action="toggle-task-subscription"]')).toHaveText('Subscribed')
+	await page.locator('[data-action="toggle-task-subscription"]').click()
+	await expect(page.locator('[data-action="toggle-task-subscription"]')).toHaveText('Subscribe')
+	await expect
+		.poll(async () => {
+			const task = await stack.mockApi('tasks/201')
+			return task.subscription?.subscribed ?? null
+		})
+		.toBe(false)
+})
+
+test('switching to initials updates the current-user avatar on task surfaces', async ({page}) => {
+	await page.getByRole('navigation', {name: 'Primary'}).getByRole('button', {name: 'Menu'}).click()
+	await page.locator('[data-menu-root="true"] [data-action="go-settings"]').click()
+	await expect(page.getByRole('heading', {name: 'Settings'})).toBeVisible()
+	const accountSection = await expandSettingsSection(page, 'account')
+	await accountSection.locator('[data-avatar-provider-option="initials"]').click()
+	await expect(page.getByText('Avatar provider updated.')).toBeVisible()
+
+	await page.getByRole('navigation', {name: 'Primary'}).getByRole('button', {name: 'Today'}).click()
+	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
+
+	const taskRow = page.locator('.task-row').filter({hasText: 'Prepare daily summary'})
+	await taskRow.locator('[data-action="open-task-focus"]').first().click()
+	await page.locator('[data-action="open-focused-task-detail"]').click()
+	await page.locator('[data-detail-section-toggle="assignees"]').click()
+	await page.locator('[data-detail-assignee-search]').fill('smoke')
+	await page.locator('[data-action="add-task-assignee"][data-task-assignee-option="1"]').click()
+	await expect(page.locator('[data-task-assignee="1"] .user-avatar-initials')).toHaveCount(1)
 })

@@ -10,7 +10,7 @@ import type {
 } from '@/types'
 import {formatError} from '@/utils/formatting'
 import {storageKeys} from '@/storageKeys'
-import {clearLegacyUiState, saveNumber} from '@/utils/storage'
+import {clearLegacyUiState, loadJson, saveJson, saveNumber} from '@/utils/storage'
 import type {StateCreator} from 'zustand'
 import type {AppStore} from '../index'
 import {persistOfflineBrowseSnapshot} from '../offline-browse-cache'
@@ -28,6 +28,25 @@ interface ChangePasswordForm {
 	confirmPassword: string
 }
 
+interface RegistrationForm {
+	baseUrl: string
+	username: string
+	email: string
+	password: string
+	confirmPassword: string
+}
+
+interface ForgotPasswordForm {
+	email: string
+}
+
+interface ResetPasswordForm {
+	baseUrl: string
+	token: string
+	password: string
+	confirmPassword: string
+}
+
 const defaultAccountForm: AccountForm = {
 	authMode: 'password',
 	baseUrl: '',
@@ -40,6 +59,69 @@ const defaultChangePasswordForm: ChangePasswordForm = {
 	oldPassword: '',
 	newPassword: '',
 	confirmPassword: '',
+}
+
+const defaultForgotPasswordForm: ForgotPasswordForm = {
+	email: '',
+}
+
+const defaultResetPasswordForm: ResetPasswordForm = {
+	baseUrl: '',
+	token: '',
+	password: '',
+	confirmPassword: '',
+}
+
+function buildRegistrationForm(baseUrl = ''): RegistrationForm {
+	return {
+		baseUrl,
+		username: '',
+		email: '',
+		password: '',
+		confirmPassword: '',
+	}
+}
+
+type PersistedAccountForm = Pick<AccountForm, 'authMode' | 'baseUrl' | 'username'>
+
+function loadPersistedAccountForm(): PersistedAccountForm {
+	if (typeof window === 'undefined') {
+		return {
+			authMode: defaultAccountForm.authMode,
+			baseUrl: defaultAccountForm.baseUrl,
+			username: defaultAccountForm.username,
+		}
+	}
+
+	const stored = loadJson<Partial<PersistedAccountForm> | null>(storageKeys.accountForm, null)
+	return {
+		authMode: stored?.authMode === 'apiToken' ? 'apiToken' : 'password',
+		baseUrl: `${stored?.baseUrl || ''}`,
+		username: `${stored?.username || ''}`,
+	}
+}
+
+function buildAccountForm(accountForm: Partial<AccountForm> = {}): AccountForm {
+	const persisted = loadPersistedAccountForm()
+	return {
+		...defaultAccountForm,
+		...persisted,
+		...accountForm,
+		password: '',
+		apiToken: '',
+	}
+}
+
+function persistAccountForm(accountForm: AccountForm) {
+	if (typeof window === 'undefined') {
+		return
+	}
+
+	saveJson(storageKeys.accountForm, {
+		authMode: accountForm.authMode === 'apiToken' ? 'apiToken' : 'password',
+		baseUrl: `${accountForm.baseUrl || ''}`,
+		username: `${accountForm.username || ''}`,
+	} satisfies PersistedAccountForm)
 }
 
 function getFallbackTimezones(currentTimezone: string | null | undefined) {
@@ -213,6 +295,16 @@ export interface AuthSlice {
 	timezoneOptions: string[]
 	timezoneSubmitting: boolean
 	accountForm: AccountForm
+	registrationForm: RegistrationForm
+	registrationSubmitting: boolean
+	registrationError: string | null
+	forgotPasswordForm: ForgotPasswordForm
+	forgotPasswordSubmitting: boolean
+	forgotPasswordSent: boolean
+	resetPasswordForm: ResetPasswordForm
+	resetPasswordSubmitting: boolean
+	resetPasswordDone: boolean
+	resetPasswordError: string | null
 	init: () => Promise<void>
 	enterOfflineReadOnlyMode: () => void
 	loadAccountStatus: () => Promise<void>
@@ -231,6 +323,13 @@ export interface AuthSlice {
 	refreshAppData: () => Promise<void>
 	setAccountField: <K extends keyof AccountForm>(field: K, value: AccountForm[K]) => void
 	setAccountAuthMode: (mode: AuthMode) => void
+	setRegistrationField: <K extends keyof RegistrationForm>(field: K, value: RegistrationForm[K]) => void
+	register: () => Promise<boolean>
+	setForgotPasswordEmail: (email: string) => void
+	requestPasswordReset: () => Promise<boolean>
+	setResetPasswordField: <K extends keyof ResetPasswordForm>(field: K, value: ResetPasswordForm[K]) => void
+	populateResetPasswordFromParams: (params: {token: string; baseUrl: string}) => void
+	resetPassword: () => Promise<boolean>
 }
 
 export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, get) => ({
@@ -253,7 +352,17 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 	timezoneOptionsLoaded: false,
 	timezoneOptions: [],
 	timezoneSubmitting: false,
-	accountForm: defaultAccountForm,
+	accountForm: buildAccountForm(),
+	registrationForm: buildRegistrationForm(),
+	registrationSubmitting: false,
+	registrationError: null,
+	forgotPasswordForm: defaultForgotPasswordForm,
+	forgotPasswordSubmitting: false,
+	forgotPasswordSent: false,
+	resetPasswordForm: defaultResetPasswordForm,
+	resetPasswordSubmitting: false,
+	resetPasswordDone: false,
+	resetPasswordError: null,
 
 	async init() {
 		set({initializing: true, error: null})
@@ -266,9 +375,10 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 				offlineReadOnlyMode: false,
 				accountForm: {
 					...state.accountForm,
-					baseUrl: config.defaultBaseUrl || state.accountForm.baseUrl,
+					baseUrl: state.accountForm.baseUrl || config.defaultBaseUrl || '',
 				},
 			}))
+			persistAccountForm(get().accountForm)
 			mergeOfflineSnapshot({serverConfig: config})
 
 			await get().loadAccountStatus()
@@ -328,9 +438,10 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 				set(state => ({
 					accountForm: {
 						...state.accountForm,
-						baseUrl: state.serverConfig?.defaultBaseUrl || state.accountForm.baseUrl,
+						baseUrl: state.accountForm.baseUrl || state.serverConfig?.defaultBaseUrl || '',
 					},
 				}))
+				persistAccountForm(get().accountForm)
 				return
 			}
 
@@ -340,13 +451,11 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 				connected: true,
 				offlineReadOnlyMode: false,
 				account,
-				accountForm: {
-					...state.accountForm,
-					baseUrl: account.baseUrl || state.accountForm.baseUrl,
-				},
+				accountForm: buildPreservedAccountForm(state.accountForm, account),
 				accountSessions: account.sessionsSupported ? state.accountSessions : [],
 				accountSessionsLoaded: account.sessionsSupported ? state.accountSessionsLoaded : false,
 			}))
+			persistAccountForm(get().accountForm)
 			persistOfflineAuthSnapshot(get())
 		} catch (error) {
 			if (!get().isOnline && restoreOfflineSnapshotState(get, set)) {
@@ -369,6 +478,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 		get().resetUsersState()
 		get().resetTeamsState()
 		get().resetProjectSharingState()
+		get().resetSubscriptionsState()
 		set(state => ({
 			connected: false,
 			offlineReadOnlyMode: false,
@@ -412,6 +522,8 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 			currentProjectViewId: null,
 			currentInboxViewId: null,
 			currentSavedFilterViewId: null,
+			subscriptionsByEntity: {},
+			subscriptionMutatingKeys: new Set(),
 			tasks: [],
 			todayTasks: [],
 			inboxTasks: [],
@@ -467,7 +579,18 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 				password: '',
 				apiToken: '',
 			},
+			registrationForm: buildRegistrationForm(state.accountForm.baseUrl || state.serverConfig?.defaultBaseUrl || ''),
+			registrationSubmitting: false,
+			registrationError: null,
+			forgotPasswordForm: defaultForgotPasswordForm,
+			forgotPasswordSubmitting: false,
+			forgotPasswordSent: false,
+			resetPasswordForm: defaultResetPasswordForm,
+			resetPasswordSubmitting: false,
+			resetPasswordDone: false,
+			resetPasswordError: null,
 		}))
+		persistAccountForm(get().accountForm)
 	},
 
 	async loadCurrentUser() {
@@ -486,7 +609,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 							id: user.id,
 							name: user.name || '',
 							username: user.username || '',
-							email: user.email || '',
+							email: user.email || state.account?.user?.email || '',
 							settings: user.settings || {},
 						},
 					}
@@ -507,6 +630,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 		set(state => ({
 			accountForm: buildPreservedAccountForm(state.accountForm, account),
 		}))
+		persistAccountForm(get().accountForm)
 
 		try {
 			await api<{ok: boolean}>('/api/session/disconnect', {
@@ -530,6 +654,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 		set(state => ({
 			accountForm: buildPreservedAccountForm(state.accountForm, account),
 		}))
+		persistAccountForm(get().accountForm)
 
 		try {
 			await api<{ok: boolean}>('/api/session/logout', {
@@ -763,6 +888,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 					apiToken: '',
 				},
 			}))
+			persistAccountForm(get().accountForm)
 
 			await get().loadAccountStatus()
 			if (!get().connected) {
@@ -806,20 +932,215 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 	},
 
 	setAccountField(field, value) {
-		set(state => ({
-			accountForm: {
+		set(state => {
+			const accountForm = {
 				...state.accountForm,
 				[field]: value,
-			},
-		}))
+			}
+			persistAccountForm(accountForm)
+			return {accountForm}
+		})
 	},
 
 	setAccountAuthMode(mode) {
-		set(state => ({
-			accountForm: {
+		set(state => {
+			const accountForm = {
 				...state.accountForm,
 				authMode: mode,
+			}
+			persistAccountForm(accountForm)
+			return {accountForm}
+		})
+	},
+
+	setRegistrationField(field, value) {
+		set(state => ({
+			registrationForm: {
+				...state.registrationForm,
+				[field]: value,
 			},
+			registrationError: null,
 		}))
+	},
+
+	async register() {
+		if (get().registrationSubmitting) {
+			return false
+		}
+
+		const {baseUrl, username, email, password, confirmPassword} = get().registrationForm
+		if (!baseUrl || !username || !email || !password || !confirmPassword) {
+			set({registrationError: 'All fields are required.'})
+			return false
+		}
+		if (password !== confirmPassword) {
+			set({registrationError: 'Passwords do not match.'})
+			return false
+		}
+		if (!get().isOnline) {
+			set({registrationError: 'Registration requires a live connection.'})
+			return false
+		}
+
+		set({registrationSubmitting: true, registrationError: null})
+
+		try {
+			await api<{connected: boolean}, {baseUrl: string; username: string; email: string; password: string}>('/api/session/register', {
+				method: 'POST',
+				body: {
+					baseUrl: baseUrl.trim(),
+					username: username.trim(),
+					email: email.trim(),
+					password,
+				},
+			})
+
+			set({
+				registrationForm: buildRegistrationForm(baseUrl.trim()),
+				forgotPasswordForm: defaultForgotPasswordForm,
+				forgotPasswordSent: false,
+			})
+
+			await get().loadAccountStatus()
+			if (!get().connected) {
+				return false
+			}
+
+			await get().loadCurrentUser()
+			if (!get().account?.linkShareAuth) {
+				await get().loadProjects()
+				void get().ensureProjectFilterTasksLoaded()
+				void get().loadNotifications({silent: true})
+			}
+			if (get().account?.sessionsSupported && !get().account?.linkShareAuth) {
+				void get().loadAccountSessions()
+			}
+			set({offlineReadOnlyMode: false})
+			return true
+		} catch (error) {
+			set({registrationError: formatError(error as Error)})
+			return false
+		} finally {
+			set({registrationSubmitting: false})
+		}
+	},
+
+	setForgotPasswordEmail(email) {
+		set(state => ({
+			forgotPasswordForm: {
+				...state.forgotPasswordForm,
+				email,
+			},
+			forgotPasswordSent: false,
+			error: null,
+		}))
+	},
+
+	async requestPasswordReset() {
+		if (get().forgotPasswordSubmitting) {
+			return false
+		}
+
+		const email = get().forgotPasswordForm.email.trim()
+		const baseUrl = get().accountForm.baseUrl.trim()
+		if (!email) {
+			set({error: 'Email is required.'})
+			return false
+		}
+		if (!get().isOnline) {
+			set({error: 'Password reset requests require a live connection.'})
+			return false
+		}
+
+		set({forgotPasswordSubmitting: true, forgotPasswordSent: false, error: null})
+
+		try {
+			await api<{ok: boolean}, {baseUrl: string; email: string}>('/api/session/forgot-password', {
+				method: 'POST',
+				body: {
+					baseUrl,
+					email,
+				},
+			})
+			set({forgotPasswordSent: true})
+			return true
+		} catch (error) {
+			set({error: formatError(error as Error)})
+			return false
+		} finally {
+			set({forgotPasswordSubmitting: false})
+		}
+	},
+
+	setResetPasswordField(field, value) {
+		set(state => ({
+			resetPasswordForm: {
+				...state.resetPasswordForm,
+				[field]: value,
+			},
+			resetPasswordDone: false,
+			resetPasswordError: null,
+		}))
+	},
+
+	populateResetPasswordFromParams({token, baseUrl}) {
+		set({
+			resetPasswordForm: {
+				baseUrl,
+				token,
+				password: '',
+				confirmPassword: '',
+			},
+			resetPasswordDone: false,
+			resetPasswordError: null,
+		})
+	},
+
+	async resetPassword() {
+		if (get().resetPasswordSubmitting) {
+			return false
+		}
+
+		const {baseUrl, token, password, confirmPassword} = get().resetPasswordForm
+		if (!token || !baseUrl || !password || !confirmPassword) {
+			set({resetPasswordError: 'Token, base URL, and password are required.'})
+			return false
+		}
+		if (password !== confirmPassword) {
+			set({resetPasswordError: 'Passwords do not match.'})
+			return false
+		}
+		if (!get().isOnline) {
+			set({resetPasswordError: 'Password reset requires a live connection.'})
+			return false
+		}
+
+		set({resetPasswordSubmitting: true, resetPasswordError: null})
+
+		try {
+			await api<{ok: boolean}, {baseUrl: string; token: string; password: string}>('/api/session/reset-password', {
+				method: 'POST',
+				body: {
+					baseUrl: baseUrl.trim(),
+					token: token.trim(),
+					password,
+				},
+			})
+			set(state => ({
+				resetPasswordDone: true,
+				accountForm: {
+					...state.accountForm,
+					baseUrl: state.accountForm.baseUrl || baseUrl.trim(),
+					password: '',
+				},
+			}))
+			persistAccountForm(get().accountForm)
+			return true
+		} catch (error) {
+			set({resetPasswordError: formatError(error as Error)})
+			return false
+		} finally {
+			set({resetPasswordSubmitting: false})
+		}
 	},
 })
