@@ -5,6 +5,7 @@ export function createVikunjaClient({
 	accessToken = '',
 	refreshCookie = '',
 	onAuthStateChange = null,
+	onAuthFailure = null,
 }) {
 	let currentAccessToken = accessToken
 	let currentRefreshCookie = refreshCookie
@@ -197,6 +198,10 @@ export function createVikunjaClient({
 		if (!currentRefreshCookie) {
 			const error = new Error('No Vikunja refresh cookie is available.')
 			error.statusCode = 401
+			onAuthFailure?.({
+				statusCode: error.statusCode,
+				details: error.message,
+			})
 			throw error
 		}
 
@@ -215,6 +220,12 @@ export function createVikunjaClient({
 			const error = new Error(`Vikunja refresh failed with ${response.status}`)
 			error.statusCode = response.status
 			error.details = payload || rawText || null
+			if (response.status === 400 || response.status === 401) {
+				onAuthFailure?.({
+					statusCode: response.status,
+					details: error.details,
+				})
+			}
 			throw error
 		}
 

@@ -72,7 +72,7 @@ const sessionMutationRateLimiter = createRateLimiter({
 	max: sessionMutationRateLimitMax,
 })
 const legacyConfigured = Boolean(vikunjaBaseUrl && vikunjaApiToken)
-const buildId = '2026-03-30-alpha-0.2.0'
+const buildId = '2026-03-31-hotfix-0.2.1'
 const adminBridge = createAdminBridge({
 	bridgeMode: vikunjaBridgeMode,
 	vikunjaContainerName,
@@ -2184,6 +2184,48 @@ function refreshAppSessionCookie(res, sessionId) {
 	res.setHeader('Set-Cookie', [...otherCookies, nextCookie])
 }
 
+function invalidateAppSession(res, sessionId, {setIgnoreLegacy = true} = {}) {
+	if (!sessionId) {
+		return
+	}
+
+	sessionStore.delete(sessionId)
+	if (!res || res.headersSent) {
+		return
+	}
+
+	const existing = res.getHeader('Set-Cookie')
+	const existingCookies = existing ? (Array.isArray(existing) ? existing : [existing]) : []
+	const otherCookies = existingCookies.filter(cookie => {
+		const serialized = `${cookie || ''}`
+		return (
+			!serialized.startsWith(`${encodeURIComponent(appSessionCookieName)}=`) &&
+			!serialized.startsWith(`${encodeURIComponent(ignoreLegacyCookieName)}=`)
+		)
+	})
+
+	res.setHeader('Set-Cookie', [
+		...otherCookies,
+		clearCookie(appSessionCookieName, {
+			httpOnly: true,
+			sameSite: 'Strict',
+			secure: cookieSecure,
+			path: '/',
+		}),
+		...(setIgnoreLegacy
+			? [
+				serializeCookie(ignoreLegacyCookieName, '1', {
+					httpOnly: true,
+					sameSite: 'Strict',
+					secure: cookieSecure,
+					path: '/',
+					maxAge: appSessionTtlSeconds,
+				}),
+			]
+			: []),
+	])
+}
+
 async function getVikunjaContext(req, res = null) {
 	const cookies = parseCookies(req.headers.cookie || '')
 	const ignoreLegacy = cookies[ignoreLegacyCookieName] === '1'
@@ -2195,7 +2237,7 @@ async function getVikunjaContext(req, res = null) {
 			source: 'account',
 			sessionId: appSessionId,
 			account: session.account,
-			client: createAccountClient(session.account, appSessionId),
+			client: createAccountClient(session.account, appSessionId, res),
 		})
 	}
 
@@ -2256,7 +2298,7 @@ async function requireInteractiveSession(req, res = null, {refreshCookie = true}
 		source: 'account',
 		sessionId: appSessionId,
 		account: session.account,
-		client: createAccountClient(session.account, appSessionId),
+		client: createAccountClient(session.account, appSessionId, res),
 	})
 }
 
@@ -2364,13 +2406,19 @@ function assertAdminUserMutationAllowed(account, identifier, action) {
 	}
 }
 
-function createAccountClient(account, sessionId) {
+function createAccountClient(account, sessionId, res = null) {
 	return createVikunjaClient({
 		baseUrl: account.baseUrl,
 		authMode: account.authMode,
 		apiToken: account.apiToken || '',
 		accessToken: account.accessToken || '',
 		refreshCookie: account.refreshCookie || '',
+		onAuthFailure: failure => {
+			const statusCode = Number(failure?.statusCode || 0)
+			if (statusCode === 400 || statusCode === 401) {
+				invalidateAppSession(res, sessionId)
+			}
+		},
 		onAuthStateChange: patch => {
 			const current = sessionStore.get(sessionId)
 			if (!current) {

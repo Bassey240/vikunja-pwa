@@ -1,6 +1,6 @@
 {
   "name": "vikunja-pwa",
-  "version": "0.2.0-alpha",
+  "version": "0.2.1",
   "private": true,
   "description": "Unofficial mobile-first Vikunja PWA client with a Node gateway, offline-ready shell, and self-hosted collaboration tools.",
   "license": "AGPL-3.0-only",
