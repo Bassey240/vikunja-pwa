@@ -22,8 +22,9 @@ admin tooling.
 
 ## Current product state
 
-This is a working `0.2.0-alpha` prototype. It is feature-rich enough to use and
-evaluate, but it is not presented as a production-ready client.
+The current public release is `0.2.1`. It is a small hotfix release on top of
+the `0.2.0-alpha` prototype snapshot: feature-rich enough to use and evaluate,
+but not yet presented as a production-ready client.
 
 - Today-first shell with Inbox, Upcoming, Projects, Search, Labels, and Settings
 - nested sub-project browsing with inline parent/child task trees and continuous add flows
@@ -38,6 +39,11 @@ Recent work has focused on stability and release readiness rather than flashy
 scope growth: structural cleanup, security hardening, open-source packaging,
 Docker/deploy polish, avatar parity, onboarding/auth flows, and the first pass
 of the admin control plane are all included in this alpha.
+
+## What's New In 0.2.1
+
+- Expired or invalid persisted password sessions are now cleared cleanly instead of leaving the app stuck in a refresh-token failure loop.
+- The stale-session path now drops back to sign-in after the first failed refresh attempt, which also avoids the follow-on `Too many requests` noise that could appear during bootstrap.
 
 ## 0.2 alpha scope
 

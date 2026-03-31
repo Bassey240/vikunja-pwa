@@ -387,6 +387,9 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 					return
 				}
 				await get().loadCurrentUser()
+				if (!get().connected) {
+					return
+				}
 				if (!get().account?.linkShareAuth) {
 					await get().loadProjects()
 					void get().ensureProjectFilterTasksLoaded()
@@ -617,7 +620,14 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 			}))
 			persistOfflineAuthSnapshot(get())
 		} catch (error) {
-			set({error: formatError(error as Error)})
+			const authError = error as Error & {statusCode?: number}
+			if (authError.statusCode === 401) {
+				get().resetConnectedData({clearOfflineSnapshot: true})
+				set({error: 'Your Vikunja session expired. Sign in again.'})
+				return
+			}
+
+			set({error: formatError(authError)})
 		}
 	},
 
