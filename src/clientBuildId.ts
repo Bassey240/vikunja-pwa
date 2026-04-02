@@ -1,1 +1,1 @@
-export const CLIENT_BUILD_ID = 'react-phase-1-settings-shell'
+export const CLIENT_BUILD_ID = 'release-0.3.0-alpha'

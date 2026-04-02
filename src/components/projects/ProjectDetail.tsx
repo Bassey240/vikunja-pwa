@@ -4,6 +4,7 @@ import DetailSheet from '@/components/common/DetailSheet'
 import {useAppStore} from '@/store'
 import type {ProjectLinkShare, SharePermission, TaskAssignee, Team} from '@/types'
 import {
+	formatOptionalLongDate,
 	getColorInputValue,
 	getUserDisplayName,
 	normalizeHexColor,
@@ -26,6 +27,20 @@ interface TeamsPayload {
 
 type ProjectDetailSection = 'project' | 'sharedUsers' | 'sharedTeams' | 'linkShares'
 
+const DEFAULT_PROJECT_DETAIL_SECTIONS: Record<ProjectDetailSection, boolean> = {
+	project: true,
+	sharedUsers: false,
+	sharedTeams: false,
+	linkShares: false,
+}
+
+const CLOSED_PROJECT_DETAIL_SECTIONS: Record<ProjectDetailSection, boolean> = {
+	project: false,
+	sharedUsers: false,
+	sharedTeams: false,
+	linkShares: false,
+}
+
 export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspector'}) {
 	const account = useAppStore(state => state.account)
 	const serverConfig = useAppStore(state => state.serverConfig)
@@ -35,6 +50,8 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 	const projectSharedUsers = useAppStore(state => state.projectSharedUsers)
 	const projectSharedTeams = useAppStore(state => state.projectSharedTeams)
 	const projectLinkShares = useAppStore(state => state.projectLinkShares)
+	const selectedShareDetail = useAppStore(state => state.selectedShareDetail)
+	const shareDetailLoading = useAppStore(state => state.shareDetailLoading)
 	const projectSharingLoading = useAppStore(state => state.projectSharingLoading)
 	const projectSharingSubmitting = useAppStore(state => state.projectSharingSubmitting)
 	const subscriptionsByEntity = useAppStore(state => state.subscriptionsByEntity)
@@ -44,6 +61,8 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 	const getProjectAncestors = useAppStore(state => state.getProjectAncestors)
 	const saveProjectDetailPatch = useAppStore(state => state.saveProjectDetailPatch)
 	const loadProjectSharing = useAppStore(state => state.loadProjectSharing)
+	const loadShareDetail = useAppStore(state => state.loadShareDetail)
+	const clearShareDetail = useAppStore(state => state.clearShareDetail)
 	const toggleSubscription = useAppStore(state => state.toggleSubscription)
 	const addProjectUserShare = useAppStore(state => state.addProjectUserShare)
 	const updateProjectUserShare = useAppStore(state => state.updateProjectUserShare)
@@ -69,12 +88,8 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 	const [linkShareName, setLinkShareName] = useState('')
 	const [linkSharePassword, setLinkSharePassword] = useState('')
 	const [copiedLinkShareId, setCopiedLinkShareId] = useState<number | null>(null)
-	const [openSections, setOpenSections] = useState<Record<ProjectDetailSection, boolean>>({
-		project: true,
-		sharedUsers: false,
-		sharedTeams: false,
-		linkShares: false,
-	})
+	const [expandedLinkShareId, setExpandedLinkShareId] = useState<number | null>(null)
+	const [openSections, setOpenSections] = useState<Record<ProjectDetailSection, boolean>>(DEFAULT_PROJECT_DETAIL_SECTIONS)
 
 	useEffect(() => {
 		setTitle(projectDetail?.title || '')
@@ -82,6 +97,14 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 		setDescription(projectDetail?.description || '')
 		setColor(getColorInputValue(projectDetail?.hex_color))
 	}, [projectDetail?.description, projectDetail?.hex_color, projectDetail?.id, projectDetail?.identifier, projectDetail?.title])
+
+	useEffect(() => {
+		if (!projectDetailOpen) {
+			setOpenSections(DEFAULT_PROJECT_DETAIL_SECTIONS)
+			setExpandedLinkShareId(null)
+			clearShareDetail()
+		}
+	}, [clearShareDetail, projectDetailOpen])
 
 	useEffect(() => {
 		setUserShareQuery('')
@@ -94,11 +117,14 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 		setLinkShareName('')
 		setLinkSharePassword('')
 		setCopiedLinkShareId(null)
+		setExpandedLinkShareId(null)
+		setOpenSections(DEFAULT_PROJECT_DETAIL_SECTIONS)
+		clearShareDetail()
 
 		if (projectDetail?.id) {
 			void loadProjectSharing(projectDetail.id)
 		}
-	}, [loadProjectSharing, projectDetail?.id])
+	}, [clearShareDetail, loadProjectSharing, projectDetail?.id])
 
 	useEffect(() => {
 		if (!copiedLinkShareId) {
@@ -111,6 +137,17 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 
 		return () => window.clearTimeout(timeoutId)
 	}, [copiedLinkShareId])
+
+	useEffect(() => {
+		if (!expandedLinkShareId) {
+			return
+		}
+
+		if (!projectLinkShares.some(share => share.id === expandedLinkShareId)) {
+			setExpandedLinkShareId(null)
+			clearShareDetail()
+		}
+	}, [clearShareDetail, expandedLinkShareId, projectLinkShares])
 
 	useEffect(() => {
 		const normalizedQuery = `${userShareQuery || ''}`.trim()
@@ -327,22 +364,51 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 		}
 	}
 
+	function toggleLinkShare(share: ProjectLinkShare) {
+		if (!projectDetail?.id) {
+			return
+		}
+
+		if (expandedLinkShareId === share.id) {
+			setExpandedLinkShareId(null)
+			clearShareDetail()
+			return
+		}
+
+		setExpandedLinkShareId(share.id)
+		void loadShareDetail(projectDetail.id, share)
+	}
+
 	const linkSharingEnabled = account?.instanceFeatures?.linkSharingEnabled !== false
 
 	function toggleSection(section: ProjectDetailSection) {
-		setOpenSections(state => ({
-			...state,
-			[section]: !state[section],
-		}))
+		const keepLinkShareExpanded = section === 'linkShares' && !openSections.linkShares
+		if (!keepLinkShareExpanded) {
+			setExpandedLinkShareId(null)
+			clearShareDetail()
+		}
+
+		setOpenSections(state => {
+			const nextOpen = !state[section]
+			return nextOpen ? {...CLOSED_PROJECT_DETAIL_SECTIONS, [section]: true} : CLOSED_PROJECT_DETAIL_SECTIONS
+		})
+	}
+
+	function handleCloseProjectDetail() {
+		setOpenSections(DEFAULT_PROJECT_DETAIL_SECTIONS)
+		setExpandedLinkShareId(null)
+		clearShareDetail()
+		closeProjectDetail()
 	}
 
 	return (
-		<DetailSheet
-			open={projectDetailOpen}
-			closeAction="close-project-detail"
-			onClose={closeProjectDetail}
-			mode={mode}
-		>
+		<>
+			<DetailSheet
+				open={projectDetailOpen}
+				closeAction="close-project-detail"
+				onClose={handleCloseProjectDetail}
+				mode={mode}
+			>
 			<div className="sheet-head detail-sheet-head">
 				<div>
 					<div className="panel-label">Project Detail</div>
@@ -363,7 +429,7 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 				</div>
 			</div>
 			{projectDetailLoading && !projectDetail ? <div className="empty-state">Loading project details…</div> : null}
-			{projectDetail ? (
+				{projectDetail ? (
 				<div className="project-detail-stack detail-density-compact-surface">
 					<CollapsibleProjectSection
 						title="Project"
@@ -731,38 +797,104 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 											<div className="detail-assignee-list">
 												{projectLinkShares.map(share => {
 													const shareUrl = getProjectLinkShareUrl(share.hash, serverConfig?.publicAppOrigin)
+													const expanded = expandedLinkShareId === share.id
+													const detailShare = selectedShareDetail?.id === share.id ? selectedShareDetail : share
 													return (
-													<div key={share.id} className="detail-assignee-row project-share-row project-link-share-row">
-															<div className="detail-assignee-pill">
-																<span className="detail-assignee-pill-token">LK</span>
-																<span className="detail-assignee-pill-name">
-																	<span className="detail-assignee-primary">{share.name || 'Unnamed link'}</span>
-																	<span className="detail-meta">
-																		{getSharePermissionLabel(share.permission)}
-																		{share.shared_by?.name || share.shared_by?.username
-																			? ` · Shared by ${getUserDisplayName(share.shared_by)}`
-																			: ''}
+													<div
+														key={share.id}
+														className={`detail-item detail-field project-link-share-card ${expanded ? 'is-expanded' : ''}`.trim()}
+														data-project-link-share-row={share.id}
+													>
+														<div className="project-link-share-summary-row">
+															<button
+																className="project-link-share-summary"
+																data-action="toggle-project-link-share"
+																data-share-id={share.id}
+																type="button"
+																aria-expanded={expanded ? 'true' : 'false'}
+																onClick={() => toggleLinkShare(share)}
+															>
+																<div className="detail-assignee-pill">
+																	<span className="detail-assignee-pill-token">LK</span>
+																	<span className="detail-assignee-pill-name">
+																		<span className="detail-assignee-primary">{share.name || 'Unnamed link'}</span>
+																		<span className="detail-meta">
+																			{getSharePermissionLabel(share.permission)}
+																			{share.shared_by?.name || share.shared_by?.username
+																				? ` · Shared by ${getUserDisplayName(share.shared_by)}`
+																				: ''}
+																		</span>
 																	</span>
-																</span>
-															</div>
-															<div className="project-link-share-controls">
-																<input
-																	className="detail-input project-link-share-url"
-																	type="text"
-																	readOnly
-																	value={shareUrl}
-																/>
-																<div className="project-link-share-action-row">
-																	<button
-																		className="pill-button subtle"
-																		data-action="copy-project-link-share"
-																		data-share-id={share.id}
-																		type="button"
-																		disabled={projectSharingSubmitting}
-																		onClick={() => void handleCopyLinkShare(share)}
-																	>
-																		{copiedLinkShareId === share.id ? 'Copied' : 'Copy link'}
-																	</button>
+																</div>
+															</button>
+															<button
+																className="pill-button subtle settings-copy-field-button project-link-share-summary-copy"
+																data-action="copy-project-link-share-summary"
+																data-share-id={share.id}
+																type="button"
+																disabled={projectSharingSubmitting}
+																onClick={() => void handleCopyLinkShare(share)}
+															>
+																{copiedLinkShareId === share.id ? 'Copied' : 'Copy'}
+															</button>
+														</div>
+														{expanded ? (
+															<div className="project-link-share-detail-grid" data-project-link-share-detail={share.id}>
+																{shareDetailLoading ? <div className="detail-helper-text">Refreshing share details…</div> : null}
+																<div className="detail-grid detail-grid-tight">
+																	<div className="detail-item detail-field">
+																		<div className="detail-label">Name</div>
+																		<div className="detail-value">{detailShare.name || 'Unnamed link'}</div>
+																	</div>
+																	<div className="detail-item detail-field">
+																		<div className="detail-label">Permission</div>
+																		<div className="detail-value">{getSharePermissionLabel(detailShare.permission)}</div>
+																	</div>
+																	<div className="detail-item detail-field">
+																		<div className="detail-label">Shared by</div>
+																		<div className="detail-value">
+																			{detailShare.shared_by ? getUserDisplayName(detailShare.shared_by) : 'Unknown'}
+																		</div>
+																	</div>
+																	<div className="detail-item detail-field">
+																		<div className="detail-label">Password protected</div>
+																		<div className="detail-value">{detailShare.password_protected ? 'Yes' : 'No'}</div>
+																	</div>
+																	<div className="detail-item detail-item-full detail-field">
+																		<div className="detail-label">Share link</div>
+																		<div className="settings-copy-field-row">
+																			<input
+																				className="detail-input project-link-share-url"
+																				type="text"
+																				readOnly
+																				value={shareUrl}
+																			/>
+																			<button
+																				className="pill-button subtle settings-copy-field-button"
+																				data-action="copy-project-link-share"
+																				data-share-id={share.id}
+																				type="button"
+																				disabled={projectSharingSubmitting}
+																				onClick={() => void handleCopyLinkShare(share)}
+																			>
+																				{copiedLinkShareId === share.id ? 'Copied' : 'Copy'}
+																			</button>
+																		</div>
+																	</div>
+																	<div className="detail-item detail-item-full detail-field">
+																		<div className="detail-label">Hash</div>
+																		<div className="detail-value">{detailShare.hash}</div>
+																	</div>
+																	<div className="detail-item detail-field">
+																		<div className="detail-label">Created</div>
+																		<div className="detail-value">{formatOptionalLongDate(detailShare.created || null) || 'Not available'}</div>
+																	</div>
+																	<div className="detail-item detail-field">
+																		<div className="detail-label">Expiry</div>
+																		<div className="detail-value">{formatOptionalLongDate(detailShare.expires || null) || 'Never'}</div>
+																	</div>
+																</div>
+																<div className="detail-inline-actions">
 																	<button
 																		className="pill-button subtle"
 																		data-action="remove-project-link-share"
@@ -775,7 +907,8 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 																	</button>
 																</div>
 															</div>
-														</div>
+														) : null}
+													</div>
 													)
 												})}
 											</div>
@@ -786,8 +919,9 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 						</CollapsibleProjectSection>
 					</div>
 				</div>
-			) : null}
-		</DetailSheet>
+				) : null}
+			</DetailSheet>
+		</>
 	)
 }
 

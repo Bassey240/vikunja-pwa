@@ -1,6 +1,8 @@
 import DetailSheet from '@/components/common/DetailSheet'
 import type {
 	AdminMailDiagnosticsResult,
+	AdminMigration,
+	AdminRepairResult,
 	AdminRuntimeHealth,
 	AdminUser,
 	MailerCapabilityReasonCode,
@@ -17,6 +19,12 @@ import {type FormEvent, useEffect, useState} from 'react'
 import SettingsSection from './SettingsSection'
 
 const knownMailerAuthTypes = ['plain', 'login', 'cram-md5']
+const REPAIR_COMMANDS = [
+	{id: 'file-mime-types', label: 'Fix file MIME types'},
+	{id: 'orphan-positions', label: 'Fix orphaned positions'},
+	{id: 'projects', label: 'Repair projects'},
+	{id: 'task-positions', label: 'Fix task positions'},
+]
 
 const defaultMailerConfigForm: MailerConfigInput = {
 	enabled: false,
@@ -44,6 +52,14 @@ export default function SettingsAdminSection({
 	adminRuntimeHealth,
 	adminBridgeFailedChecks,
 	adminRuntimeHealthLoading,
+	adminMigrations,
+	adminMigrationsLoading,
+	adminMigrationsLoaded,
+	adminMigrateSubmitting,
+	adminDumpSubmitting,
+	adminRestoreSubmitting,
+	adminRepairSubmitting,
+	adminRepairResults,
 	mailDiagnosticsSubmitting,
 	mailDiagnosticsResult,
 	mailerConfig,
@@ -53,6 +69,12 @@ export default function SettingsAdminSection({
 	mailerConfigRestarting,
 	onReloadRuntimeHealth,
 	onReloadUsers,
+	onLoadMigrations,
+	onRunMigrate,
+	onRollbackMigration,
+	onCreateDump,
+	onRunRestore,
+	onRunRepair,
 	onCreateAdminUser,
 	onUpdateAdminUser,
 	onSetAdminUserEnabled,
@@ -80,6 +102,14 @@ export default function SettingsAdminSection({
 	adminRuntimeHealth: AdminRuntimeHealth | null
 	adminBridgeFailedChecks: string[]
 	adminRuntimeHealthLoading: boolean
+	adminMigrations: AdminMigration[]
+	adminMigrationsLoading: boolean
+	adminMigrationsLoaded: boolean
+	adminMigrateSubmitting: boolean
+	adminDumpSubmitting: boolean
+	adminRestoreSubmitting: boolean
+	adminRepairSubmitting: boolean
+	adminRepairResults: Record<string, AdminRepairResult>
 	mailDiagnosticsSubmitting: boolean
 	mailDiagnosticsResult: AdminMailDiagnosticsResult | null
 	mailerConfig: MailerConfig | null
@@ -89,6 +119,12 @@ export default function SettingsAdminSection({
 	mailerConfigRestarting: boolean
 	onReloadRuntimeHealth: () => void
 	onReloadUsers: () => void
+	onLoadMigrations: () => Promise<void>
+	onRunMigrate: () => Promise<boolean>
+	onRollbackMigration: (name: string) => Promise<boolean>
+	onCreateDump: () => Promise<boolean>
+	onRunRestore: (file: File) => Promise<boolean>
+	onRunRepair: (command: string) => Promise<boolean>
 	onCreateAdminUser: (payload: {username: string; email: string; password: string}) => Promise<boolean>
 	onUpdateAdminUser: (identifier: number | string, payload: {username: string; email: string}) => Promise<boolean>
 	onSetAdminUserEnabled: (identifier: number | string, enabled: boolean) => Promise<boolean>
@@ -179,6 +215,14 @@ export default function SettingsAdminSection({
 
 		void onLoadMailerConfig()
 	}, [canManageUsers, mailerConfig, mailerConfigLoadAttempted, mailerConfigLoading, onLoadMailerConfig, open])
+
+	useEffect(() => {
+		if (!open || !canManageUsers || !adminBridgeReady || adminMigrationsLoaded || adminMigrationsLoading) {
+			return
+		}
+
+		void onLoadMigrations()
+	}, [adminBridgeReady, adminMigrationsLoaded, adminMigrationsLoading, canManageUsers, onLoadMigrations, open])
 
 	function openCreateUserDialog() {
 		setSelectedAdminUserId(null)
@@ -360,8 +404,126 @@ export default function SettingsAdminSection({
 						{adminRuntimeHealth?.errors?.length ? (
 							<div className="empty-state compact">{adminRuntimeHealth.errors.join(' ')}</div>
 						) : null}
-						<div className="empty-state compact">
-							The instance user list appears here when the admin bridge is available.
+						<div className="detail-core-card settings-subsection">
+							<div className="panel-label">Backup & Restore</div>
+							<div className="detail-inline-actions">
+								<button
+									className="composer-submit"
+									type="button"
+									disabled={!adminBridgeReady || adminDumpSubmitting}
+									onClick={() => {
+										void onCreateDump()
+									}}
+								>
+									{adminDumpSubmitting ? 'Creating dump…' : 'Download backup (ZIP)'}
+								</button>
+							</div>
+							<div className="empty-state compact">
+								Downloads a full Vikunja backup ZIP including all data and attachments.
+							</div>
+							<div className="settings-subsection-header">
+								<div className="detail-label">Restore from backup</div>
+							</div>
+							<div className="status-card warning">
+								Restoring overwrites all data. Restart Vikunja after restore completes.
+							</div>
+							<input
+								type="file"
+								accept=".zip"
+								data-restore-input
+								onChange={event => {
+									const [file] = Array.from(event.currentTarget.files || [])
+									if (file) {
+										void onRunRestore(file)
+									}
+									event.currentTarget.value = ''
+								}}
+							/>
+							<button
+								type="button"
+								className="composer-submit"
+								disabled={!adminBridgeReady || adminRestoreSubmitting}
+								onClick={event => {
+									const input = event.currentTarget.previousElementSibling
+									if (input instanceof HTMLInputElement) {
+										input.click()
+									}
+								}}
+							>
+								{adminRestoreSubmitting ? 'Restoring…' : 'Upload & restore backup'}
+							</button>
+						</div>
+						<div className="detail-core-card settings-subsection">
+							<div className="settings-subsection-header">
+								<div className="panel-label">Database Migrations</div>
+								<button className="pill-button subtle" type="button" onClick={() => void onLoadMigrations()}>
+									Reload
+								</button>
+							</div>
+							{adminMigrationsLoading ? <div className="empty-state">Loading…</div> : null}
+							{!adminMigrationsLoading && adminMigrationsLoaded ? (
+								<div className="settings-session-list">
+									{adminMigrations.map(migration => (
+										<div key={migration.name} className="settings-session-row">
+											<div>
+												<div className="detail-value">{migration.name}</div>
+												<div className="detail-meta">{migration.applied ? 'Applied' : 'Pending'}</div>
+											</div>
+											{migration.applied ? (
+												<button
+													className="pill-button subtle"
+													type="button"
+													disabled={!adminBridgeReady || adminMigrateSubmitting}
+													onClick={() => {
+														void onRollbackMigration(migration.name)
+													}}
+												>
+													Rollback
+												</button>
+											) : null}
+										</div>
+									))}
+								</div>
+							) : null}
+							<button
+								className="composer-submit"
+								type="button"
+								disabled={!adminBridgeReady || adminMigrateSubmitting}
+								onClick={() => {
+									void onRunMigrate()
+								}}
+							>
+								{adminMigrateSubmitting ? 'Running…' : 'Run pending migrations'}
+							</button>
+						</div>
+						<div className="detail-core-card settings-subsection">
+							<div className="panel-label">Data Repair</div>
+							{REPAIR_COMMANDS.map(command => {
+								const result = adminRepairResults[command.id]
+								return (
+									<div key={command.id} className="settings-session-row">
+										<div>
+											<div className="detail-value">{command.label}</div>
+											{result ? (
+												<div className={`detail-meta ${result.success ? '' : 'color-error'}`.trim()}>
+													{result.success ? 'Completed' : 'Failed'}
+													{result.stderr ? ` — ${result.stderr}` : ''}
+												</div>
+											) : null}
+										</div>
+										<button
+											className="pill-button subtle"
+											type="button"
+											disabled={!adminBridgeReady || adminRepairSubmitting}
+											onClick={() => {
+												void onRunRepair(command.id)
+											}}
+										>
+											Run
+										</button>
+									</div>
+								)
+							})}
 						</div>
 						{!adminBridgeReady ? (
 							<div className="empty-state compact">

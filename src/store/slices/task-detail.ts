@@ -1,20 +1,28 @@
 import {api, uploadApi} from '@/api'
 import type {
+	Label,
+	ReactionMap,
 	Task,
 	TaskAssignee,
 	TaskAttachment,
 	TaskComment,
+	TaskReaction,
 	TaskRelationKind,
 } from '@/types'
 import {formatError} from '@/utils/formatting'
 import type {StateCreator} from 'zustand'
 import type {AppStore} from '../index'
-import {blockOfflineReadOnlyAction, isOfflineReadOnly} from '../offline-readonly'
+import {enqueueMutation} from '../offline-queue'
+import {blockNonQueueableOfflineAction, blockOfflineReadOnlyAction, isOfflineReadOnly, shouldQueueOffline} from '../offline-readonly'
 import {findTaskInAnyContext} from '../selectors'
 import {
 	applyTaskAssigneesOptimisticUpdate,
 	applyTaskAttachmentsOptimisticUpdate,
 	applyTaskCommentsOptimisticUpdate,
+	applyTaskLabelsOptimisticUpdate,
+	applyTaskPatchOptimisticUpdate,
+	applyTaskRelationRefsOptimisticUpdate,
+	buildTaskRelationRef,
 	buildTaskProjectMovePayload,
 	buildOptimisticTaskComment,
 	getTaskCollections,
@@ -24,12 +32,18 @@ import {
 	withTaskAttachments,
 } from '../task-helpers'
 
+type RawReactionPayload = TaskReaction[] | Record<string, Array<Record<string, unknown>>> | null | undefined
+
 export interface TaskDetailStoreSlice {
 	taskDetailOpen: boolean
 	taskDetailLoading: boolean
 	taskDetail: Task | null
+	taskReactions: ReactionMap
 	openTaskDetail: (taskId: number) => Promise<void>
 	closeTaskDetail: () => void
+	loadReactions: (kind: 'task' | 'comment', id: number) => Promise<void>
+	addReaction: (kind: 'task' | 'comment', id: number, value: string) => Promise<boolean>
+	removeReaction: (kind: 'task' | 'comment', id: number, value: string) => Promise<boolean>
 	markTaskRead: (taskId: number) => Promise<boolean>
 	saveTaskDetailPatch: (patch: Partial<Task>) => Promise<boolean>
 	loadTaskAttachments: (taskId: number) => Promise<void>
@@ -37,11 +51,13 @@ export interface TaskDetailStoreSlice {
 	removeTaskAttachment: (attachmentId: number) => Promise<boolean>
 	addAssigneeToTask: (assignee: TaskAssignee) => Promise<boolean>
 	removeAssigneeFromTask: (userId: number) => Promise<boolean>
+	bulkUpdateAssignees: (taskId: number, assignees: TaskAssignee[]) => Promise<boolean>
 	addCommentToTask: (comment: string) => Promise<boolean>
 	updateTaskComment: (commentId: number, comment: string) => Promise<boolean>
 	deleteTaskComment: (commentId: number) => Promise<boolean>
 	addLabelToTask: (labelId: number) => Promise<boolean>
 	removeLabelFromTask: (labelId: number) => Promise<boolean>
+	bulkUpdateLabels: (taskId: number, labels: Label[]) => Promise<boolean>
 	addTaskRelation: (taskId: number, otherTaskId: number, relationKind: TaskRelationKind) => Promise<boolean>
 	removeTaskRelation: (taskId: number, otherTaskId: number, relationKind: TaskRelationKind) => Promise<boolean>
 	createTaskAndRelate: (taskId: number, title: string, relationKind: TaskRelationKind) => Promise<boolean>
@@ -53,6 +69,7 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 	taskDetailOpen: false,
 	taskDetailLoading: false,
 	taskDetail: null,
+	taskReactions: {},
 
 	async openTaskDetail(taskId) {
 		const cachedTask = withTaskAttachments(
@@ -94,6 +111,7 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 			}))
 			get().setSubscriptionState('task', taskId, result.task.subscription?.subscribed ?? null)
 			void get().markTaskRead(taskId)
+			void get().loadReactions('task', taskId)
 			void get().loadTaskAttachments(taskId)
 		} catch (error) {
 			set({error: formatError(error as Error)})
@@ -107,7 +125,103 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 			taskDetailOpen: false,
 			taskDetailLoading: false,
 			taskDetail: null,
+			taskReactions: {},
 		})
+	},
+
+	async loadReactions(kind, id) {
+		if (isOfflineReadOnly(get) || Number(id || 0) < 1) {
+			return
+		}
+
+		try {
+			const result = await api<{reactions?: RawReactionPayload}>(`/api/${kind}s/${id}/reactions`)
+			const key = `${kind}-${id}`
+			set(state => ({
+				taskReactions: {
+					...state.taskReactions,
+					[key]: normalizeReactionPayload(result.reactions),
+				},
+			}))
+		} catch (error) {
+			set({error: formatError(error as Error)})
+		}
+	},
+
+	async addReaction(kind, id, value) {
+		if (blockOfflineReadOnlyAction(get, set, 'add reaction')) {
+			return false
+		}
+
+		const reactionValue = `${value || ''}`.trim()
+		const user = get().account?.user
+		if (!id || !reactionValue || !user) {
+			return false
+		}
+
+		const key = `${kind}-${id}`
+		const current = get().taskReactions[key] || []
+		set(state => ({
+			taskReactions: {
+				...state.taskReactions,
+				[key]: [...current, {value: reactionValue, user}],
+			},
+		}))
+
+		try {
+			await api(`/api/${kind}s/${id}/reactions`, {
+				method: 'PUT',
+				body: {value: reactionValue},
+			})
+			return true
+		} catch (error) {
+			set(state => ({
+				taskReactions: {
+					...state.taskReactions,
+					[key]: current,
+				},
+			}))
+			set({error: formatError(error as Error)})
+			return false
+		}
+	},
+
+	async removeReaction(kind, id, value) {
+		if (blockOfflineReadOnlyAction(get, set, 'remove reaction')) {
+			return false
+		}
+
+		const reactionValue = `${value || ''}`.trim()
+		const userId = get().account?.user?.id
+		if (!id || !reactionValue || !userId) {
+			return false
+		}
+
+		const key = `${kind}-${id}`
+		const current = get().taskReactions[key] || []
+		set(state => ({
+			taskReactions: {
+				...state.taskReactions,
+				[key]: current.filter(reaction => !(reaction.value === reactionValue && reaction.user.id === userId)),
+			},
+		}))
+
+		try {
+			await api(`/api/${kind}s/${id}/reactions/delete`, {
+				method: 'POST',
+				body: {value: reactionValue},
+			})
+			return true
+		} catch (error) {
+			set(state => ({
+				taskReactions: {
+					...state.taskReactions,
+					[key]: current,
+				},
+			}))
+			set({error: formatError(error as Error)})
+			return false
+		}
 	},
 
 	async markTaskRead(taskId) {
@@ -148,7 +262,7 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 	},
 
 	async saveTaskDetailPatch(patch) {
-		if (blockOfflineReadOnlyAction(get, set, 'edit tasks')) {
+		if (blockNonQueueableOfflineAction(get, set, 'saveTaskDetailPatch')) {
 			return false
 		}
 
@@ -157,29 +271,48 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 			return false
 		}
 
-		const optimisticTask = {
-			...currentTask,
-			...patch,
-		}
+		const optimisticTask = {...currentTask, ...patch}
 		const taskPayload = {...currentTask}
 		delete taskPayload.subscription
 		delete taskPayload.read
 		delete taskPayload.read_at
+		const queuedBody = {
+			...taskPayload,
+			...patch,
+		}
+		set(state => ({
+			...applyTaskPatchOptimisticUpdate(state, currentTask.id, patch),
+		}))
+
+		if (shouldQueueOffline(get, 'saveTaskDetailPatch')) {
+			await enqueueMutation({
+				type: 'task-update',
+				endpoint: `/api/tasks/${currentTask.id}`,
+				method: 'POST',
+				body: queuedBody,
+				metadata: {
+					entityType: 'task',
+					entityId: currentTask.id,
+					description: `Edit "${currentTask.title}"`,
+				},
+			})
+			await get().refreshOfflineQueueCounts()
+			return true
+		}
 
 		try {
-			set({taskDetail: optimisticTask})
 			const result = await api<{task: Task}, Partial<Task>>(`/api/tasks/${currentTask.id}`, {
 				method: 'POST',
-				body: {
-					...taskPayload,
-					...patch,
-				},
+				body: queuedBody,
 			})
 			set({taskDetail: withTaskAttachments(result.task, currentTask.attachments)})
 			void get().refreshCurrentCollections()
 			return true
 		} catch (error) {
-			set({taskDetail: currentTask})
+			set(state => ({
+				...applyTaskPatchOptimisticUpdate(state, currentTask.id, currentTask),
+				taskDetail: optimisticTask.id === currentTask.id ? currentTask : state.taskDetail,
+			}))
 			set({error: formatError(error as Error)})
 			return false
 		}
@@ -259,7 +392,7 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 	},
 
 	async addAssigneeToTask(assignee) {
-		if (blockOfflineReadOnlyAction(get, set, 'manage assignees')) {
+		if (blockNonQueueableOfflineAction(get, set, 'addAssigneeToTask')) {
 			return false
 		}
 
@@ -275,6 +408,22 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 
 		const nextAssignees = normalizeTaskAssignees([...currentAssignees, assignee])
 		set(state => applyTaskAssigneesOptimisticUpdate(state, currentTask.id, nextAssignees))
+
+		if (shouldQueueOffline(get, 'addAssigneeToTask')) {
+			await enqueueMutation({
+				type: 'assignee-add',
+				endpoint: `/api/tasks/${currentTask.id}/assignees`,
+				method: 'POST',
+				body: {userId: assignee.id},
+				metadata: {
+					entityType: 'assignee',
+					entityId: currentTask.id,
+					description: `Assign ${assignee.name || assignee.username || `#${assignee.id}`} to "${currentTask.title}"`,
+				},
+			})
+			await get().refreshOfflineQueueCounts()
+			return true
+		}
 
 		try {
 			await api(`/api/tasks/${currentTask.id}/assignees`, {
@@ -293,7 +442,7 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 	},
 
 	async removeAssigneeFromTask(userId) {
-		if (blockOfflineReadOnlyAction(get, set, 'manage assignees')) {
+		if (blockNonQueueableOfflineAction(get, set, 'removeAssigneeFromTask')) {
 			return false
 		}
 
@@ -306,6 +455,22 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 		const currentAssignees = normalizeTaskAssignees(currentTask.assignees)
 		const nextAssignees = currentAssignees.filter(entry => entry.id !== numericUserId)
 		set(state => applyTaskAssigneesOptimisticUpdate(state, currentTask.id, nextAssignees))
+
+		if (shouldQueueOffline(get, 'removeAssigneeFromTask')) {
+			await enqueueMutation({
+				type: 'assignee-remove',
+				endpoint: `/api/tasks/${currentTask.id}/assignees/${numericUserId}`,
+				method: 'DELETE',
+				body: null,
+				metadata: {
+					entityType: 'assignee',
+					entityId: currentTask.id,
+					description: `Remove assignee from "${currentTask.title}"`,
+				},
+			})
+			await get().refreshOfflineQueueCounts()
+			return true
+		}
 
 		try {
 			await api(`/api/tasks/${currentTask.id}/assignees/${numericUserId}`, {
@@ -320,8 +485,37 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 		}
 	},
 
+	async bulkUpdateAssignees(taskId, assignees) {
+		if (blockOfflineReadOnlyAction(get, set, 'manage assignees')) {
+			return false
+		}
+
+		const currentTask = get().taskDetail
+		if (!currentTask?.id || currentTask.id !== taskId) {
+			return false
+		}
+
+		const currentAssignees = normalizeTaskAssignees(currentTask.assignees)
+		set(state =>
+			applyTaskAssigneesOptimisticUpdate(state, taskId, normalizeTaskAssignees(assignees)),
+		)
+
+		try {
+			await api(`/api/tasks/${taskId}/assignees/bulk`, {
+				method: 'POST',
+				body: {assignees},
+			})
+			void get().refreshCurrentCollections()
+			return true
+		} catch (error) {
+			set(state => applyTaskAssigneesOptimisticUpdate(state, taskId, currentAssignees))
+			set({error: formatError(error as Error)})
+			return false
+		}
+	},
+
 	async addCommentToTask(comment) {
-		if (blockOfflineReadOnlyAction(get, set, 'manage comments')) {
+		if (blockNonQueueableOfflineAction(get, set, 'addCommentToTask')) {
 			return false
 		}
 
@@ -335,6 +529,22 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 		const optimisticComment = buildOptimisticTaskComment(get().account?.user, normalizedComment)
 		const nextComments = normalizeTaskComments([...currentComments, optimisticComment])
 		set(state => applyTaskCommentsOptimisticUpdate(state, currentTask.id, nextComments))
+
+		if (shouldQueueOffline(get, 'addCommentToTask')) {
+			await enqueueMutation({
+				type: 'comment-add',
+				endpoint: `/api/tasks/${currentTask.id}/comments`,
+				method: 'POST',
+				body: {comment: normalizedComment},
+				metadata: {
+					entityType: 'comment',
+					entityId: currentTask.id,
+					description: `Comment on "${currentTask.title}"`,
+				},
+			})
+			await get().refreshOfflineQueueCounts()
+			return true
+		}
 
 		try {
 			const result = await api<{comment: TaskComment}, {comment: string}>(`/api/tasks/${currentTask.id}/comments`, {
@@ -399,7 +609,7 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 	},
 
 	async deleteTaskComment(commentId) {
-		if (blockOfflineReadOnlyAction(get, set, 'manage comments')) {
+		if (blockNonQueueableOfflineAction(get, set, 'deleteTaskComment')) {
 			return false
 		}
 
@@ -417,6 +627,23 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 
 		set(state => applyTaskCommentsOptimisticUpdate(state, currentTask.id, nextComments))
 
+		if (shouldQueueOffline(get, 'deleteTaskComment')) {
+			await enqueueMutation({
+				type: 'comment-delete',
+				endpoint: `/api/tasks/${currentTask.id}/comments/${numericCommentId}`,
+				method: 'DELETE',
+				body: null,
+				metadata: {
+					entityType: 'comment',
+					entityId: numericCommentId,
+					parentEntityId: currentTask.id,
+					description: `Delete comment from "${currentTask.title}"`,
+				},
+			})
+			await get().refreshOfflineQueueCounts()
+			return true
+		}
+
 		try {
 			await api(`/api/tasks/${currentTask.id}/comments/${numericCommentId}`, {
 				method: 'DELETE',
@@ -431,49 +658,124 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 	},
 
 	async addLabelToTask(labelId) {
-		if (blockOfflineReadOnlyAction(get, set, 'manage labels')) {
+		if (blockNonQueueableOfflineAction(get, set, 'addLabelToTask')) {
 			return false
 		}
 
-		if (!get().taskDetail?.id || !labelId) {
+		const currentTask = get().taskDetail
+		if (!currentTask?.id || !labelId) {
 			return false
+		}
+
+		const label = get().labels.find(entry => entry.id === labelId) || null
+		if (!label) {
+			return false
+		}
+
+		const currentLabels = Array.isArray(currentTask.labels) ? currentTask.labels : []
+		if (currentLabels.some(entry => entry.id === labelId)) {
+			return true
+		}
+
+		const nextLabels = [...currentLabels, label]
+		set(state => applyTaskLabelsOptimisticUpdate(state, currentTask.id, nextLabels))
+
+		if (shouldQueueOffline(get, 'addLabelToTask')) {
+			await enqueueMutation({
+				type: 'label-add',
+				endpoint: `/api/tasks/${currentTask.id}/labels`,
+				method: 'POST',
+				body: {labelId},
+				metadata: {
+					entityType: 'label',
+					entityId: labelId,
+					parentEntityId: currentTask.id,
+					description: `Add label "${label.title}" to "${currentTask.title}"`,
+				},
+			})
+			await get().refreshOfflineQueueCounts()
+			return true
 		}
 
 		try {
-			await api<{ok: boolean}, {labelId: number}>(`/api/tasks/${get().taskDetail?.id}/labels`, {
+			await api<{ok: boolean}, {labelId: number}>(`/api/tasks/${currentTask.id}/labels`, {
 				method: 'POST',
 				body: {labelId},
 			})
-			const currentTaskId = get().taskDetail?.id
-			if (currentTaskId) {
-				await get().openTaskDetail(currentTaskId)
-			}
 			await get().refreshCurrentCollections()
 			return true
 		} catch (error) {
+			set(state => applyTaskLabelsOptimisticUpdate(state, currentTask.id, currentLabels))
 			set({error: formatError(error as Error)})
 			return false
 		}
 	},
 
 	async removeLabelFromTask(labelId) {
+		if (blockNonQueueableOfflineAction(get, set, 'removeLabelFromTask')) {
+			return false
+		}
+
+		const currentTask = get().taskDetail
+		if (!currentTask?.id || !labelId) {
+			return false
+		}
+
+		const currentLabels = Array.isArray(currentTask.labels) ? currentTask.labels : []
+		const nextLabels = currentLabels.filter(entry => entry.id !== labelId)
+		if (nextLabels.length === currentLabels.length) {
+			return false
+		}
+		const removedLabel = currentLabels.find(entry => entry.id === labelId) || null
+		set(state => applyTaskLabelsOptimisticUpdate(state, currentTask.id, nextLabels))
+
+		if (shouldQueueOffline(get, 'removeLabelFromTask')) {
+			await enqueueMutation({
+				type: 'label-remove',
+				endpoint: `/api/tasks/${currentTask.id}/labels/${labelId}`,
+				method: 'DELETE',
+				body: null,
+				metadata: {
+					entityType: 'label',
+					entityId: labelId,
+					parentEntityId: currentTask.id,
+					description: `Remove label "${removedLabel?.title || labelId}" from "${currentTask.title}"`,
+				},
+			})
+			await get().refreshOfflineQueueCounts()
+			return true
+		}
+
+		try {
+			await api<{ok: boolean}>(`/api/tasks/${currentTask.id}/labels/${labelId}`, {
+				method: 'DELETE',
+			})
+			await get().refreshCurrentCollections()
+			return true
+		} catch (error) {
+			set(state => applyTaskLabelsOptimisticUpdate(state, currentTask.id, currentLabels))
+			set({error: formatError(error as Error)})
+			return false
+		}
+	},
+
+	async bulkUpdateLabels(taskId, labels) {
 		if (blockOfflineReadOnlyAction(get, set, 'manage labels')) {
 			return false
 		}
 
-		if (!get().taskDetail?.id || !labelId) {
+		const currentTask = get().taskDetail
+		if (!currentTask?.id || currentTask.id !== taskId) {
 			return false
 		}
 
 		try {
-			await api<{ok: boolean}>(`/api/tasks/${get().taskDetail?.id}/labels/${labelId}`, {
-				method: 'DELETE',
+			await api(`/api/tasks/${taskId}/labels/bulk`, {
+				method: 'POST',
+				body: {labels},
 			})
-			const currentTaskId = get().taskDetail?.id
-			if (currentTaskId) {
-				await get().openTaskDetail(currentTaskId)
-			}
-			await get().refreshCurrentCollections()
+			await get().openTaskDetail(taskId)
+			void get().refreshCurrentCollections()
 			return true
 		} catch (error) {
 			set({error: formatError(error as Error)})
@@ -482,7 +784,7 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 	},
 
 	async addTaskRelation(taskId, otherTaskId, relationKind) {
-		if (blockOfflineReadOnlyAction(get, set, 'manage task relations')) {
+		if (blockNonQueueableOfflineAction(get, set, 'addTaskRelation')) {
 			return false
 		}
 
@@ -490,6 +792,41 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 		const numericOtherTaskId = Number(otherTaskId || 0)
 		if (!numericTaskId || !numericOtherTaskId || !relationKind || numericTaskId === numericOtherTaskId) {
 			return false
+		}
+
+		const currentTask = get().taskDetail?.id === numericTaskId ? get().taskDetail : null
+		const otherTask = findTaskInAnyContext(numericOtherTaskId, getTaskCollections(get()))
+		const currentRefs = [...(currentTask?.related_tasks?.[relationKind] || [])]
+		const nextRefs = currentRefs.some(entry => entry.id === numericOtherTaskId)
+			? currentRefs
+			: [
+				...currentRefs,
+				otherTask
+					? buildTaskRelationRef(otherTask)
+					: {id: numericOtherTaskId, title: `#${numericOtherTaskId}`, project_id: 0, done: false},
+			]
+		if (currentTask) {
+			set(state => applyTaskRelationRefsOptimisticUpdate(state, numericTaskId, relationKind, nextRefs))
+		}
+
+		if (shouldQueueOffline(get, 'addTaskRelation')) {
+			await enqueueMutation({
+				type: 'relation-add',
+				endpoint: `/api/tasks/${numericTaskId}/relations`,
+				method: 'PUT',
+				body: {
+					other_task_id: numericOtherTaskId,
+					relation_kind: relationKind,
+				},
+				metadata: {
+					entityType: 'relation',
+					entityId: numericTaskId,
+					parentEntityId: numericOtherTaskId,
+					description: `Relate task #${numericTaskId} to #${numericOtherTaskId}`,
+				},
+			})
+			await get().refreshOfflineQueueCounts()
+			return true
 		}
 
 		try {
@@ -504,13 +841,16 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 			await get().openTaskDetail(numericTaskId)
 			return true
 		} catch (error) {
+			if (currentTask) {
+				set(state => applyTaskRelationRefsOptimisticUpdate(state, numericTaskId, relationKind, currentRefs))
+			}
 			set({error: formatError(error as Error)})
 			return false
 		}
 	},
 
 	async removeTaskRelation(taskId, otherTaskId, relationKind) {
-		if (blockOfflineReadOnlyAction(get, set, 'manage task relations')) {
+		if (blockNonQueueableOfflineAction(get, set, 'removeTaskRelation')) {
 			return false
 		}
 
@@ -518,6 +858,30 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 		const numericOtherTaskId = Number(otherTaskId || 0)
 		if (!numericTaskId || !numericOtherTaskId || !relationKind) {
 			return false
+		}
+
+		const currentTask = get().taskDetail?.id === numericTaskId ? get().taskDetail : null
+		const currentRefs = [...(currentTask?.related_tasks?.[relationKind] || [])]
+		const nextRefs = currentRefs.filter(entry => entry.id !== numericOtherTaskId)
+		if (currentTask) {
+			set(state => applyTaskRelationRefsOptimisticUpdate(state, numericTaskId, relationKind, nextRefs))
+		}
+
+		if (shouldQueueOffline(get, 'removeTaskRelation')) {
+			await enqueueMutation({
+				type: 'relation-remove',
+				endpoint: `/api/tasks/${numericTaskId}/relations/${relationKind}/${numericOtherTaskId}`,
+				method: 'DELETE',
+				body: null,
+				metadata: {
+					entityType: 'relation',
+					entityId: numericTaskId,
+					parentEntityId: numericOtherTaskId,
+					description: `Remove relation between #${numericTaskId} and #${numericOtherTaskId}`,
+				},
+			})
+			await get().refreshOfflineQueueCounts()
+			return true
 		}
 
 		try {
@@ -528,6 +892,9 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 			await get().openTaskDetail(numericTaskId)
 			return true
 		} catch (error) {
+			if (currentTask) {
+				set(state => applyTaskRelationRefsOptimisticUpdate(state, numericTaskId, relationKind, currentRefs))
+			}
 			set({error: formatError(error as Error)})
 			return false
 		}
@@ -603,3 +970,39 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 		})
 	},
 })
+
+function normalizeReactionPayload(payload: RawReactionPayload): TaskReaction[] {
+	if (Array.isArray(payload)) {
+		return payload
+			.filter(reaction => reaction && typeof reaction === 'object')
+			.map(reaction => ({
+				value: `${reaction.value || ''}`.trim(),
+				user: reaction.user,
+			}))
+			.filter(reaction => reaction.value && reaction.user)
+	}
+
+	if (!payload || typeof payload !== 'object') {
+		return []
+	}
+
+	const normalized: TaskReaction[] = []
+	for (const [value, users] of Object.entries(payload)) {
+		if (!Array.isArray(users)) {
+			continue
+		}
+
+			for (const user of users) {
+				if (!user || typeof user !== 'object') {
+					continue
+				}
+
+				normalized.push({
+					value: `${value || ''}`.trim(),
+					user: user as unknown as TaskReaction['user'],
+				})
+			}
+	}
+
+	return normalized.filter(reaction => reaction.value && reaction.user)
+}

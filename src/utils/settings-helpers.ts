@@ -5,6 +5,7 @@ export type SettingsSectionId =
 	| 'preferences'
 	| 'offline'
 	| 'notifications'
+	| 'security'
 	| 'collaboration'
 	| 'userAdministration'
 	| 'teams'

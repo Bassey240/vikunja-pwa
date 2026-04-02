@@ -356,24 +356,31 @@ function startDragTracking(
 
 function handleSortableOnMove(event: SortableEvent) {
 	if (!activeDragContext) {
+		console.log('[DnD:onMove] no activeDragContext — allowing')
 		return
 	}
 
 	if (!isEligibleSortableContainer(activeDragContext.type, event.to)) {
+		console.log('[DnD:onMove] BLOCKED: not eligible container', {type: activeDragContext.type, to: event.to, sortableKind: (event.to as HTMLElement)?.dataset?.sortableKind})
 		return false
 	}
 
 	if (activeDragContext.dropTargetProjectId || activeDragContext.dropTargetTaskId) {
+		console.log('[DnD:onMove] BLOCKED: drop target active', {projectId: activeDragContext.dropTargetProjectId, taskId: activeDragContext.dropTargetTaskId})
 		return false
 	}
 
 	if (isPointerOverInvalidCrossTypeSurface(activeDragContext)) {
+		console.log('[DnD:onMove] BLOCKED: cross-type surface')
 		return false
 	}
 
 	if (activeDragContext.type === 'task' && !isManualTaskSortActive()) {
+		console.log('[DnD:onMove] BLOCKED: manual sort not active')
 		return false
 	}
+
+	console.log('[DnD:onMove] ALLOWED')
 }
 
 function handleDragOverDropTargetDetection(event: MouseEvent | PointerEvent | TouchEvent) {
@@ -397,10 +404,33 @@ function handleDragOverDropTargetDetection(event: MouseEvent | PointerEvent | To
 	}
 
 	if (activeDragContext.type === 'task') {
-		const taskTarget = hitTestTaskRows(activeDragContext, clientX, clientY)
-		if (taskTarget) {
-			applyDropTarget(activeDragContext, null, taskTarget)
-			return
+		// When dragging from a Kanban bucket, skip subtask hit-testing during the
+		// drag. Without this, every Kanban card under the pointer registers as a
+		// subtask drop target, which sets dropTargetTaskId — and that makes
+		// handleSortableOnMove return false, blocking Sortable from reordering or
+		// moving items between buckets. Subtask detection for Kanban still happens
+		// at the END of the drag in handleSortableTaskEnd, where the
+		// sortableMovedToKanbanBucket check distinguishes bucket moves from subtask
+		// drops.
+		const isDraggingFromKanbanBucket =
+			activeDragContext.dragFrom instanceof HTMLElement &&
+			Boolean(activeDragContext.dragFrom.dataset.kanbanBucketId)
+		if (!isDraggingFromKanbanBucket) {
+			const taskTarget = hitTestTaskRows(activeDragContext, clientX, clientY)
+			if (taskTarget) {
+				applyDropTarget(activeDragContext, null, taskTarget)
+				return
+			}
+		} else {
+			// For Kanban drags, use a tight middle zone (30%) to detect subtask
+			// targets.  When detected, applyDropTarget sets dropTargetTaskId which
+			// makes handleSortableOnMove block SortableJS reordering — this keeps
+			// the target card in place so the user can drop on it.
+			const taskTarget = hitTestTaskRows(activeDragContext, clientX, clientY, 0.3)
+			if (taskTarget) {
+				applyDropTarget(activeDragContext, null, taskTarget)
+				return
+			}
 		}
 	}
 
@@ -446,7 +476,7 @@ function hitTestProjectRows(context: DragContext, clientX: number, clientY: numb
 	return null
 }
 
-function hitTestTaskRows(context: DragContext, clientX: number, clientY: number) {
+function hitTestTaskRows(context: DragContext, clientX: number, clientY: number, middleZoneFraction = 0.75) {
 	const collections = getTaskCollections(useAppStore.getState())
 	const taskRows = context.app.querySelectorAll('.workspace-screen.is-active [data-task-row-id]')
 	for (const row of taskRows) {
@@ -460,7 +490,7 @@ function hitTestTaskRows(context: DragContext, clientX: number, clientY: number)
 		}
 
 		const rect = row.getBoundingClientRect()
-		if (clientX < rect.left || clientX > rect.right || !isInMiddleZone(clientY, rect)) {
+		if (clientX < rect.left || clientX > rect.right || !isInMiddleZone(clientY, rect, middleZoneFraction)) {
 			continue
 		}
 
@@ -477,8 +507,8 @@ function hitTestTaskRows(context: DragContext, clientX: number, clientY: number)
 	return null
 }
 
-function isInMiddleZone(clientY: number, rect: DOMRect) {
-	const margin = rect.height * 0.125
+function isInMiddleZone(clientY: number, rect: DOMRect, fraction = 0.75) {
+	const margin = rect.height * ((1 - fraction) / 2)
 	return clientY >= rect.top + margin && clientY <= rect.bottom - margin
 }
 
@@ -586,6 +616,7 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 	const dragContext = cleanupDragTracking()
 	const movedBranch = event.item
 	if (!(movedBranch instanceof HTMLElement)) {
+		console.log('[DnD:end] no movedBranch HTMLElement')
 		return
 	}
 
@@ -593,15 +624,18 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 		? movedBranch
 		: movedBranch.querySelector('[data-task-row-id]')
 	if (!(taskRow instanceof HTMLElement)) {
+		console.log('[DnD:end] no taskRow')
 		return
 	}
 
 	const taskId = Number(taskRow.dataset.taskRowId || 0)
 	if (!taskId) {
+		console.log('[DnD:end] no taskId')
 		return
 	}
 
 	if (handledSidebarDrop?.type === 'task' && handledSidebarDrop.id === taskId) {
+		console.log('[DnD:end] handled by sidebar drop')
 		clearSortableDragState(event.item instanceof HTMLElement ? event.item : null)
 		handledSidebarDrop = null
 		return
@@ -611,6 +645,7 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 	const collections = getTaskCollections(store)
 	const task = findTaskInAnyContext(taskId, collections)
 	if (!task) {
+		console.log('[DnD:end] task not found in store', {taskId})
 		restoreSortableDomPosition(event)
 		return
 	}
@@ -619,12 +654,41 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 		dragContext && dragContext.lastX != null && dragContext.lastY != null
 			? hitTestProjectRows(dragContext, dragContext.lastX, dragContext.lastY)
 			: null
-	const releaseTaskTarget =
+	// Subtask detection: try hit-testing at the last pointer position first.
+	// Fall back to the dropTargetTaskId tracked during the drag — SortableJS
+	// may have rearranged the DOM before onEnd, making post-drop hit-testing
+	// unreliable (especially in Kanban).
+	const hitTestedTaskTarget =
 		dragContext && dragContext.lastX != null && dragContext.lastY != null
 			? hitTestTaskRows(dragContext, dragContext.lastX, dragContext.lastY)
 			: null
+	const releaseTaskTarget =
+		hitTestedTaskTarget
+			|| (dragContext?.dropTargetTaskId
+				? {taskId: dragContext.dropTargetTaskId, element: dragContext.dropTargetTaskElement}
+				: null)
+
+	const kanbanBucketId = Number((event.to instanceof HTMLElement ? event.to.dataset.kanbanBucketId : 0) || 0)
+	const fromBucketId = Number((event.from instanceof HTMLElement ? (event.from as HTMLElement).dataset.kanbanBucketId : 0) || 0)
+	console.log('[DnD:end]', {
+		taskId,
+		taskTitle: task.title,
+		releaseProjectTarget: releaseProjectTarget?.projectId || null,
+		releaseTaskTarget: releaseTaskTarget?.taskId || null,
+		kanbanBucketId,
+		fromBucketId,
+		eventToTag: event.to?.tagName,
+		eventToClass: event.to?.className,
+		eventFromTag: event.from?.tagName,
+		eventFromClass: event.from?.className,
+		currentProjectViewId: store.currentProjectViewId,
+		dragContextExists: Boolean(dragContext),
+		lastX: dragContext?.lastX,
+		lastY: dragContext?.lastY,
+	})
 
 	if (releaseProjectTarget?.projectId) {
+		console.log('[DnD:end] → PROJECT DROP', {projectId: releaseProjectTarget.projectId})
 		const targetProjectId = releaseProjectTarget.projectId
 		const visibleTaskList = getVisibleTaskListForTaskDrop(store, taskId, targetProjectId, collections)
 		const traceToken = beginTaskDropTrace({
@@ -648,6 +712,7 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 	}
 
 	if (releaseTaskTarget?.taskId) {
+		console.log('[DnD:end] → SUBTASK DROP', {targetTaskId: releaseTaskTarget.taskId})
 		const targetTaskId = releaseTaskTarget.taskId
 		const targetParentTask = findTaskInAnyContext(targetTaskId, collections)
 		const traceToken = beginTaskDropTrace({
@@ -668,8 +733,8 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 		return
 	}
 
-	const kanbanBucketId = Number((event.to instanceof HTMLElement ? event.to.dataset.kanbanBucketId : 0) || 0)
 	if (kanbanBucketId) {
+		console.log('[DnD:end] → KANBAN BUCKET', {kanbanBucketId, fromBucketId})
 		const siblingIds = getSiblingTaskIdsFromContainer(event.to)
 		const movedIndex = siblingIds.indexOf(taskId)
 		const traceToken = beginTaskDropTrace({
@@ -678,7 +743,9 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 			targetProjectId: task.project_id,
 			targetParentTaskId: null,
 		})
+		console.log('[DnD:end] kanban bucket move details', {siblingIds, movedIndex, currentProjectViewId: store.currentProjectViewId})
 		if (movedIndex === -1 || !store.currentProjectViewId) {
+			console.log('[DnD:end] → KANBAN ABORT: movedIndex or viewId missing', {movedIndex, currentProjectViewId: store.currentProjectViewId})
 			restoreSortableDomPosition(event)
 			return
 		}
@@ -694,9 +761,28 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 					bucketId: kanbanBucketId,
 					beforeTaskId: siblingIds[movedIndex - 1] || null,
 					afterTaskId: siblingIds[movedIndex + 1] || null,
+					siblingIds,
 					traceToken,
 				}),
 		})
+
+		// Toggle done status when moving between done/non-done buckets
+		if (fromBucketId && kanbanBucketId !== fromBucketId) {
+			const currentStore = useAppStore.getState()
+			const doneBucketId = resolveKanbanDoneBucketId(currentStore, task.project_id, store.currentProjectViewId)
+			if (doneBucketId) {
+				const movedFromDone = fromBucketId === doneBucketId && kanbanBucketId !== doneBucketId
+				const movedToDone = fromBucketId !== doneBucketId && kanbanBucketId === doneBucketId
+				if ((movedFromDone && task.done) || (movedToDone && !task.done)) {
+					console.log('[DnD:end] toggling done status after bucket move', {movedFromDone, movedToDone, taskDone: task.done})
+					void currentStore.toggleTaskDone(taskId, {
+						kanbanViewId: store.currentProjectViewId ?? undefined,
+						sourceBucketId: kanbanBucketId,
+						targetBucketId: kanbanBucketId,
+					})
+				}
+			}
+		}
 		return
 	}
 
@@ -1265,4 +1351,16 @@ function resolveTaskDropTargetProjectId(
 	}
 
 	return fallbackProjectId
+}
+
+function resolveKanbanDoneBucketId(
+	state: AppStore,
+	projectId: number,
+	viewId: number | null,
+): number {
+	if (!viewId || !projectId) return 0
+	const views = state.projectViewsById[projectId] || []
+	const view = views.find(v => v.id === viewId) || null
+	if (!view) return 0
+	return Number(view.doneBucketId ?? view.done_bucket_id ?? 0) || 0
 }

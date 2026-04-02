@@ -33,11 +33,25 @@ import {
 } from '@/utils/task-detail-helpers'
 import {type FormEvent, useEffect, useMemo, useRef, useState} from 'react'
 
+const CLOSED_TASK_DETAIL_SECTIONS: Record<TaskDetailSection, boolean> = {
+	planning: false,
+	recurring: false,
+	reminders: false,
+	organization: false,
+	assignees: false,
+	related: false,
+	comments: false,
+	attachments: false,
+	description: false,
+	info: false,
+}
+
 export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspector'}) {
 	const isWideLayout = useWideLayout()
 	const taskDetailOpen = useAppStore(state => state.taskDetailOpen)
 	const taskDetailLoading = useAppStore(state => state.taskDetailLoading)
 	const taskDetail = useAppStore(state => state.taskDetail)
+	const taskReactions = useAppStore(state => state.taskReactions)
 	const subscriptionsByEntity = useAppStore(state => state.subscriptionsByEntity)
 	const subscriptionMutatingKeys = useAppStore(state => state.subscriptionMutatingKeys)
 	const currentUserId = useAppStore(state => Number(state.account?.user?.id || 0))
@@ -68,6 +82,9 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 	const addCommentToTask = useAppStore(state => state.addCommentToTask)
 	const updateTaskComment = useAppStore(state => state.updateTaskComment)
 	const deleteTaskComment = useAppStore(state => state.deleteTaskComment)
+	const loadReactions = useAppStore(state => state.loadReactions)
+	const addReaction = useAppStore(state => state.addReaction)
+	const removeReaction = useAppStore(state => state.removeReaction)
 	const addLabelToTask = useAppStore(state => state.addLabelToTask)
 	const removeLabelFromTask = useAppStore(state => state.removeLabelFromTask)
 	const removeTaskRelation = useAppStore(state => state.removeTaskRelation)
@@ -92,18 +109,7 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 	const [reminders, setReminders] = useState<TaskReminder[]>([])
 	const [selectedLabelId, setSelectedLabelId] = useState('')
 	const [relationComposerOpen, setRelationComposerOpen] = useState(false)
-	const [openSections, setOpenSections] = useState<Record<TaskDetailSection, boolean>>({
-		planning: false,
-		recurring: false,
-		reminders: false,
-		organization: false,
-		assignees: false,
-		related: false,
-		comments: false,
-		attachments: false,
-		description: false,
-		info: false,
-	})
+	const [openSections, setOpenSections] = useState<Record<TaskDetailSection, boolean>>(CLOSED_TASK_DETAIL_SECTIONS)
 	const percentDoneSaveTimeoutRef = useRef<number | null>(null)
 	const attachmentInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -142,18 +148,7 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 		setEditingCommentValue('')
 		setPreviewAttachment(null)
 		setRelationComposerOpen(false)
-		setOpenSections({
-			planning: false,
-			recurring: false,
-			reminders: false,
-			organization: false,
-			assignees: false,
-			related: false,
-			comments: false,
-			attachments: false,
-			description: false,
-			info: false,
-		})
+		setOpenSections(CLOSED_TASK_DETAIL_SECTIONS)
 	}, [taskDetail?.id])
 
 	useEffect(() => {
@@ -270,6 +265,14 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 	const taskSubscriptionKey = taskDetail ? `task:${taskDetail.id}` : ''
 	const taskSubscribed = taskSubscriptionKey ? (subscriptionsByEntity[taskSubscriptionKey] ?? null) : null
 	const taskSubscriptionSubmitting = taskSubscriptionKey ? subscriptionMutatingKeys.has(taskSubscriptionKey) : false
+
+	useEffect(() => {
+		for (const comment of taskComments) {
+			if (comment.id > 0 && !taskReactions[`comment-${comment.id}`]) {
+				void loadReactions('comment', comment.id)
+			}
+		}
+	}, [loadReactions, taskComments, taskReactions])
 
 	useEffect(() => {
 		const normalizedQuery = `${assigneeQuery || ''}`.trim()
@@ -673,10 +676,7 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 	}
 
 	function toggleSection(section: TaskDetailSection) {
-		setOpenSections(current => ({
-			...current,
-			[section]: !current[section],
-		}))
+		setOpenSections(current => (current[section] ? CLOSED_TASK_DETAIL_SECTIONS : {...CLOSED_TASK_DETAIL_SECTIONS, [section]: true}))
 	}
 
 	function openRelatedTask(taskRef: TaskRelationRef) {
@@ -945,6 +945,7 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 							onEditingCommentValueChange={setEditingCommentValue}
 							commentDraft={commentDraft}
 							onCommentDraftChange={setCommentDraft}
+							taskReactions={taskReactions}
 							onEditComment={handleEditComment}
 							onCancelEditComment={handleCancelEditComment}
 							onSaveEditedComment={commentId => {
@@ -954,6 +955,12 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 								void handleDeleteComment(commentId)
 							}}
 							onAddComment={handleAddComment}
+							onAddReaction={(commentId, value) => {
+								void addReaction('comment', commentId, value)
+							}}
+							onRemoveReaction={(commentId, value) => {
+								void removeReaction('comment', commentId, value)
+							}}
 						/>
 						<TaskDetailAttachments
 							open={openSections.attachments}

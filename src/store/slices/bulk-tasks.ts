@@ -3,7 +3,8 @@ import type {BulkTaskAction, Task} from '@/types'
 import {formatError} from '@/utils/formatting'
 import type {StateCreator} from 'zustand'
 import type {AppStore} from '../index'
-import {blockOfflineReadOnlyAction} from '../offline-readonly'
+import {enqueueMutation} from '../offline-queue'
+import {blockNonQueueableOfflineAction, shouldQueueOffline} from '../offline-readonly'
 import {findTaskInAnyContext} from '../selectors'
 import {
 	COMPLETION_ANIMATION_MS,
@@ -118,7 +119,7 @@ export const createBulkTasksSlice: StateCreator<AppStore, [], [], BulkTasksSlice
 	},
 
 	async applyBulkTaskAction() {
-		if (blockOfflineReadOnlyAction(get, set, 'bulk edit tasks')) {
+		if (blockNonQueueableOfflineAction(get, set, 'applyBulkTaskAction')) {
 			return false
 		}
 
@@ -137,6 +138,16 @@ export const createBulkTasksSlice: StateCreator<AppStore, [], [], BulkTasksSlice
 			action === 'set-priority' ||
 			action === 'favorite' ||
 			action === 'unfavorite'
+		const offlineSupported =
+			action === 'complete' ||
+			action === 'reopen' ||
+			action === 'set-priority' ||
+			action === 'delete'
+
+		if (shouldQueueOffline(get, 'applyBulkTaskAction') && !offlineSupported) {
+			set({offlineActionNotice: 'This bulk action requires a connection. Reconnect to continue.'})
+			return false
+		}
 
 		if (action === 'move-project' && !targetProjectId) {
 			set({error: 'Choose a target project first.'})
@@ -148,6 +159,12 @@ export const createBulkTasksSlice: StateCreator<AppStore, [], [], BulkTasksSlice
 				return false
 			}
 
+			const taskDescriptionById = new Map(
+				taskIds.map(taskId => [
+					taskId,
+					findTaskInAnyContext(taskId, getTaskCollections(get()))?.title || `#${taskId}`,
+				]),
+			)
 			const snapshot = captureTaskDeletionSnapshot(get())
 			set(state => ({
 				...applyTaskDeletionOptimisticUpdate(state, taskIds),
@@ -159,6 +176,24 @@ export const createBulkTasksSlice: StateCreator<AppStore, [], [], BulkTasksSlice
 				openMenu: null,
 				error: null,
 			}))
+
+			if (shouldQueueOffline(get, 'applyBulkTaskAction')) {
+				for (const taskId of taskIds) {
+					await enqueueMutation({
+						type: 'task-delete',
+						endpoint: `/api/tasks/${taskId}`,
+						method: 'DELETE',
+						body: null,
+						metadata: {
+							entityType: 'task',
+							entityId: taskId,
+							description: `Delete "${taskDescriptionById.get(taskId) || `#${taskId}`}"`,
+						},
+					})
+				}
+				await get().refreshOfflineQueueCounts()
+				return true
+			}
 
 			const notice = buildBulkTaskMutationNotice(action, taskIds.length)
 			const started = await get().startUndoableMutation({
@@ -271,6 +306,36 @@ export const createBulkTasksSlice: StateCreator<AppStore, [], [], BulkTasksSlice
 			}
 
 			const notice = buildBulkTaskMutationNotice(action, nextTaskIds.length)
+			if (shouldQueueOffline(get, 'applyBulkTaskAction')) {
+				const {fields, values} = buildBulkTaskMutationPayload(action, {
+					targetProjectId,
+					priority,
+				})
+				await enqueueMutation({
+					type: 'bulk-task-update',
+					endpoint: '/api/tasks/bulk',
+					method: 'POST',
+					body: {
+						taskIds: nextTaskIds,
+						fields,
+						values,
+					},
+					metadata: {
+						entityType: 'task',
+						entityId: null,
+						description: notice.body,
+					},
+				})
+				await get().refreshOfflineQueueCounts()
+				set(state => {
+					const nextTogglingTaskIds = new Set(state.togglingTaskIds)
+					for (const taskId of nextTaskIds) {
+						nextTogglingTaskIds.delete(taskId)
+					}
+					return {togglingTaskIds: nextTogglingTaskIds}
+				})
+				return true
+			}
 			const started = await get().startUndoableMutation({
 				notice: {
 					id: `bulk-task:${action}:${Date.now()}`,
@@ -368,7 +433,8 @@ export const createBulkTasksSlice: StateCreator<AppStore, [], [], BulkTasksSlice
 				})
 			}
 
-			if (get().taskDetail?.id && taskIds.includes(get().taskDetail.id)) {
+			const currentTaskDetail = get().taskDetail
+			if (currentTaskDetail?.id && taskIds.includes(currentTaskDetail.id)) {
 				set({
 					taskDetailOpen: false,
 					taskDetailLoading: false,

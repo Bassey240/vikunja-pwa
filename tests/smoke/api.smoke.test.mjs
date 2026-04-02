@@ -21,6 +21,7 @@ test.beforeEach(() => {
 async function loginWithPasswordSession(targetStack, {
 	username = 'smoke-user',
 	password = 'smoke-password',
+	totpPasscode = '',
 } = {}) {
 	const response = await fetch(new URL('/api/session/login', targetStack.appUrl), {
 		method: 'POST',
@@ -32,6 +33,7 @@ async function loginWithPasswordSession(targetStack, {
 			baseUrl: `${targetStack.mock.origin}/api/v1`,
 			username,
 			password,
+			...(totpPasscode ? {totpPasscode} : {}),
 		}),
 	})
 
@@ -41,6 +43,41 @@ async function loginWithPasswordSession(targetStack, {
 	assert.ok(sessionCookie)
 	return sessionCookie
 }
+
+test('password login forwards TOTP passcodes when a user has 2FA enabled', async () => {
+	const authStack = await startTestStack({
+		legacyConfigured: false,
+		mockVikunjaOptions: {
+			totpState: {
+				enabled: true,
+			},
+		},
+	})
+
+	try {
+		const missingTotpResponse = await fetch(new URL('/api/session/login', authStack.appUrl), {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({
+				authMode: 'password',
+				baseUrl: `${authStack.mock.origin}/api/v1`,
+				username: 'smoke-user',
+				password: 'smoke-password',
+			}),
+		})
+		assert.equal(missingTotpResponse.status, 401)
+		assert.equal((await missingTotpResponse.json()).error, 'Invalid totp passcode.')
+
+		const sessionCookie = await loginWithPasswordSession(authStack, {
+			totpPasscode: '123456',
+		})
+		assert.ok(sessionCookie)
+	} finally {
+		await authStack.stop()
+	}
+})
 
 function getAppSessionCookie(response) {
 	return response.headers
@@ -245,6 +282,42 @@ test('registration, password reset routes, and reset redirect work with an expli
 	}
 })
 
+test('auth info reflects registration availability and registration rejects disabled servers clearly', async () => {
+	const authStack = await startTestStack({
+		legacyConfigured: false,
+		mockVikunjaOptions: {
+			registrationEnabled: false,
+		},
+	})
+
+	try {
+		const authInfoResponse = await fetch(new URL(`/api/session/auth-info?baseUrl=${encodeURIComponent(`${authStack.mock.origin}/api/v1`)}`, authStack.appUrl))
+		assert.equal(authInfoResponse.status, 200)
+		assert.deepEqual(await authInfoResponse.json(), {
+			baseUrl: `${authStack.mock.origin}/api/v1`,
+			localEnabled: true,
+			registrationEnabled: false,
+		})
+
+		const registerResponse = await fetch(new URL('/api/session/register', authStack.appUrl), {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({
+				baseUrl: `${authStack.mock.origin}/api/v1`,
+				username: 'new-user',
+				email: 'new-user@example.test',
+				password: 'registered-password',
+			}),
+		})
+		assert.equal(registerResponse.status, 403)
+		assert.equal((await registerResponse.json()).error, 'This Vikunja server does not allow self-registration.')
+	} finally {
+		await authStack.stop()
+	}
+})
+
 test('authenticated follow-up requests refresh the sliding app-session cookie', async () => {
 	const authStack = await startTestStack({legacyConfigured: false})
 
@@ -260,6 +333,53 @@ test('authenticated follow-up requests refresh the sliding app-session cookie', 
 		const refreshedCookie = getAppSessionCookie(sessionResponse)
 		assert.ok(refreshedCookie)
 		assert.equal(refreshedCookie, sessionCookie)
+	} finally {
+		await authStack.stop()
+	}
+})
+
+test('parallel authenticated requests survive refresh-token rotation races', async () => {
+	const authStack = await startTestStack({
+		legacyConfigured: false,
+		mockVikunjaOptions: {
+			loginAccessTokenLifetimeSeconds: 65,
+			refreshAccessTokenLifetimeSeconds: 3600,
+			rotateRefreshTokens: true,
+			refreshResponseDelayMs: 50,
+		},
+	})
+
+	try {
+		const sessionCookie = await loginWithPasswordSession(authStack)
+
+		await new Promise(resolve => {
+			setTimeout(resolve, 6000)
+		})
+
+		const [userResponse, infoResponse] = await Promise.all([
+			fetch(new URL('/api/user', authStack.appUrl), {
+				headers: {
+					Cookie: sessionCookie,
+				},
+			}),
+			fetch(new URL('/api/info', authStack.appUrl), {
+				headers: {
+					Cookie: sessionCookie,
+				},
+			}),
+		])
+
+		assert.equal(userResponse.status, 200)
+		assert.equal(infoResponse.status, 200)
+
+		const sessionResponse = await fetch(new URL('/api/session', authStack.appUrl), {
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(sessionResponse.status, 200)
+		const sessionPayload = await sessionResponse.json()
+		assert.equal(sessionPayload.connected, true)
 	} finally {
 		await authStack.stop()
 	}
@@ -991,5 +1111,473 @@ test('avatar proxy returns an image for backends using the /avatar/{username} ro
 		assert.ok(avatarBody.length > 0)
 	} finally {
 		await avatarStack.stop()
+	}
+})
+
+test('instance info and account self-service proxy routes work end-to-end', async () => {
+	const authStack = await startTestStack({
+		legacyConfigured: false,
+		mockVikunjaOptions: {
+			oidcProviders: [
+				{
+					name: 'Acme SSO',
+					key: 'acme',
+					auth_url: 'https://sso.example.test/login',
+				},
+			],
+		},
+	})
+
+	try {
+		const instanceInfoResponse = await fetch(new URL(`/api/instance-info?baseUrl=${encodeURIComponent(`${authStack.mock.origin}/api/v1`)}`, authStack.appUrl))
+		assert.equal(instanceInfoResponse.status, 200)
+		const instanceInfo = await instanceInfoResponse.json()
+		assert.equal(instanceInfo.version, 'test')
+		assert.equal(instanceInfo.motd, 'Smoke suite MOTD')
+		assert.deepEqual(instanceInfo.enabled_background_providers, ['unsplash'])
+		assert.equal(instanceInfo.auth.openid.providers[0].name, 'Acme SSO')
+
+		const sessionCookie = await loginWithPasswordSession(authStack)
+
+		const infoResponse = await fetch(new URL('/api/info', authStack.appUrl), {
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(infoResponse.status, 200)
+		assert.equal((await infoResponse.json()).version, 'test')
+
+		const emailResponse = await fetch(new URL('/api/session/settings/email', authStack.appUrl), {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Cookie: sessionCookie,
+			},
+			body: JSON.stringify({
+				password: 'smoke-password',
+				newEmail: 'updated-smoke@example.test',
+			}),
+		})
+		assert.equal(emailResponse.status, 200)
+		assert.equal(authStack.mock.getState().pendingEmailChange.newEmail, 'updated-smoke@example.test')
+
+		const exportRequestResponse = await fetch(new URL('/api/user/export/request', authStack.appUrl), {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Cookie: sessionCookie,
+			},
+			body: JSON.stringify({
+				password: 'smoke-password',
+			}),
+		})
+		assert.equal(exportRequestResponse.status, 200)
+
+		const exportStatusResponse = await fetch(new URL('/api/user/export', authStack.appUrl), {
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(exportStatusResponse.status, 200)
+		assert.deepEqual(await exportStatusResponse.json(), {
+			status: 'ready',
+			createdAt: authStack.mock.getState().dataExport.createdAt,
+		})
+
+		const exportDownloadResponse = await fetch(new URL('/api/user/export/download', authStack.appUrl), {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Cookie: sessionCookie,
+			},
+			body: JSON.stringify({
+				password: 'smoke-password',
+			}),
+		})
+		assert.equal(exportDownloadResponse.status, 200)
+		assert.match(exportDownloadResponse.headers.get('content-type') || '', /application\/zip/)
+		assert.ok(Buffer.from(await exportDownloadResponse.arrayBuffer()).length > 0)
+
+		const deletionRequestResponse = await fetch(new URL('/api/user/deletion/request', authStack.appUrl), {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Cookie: sessionCookie,
+			},
+			body: JSON.stringify({
+				password: 'smoke-password',
+			}),
+		})
+		assert.equal(deletionRequestResponse.status, 200)
+		assert.equal(authStack.mock.getState().accountDeletion.pending, true)
+
+		const deletionCancelResponse = await fetch(new URL('/api/user/deletion/cancel', authStack.appUrl), {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Cookie: sessionCookie,
+			},
+			body: JSON.stringify({
+				password: 'smoke-password',
+			}),
+		})
+		assert.equal(deletionCancelResponse.status, 200)
+		assert.equal(authStack.mock.getState().accountDeletion.pending, false)
+
+		await fetch(new URL('/api/user/deletion/request', authStack.appUrl), {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Cookie: sessionCookie,
+			},
+			body: JSON.stringify({
+				password: 'smoke-password',
+			}),
+		})
+		const deletionToken = authStack.mock.getState().accountDeletion.token
+		assert.ok(deletionToken)
+
+		const deletionConfirmResponse = await fetch(new URL('/api/user/deletion/confirm', authStack.appUrl), {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Cookie: sessionCookie,
+			},
+			body: JSON.stringify({
+				token: deletionToken,
+			}),
+		})
+		assert.equal(deletionConfirmResponse.status, 200)
+		assert.match(`${authStack.mock.getState().accountDeletion.scheduledAt || ''}`, /^\d{4}-\d{2}-\d{2}T/)
+	} finally {
+		await authStack.stop()
+	}
+})
+
+test('security proxy routes cover totp, caldav tokens, api tokens, and route permissions', async () => {
+	const authStack = await startTestStack({legacyConfigured: false})
+
+	try {
+		const sessionCookie = await loginWithPasswordSession(authStack)
+
+		const totpStatusResponse = await fetch(new URL('/api/session/totp', authStack.appUrl), {
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(totpStatusResponse.status, 200)
+		assert.deepEqual(await totpStatusResponse.json(), {
+			enabled: false,
+			secret: null,
+			url: null,
+		})
+
+		const enrollResponse = await fetch(new URL('/api/session/totp/enroll', authStack.appUrl), {
+			method: 'POST',
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(enrollResponse.status, 200)
+		const enrollPayload = await enrollResponse.json()
+		assert.equal(enrollPayload.secret, 'SMOKE-TOTP-SECRET')
+		assert.match(enrollPayload.url, /^otpauth:\/\//)
+
+		const qrResponse = await fetch(new URL('/api/session/totp/qrcode', authStack.appUrl), {
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(qrResponse.status, 200)
+		assert.match(qrResponse.headers.get('content-type') || '', /^image\//)
+
+		const enableResponse = await fetch(new URL('/api/session/totp/enable', authStack.appUrl), {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Cookie: sessionCookie,
+			},
+			body: JSON.stringify({
+				passcode: '123456',
+			}),
+		})
+		assert.equal(enableResponse.status, 200)
+		assert.equal(authStack.mock.getState().totp.enabled, true)
+
+		const disableResponse = await fetch(new URL('/api/session/totp/disable', authStack.appUrl), {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Cookie: sessionCookie,
+			},
+			body: JSON.stringify({
+				password: 'smoke-password',
+			}),
+		})
+		assert.equal(disableResponse.status, 200)
+		assert.equal(authStack.mock.getState().totp.enabled, false)
+
+		const initialCaldavResponse = await fetch(new URL('/api/session/caldav-tokens', authStack.appUrl), {
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(initialCaldavResponse.status, 200)
+		assert.deepEqual(await initialCaldavResponse.json(), {tokens: []})
+
+		const createCaldavResponse = await fetch(new URL('/api/session/caldav-tokens', authStack.appUrl), {
+			method: 'PUT',
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(createCaldavResponse.status, 200)
+		assert.equal((await createCaldavResponse.json()).token, 'caldav-token-1')
+
+		const listedCaldavResponse = await fetch(new URL('/api/session/caldav-tokens', authStack.appUrl), {
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal((await listedCaldavResponse.json()).tokens.length, 1)
+
+		const deleteCaldavResponse = await fetch(new URL('/api/session/caldav-tokens/1', authStack.appUrl), {
+			method: 'DELETE',
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(deleteCaldavResponse.status, 200)
+
+		const routesResponse = await fetch(new URL('/api/routes', authStack.appUrl), {
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(routesResponse.status, 200)
+		const routesPayload = await routesResponse.json()
+		assert.equal(typeof routesPayload.routes, 'object')
+		assert.equal(routesPayload.routes.projects.read_all.path, '/api/v1/projects')
+		assert.equal(routesPayload.routes.projects.read_all.method, 'GET')
+
+		const createApiTokenResponse = await fetch(new URL('/api/tokens', authStack.appUrl), {
+			method: 'PUT',
+			headers: {
+				'Content-Type': 'application/json',
+				Cookie: sessionCookie,
+			},
+			body: JSON.stringify({
+				title: 'Smoke API token',
+				permissions: {
+					projects: ['read_all'],
+				},
+				expires_at: '2026-12-31T23:59:59.000Z',
+			}),
+		})
+		assert.equal(createApiTokenResponse.status, 200)
+		assert.equal((await createApiTokenResponse.json()).token, 'api-token-1')
+
+		const apiTokensResponse = await fetch(new URL('/api/tokens', authStack.appUrl), {
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(apiTokensResponse.status, 200)
+		assert.equal((await apiTokensResponse.json()).tokens.length, 1)
+
+		const deleteApiTokenResponse = await fetch(new URL('/api/tokens/1', authStack.appUrl), {
+			method: 'DELETE',
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(deleteApiTokenResponse.status, 200)
+		assert.equal(authStack.mock.getState().apiTokens.length, 0)
+	} finally {
+		await authStack.stop()
+	}
+})
+
+test('share detail, reactions, and bulk task routes forward correctly', async () => {
+	const authStack = await startTestStack({legacyConfigured: false})
+
+	try {
+		const sessionCookie = await loginWithPasswordSession(authStack)
+
+		const createShareResponse = await fetch(new URL('/api/projects/2/shares', authStack.appUrl), {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Cookie: sessionCookie,
+			},
+			body: JSON.stringify({
+				name: 'Proxy share',
+				password: 'secret123',
+				permission: 1,
+			}),
+		})
+		assert.equal(createShareResponse.status, 201)
+		const createdShare = (await createShareResponse.json()).share
+		assert.ok(createdShare.id)
+
+		const shareDetailResponse = await fetch(new URL(`/api/projects/2/shares/${createdShare.id}`, authStack.appUrl), {
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(shareDetailResponse.status, 200)
+		assert.equal((await shareDetailResponse.json()).share.password_protected, true)
+
+		const initialReactionsResponse = await fetch(new URL('/api/comments/1/reactions', authStack.appUrl), {
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(initialReactionsResponse.status, 200)
+		assert.deepEqual(await initialReactionsResponse.json(), {reactions: []})
+
+		const addReactionResponse = await fetch(new URL('/api/comments/1/reactions', authStack.appUrl), {
+			method: 'PUT',
+			headers: {
+				'Content-Type': 'application/json',
+				Cookie: sessionCookie,
+			},
+			body: JSON.stringify({
+				value: '🎉',
+			}),
+		})
+		assert.equal(addReactionResponse.status, 200)
+
+		const reactionsResponse = await fetch(new URL('/api/comments/1/reactions', authStack.appUrl), {
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		const reactionsPayload = await reactionsResponse.json()
+		assert.equal(reactionsPayload.reactions.length, 1)
+		assert.equal(reactionsPayload.reactions[0].value, '🎉')
+
+		const removeReactionResponse = await fetch(new URL('/api/comments/1/reactions/delete', authStack.appUrl), {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Cookie: sessionCookie,
+			},
+			body: JSON.stringify({
+				value: '🎉',
+			}),
+		})
+		assert.equal(removeReactionResponse.status, 200)
+
+		const assigneesBulkResponse = await fetch(new URL('/api/tasks/201/assignees/bulk', authStack.appUrl), {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Cookie: sessionCookie,
+			},
+			body: JSON.stringify({
+				assignees: [
+					{id: 1, name: 'Smoke User', username: 'smoke-user', email: 'smoke@example.test'},
+					{id: 2, name: 'Alex Partner', username: 'apartner', email: 'alex@example.test'},
+				],
+			}),
+		})
+		assert.equal(assigneesBulkResponse.status, 200)
+		assert.equal((await authStack.mockApi('tasks/201')).assignees.length, 2)
+
+		const labelsBulkResponse = await fetch(new URL('/api/tasks/201/labels/bulk', authStack.appUrl), {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Cookie: sessionCookie,
+			},
+			body: JSON.stringify({
+				labels: [
+					{id: 1, title: 'Urgent'},
+					{id: 2, title: 'Personal'},
+				],
+			}),
+		})
+		assert.equal(labelsBulkResponse.status, 200)
+		assert.equal((await authStack.mockApi('tasks/201')).labels.length, 2)
+	} finally {
+		await authStack.stop()
+	}
+})
+
+test('admin dump, restore, migration, and repair routes work with the mock bridge', async () => {
+	const bridgeStack = await startTestStack({
+		legacyConfigured: false,
+		mockAdminBridge: true,
+	})
+
+	try {
+		const sessionCookie = await loginWithPasswordSession(bridgeStack)
+
+		const migrationsResponse = await fetch(new URL('/api/admin/migrate/list', bridgeStack.appUrl), {
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(migrationsResponse.status, 200)
+		assert.equal((await migrationsResponse.json()).migrations.length, 2)
+
+		const migrateResponse = await fetch(new URL('/api/admin/migrate', bridgeStack.appUrl), {
+			method: 'POST',
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(migrateResponse.status, 200)
+		assert.ok(bridgeStack.adminBridge.getState().migrations.every(migration => migration.applied === true))
+
+		const rollbackResponse = await fetch(new URL('/api/admin/migrate/rollback', bridgeStack.appUrl), {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Cookie: sessionCookie,
+			},
+			body: JSON.stringify({
+				name: '002_add_tokens',
+			}),
+		})
+		assert.equal(rollbackResponse.status, 200)
+		assert.equal(
+			bridgeStack.adminBridge.getState().migrations.find(migration => migration.name === '002_add_tokens')?.applied,
+			false,
+		)
+
+		const dumpResponse = await fetch(new URL('/api/admin/dump', bridgeStack.appUrl), {
+			method: 'POST',
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(dumpResponse.status, 200)
+		assert.match(dumpResponse.headers.get('content-type') || '', /application\/zip/)
+		assert.match(dumpResponse.headers.get('content-disposition') || '', /vikunja-dump-smoke\.zip/)
+		assert.ok(Buffer.from(await dumpResponse.arrayBuffer()).length > 0)
+
+		const restoreResponse = await fetch(new URL('/api/admin/restore', bridgeStack.appUrl), {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/octet-stream',
+				Cookie: sessionCookie,
+			},
+			body: Buffer.from('mock-restore-zip', 'utf8'),
+		})
+		assert.equal(restoreResponse.status, 200)
+		assert.ok(bridgeStack.adminBridge.getState().restore.lastUploadedBase64)
+
+		const repairResponse = await fetch(new URL('/api/admin/repair/projects', bridgeStack.appUrl), {
+			method: 'POST',
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(repairResponse.status, 200)
+		assert.equal((await repairResponse.json()).success, true)
+	} finally {
+		await bridgeStack.stop()
 	}
 })

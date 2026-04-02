@@ -179,7 +179,7 @@ export default function ProjectTasksScreen({
 	const showFocusedTask = Boolean(focusedTaskId && focusedTaskSourceScreen === 'tasks')
 	const sharedRootProjectId = Number(account?.linkShareProjectId || 0)
 	const sharedProjectPermission = Number((selectedProject as unknown as {max_permission?: number | null})?.max_permission || 0)
-	const canUseSharedComposer = sharedProjectPermission > 1 && !offlineReadOnlyMode
+	const canUseSharedComposer = sharedProjectPermission > 1
 	const sharedPermissionLabel = getSharePermissionLabel(sharedProjectPermission)
 	const showSharedBackButton = Boolean(
 		isSharedLinkPresentation &&
@@ -600,14 +600,12 @@ export default function ProjectTasksScreen({
 						</div>
 					) : panelAnchor ? (
 						<div className="inline-menu topbar-action-menu" data-menu-root="true">
-							{!offlineReadOnlyMode ? (
-								<button className="menu-item" data-action="open-root-composer" data-project-id={selectedProject.id} type="button" onClick={() => {
-									setPanelAnchor(null)
-									openRootComposer({placement: rootComposerPlacement})
-								}}>
-									Add task
-								</button>
-							) : null}
+							<button className="menu-item" data-action="open-root-composer" data-project-id={selectedProject.id} type="button" onClick={() => {
+								setPanelAnchor(null)
+								openRootComposer({placement: rootComposerPlacement})
+							}}>
+								Add task
+							</button>
 							<button
 								className={`menu-item ${showingCompleted ? 'is-active' : ''}`.trim()}
 								data-action="toggle-show-completed"
@@ -639,14 +637,12 @@ export default function ProjectTasksScreen({
 							}}>
 								Share project
 							</button>
-							{!offlineReadOnlyMode ? (
-								<button className="menu-item" data-action="open-project-composer" data-parent-project-id={selectedProject.id} type="button" onClick={() => {
-									setPanelAnchor(null)
-									openProjectComposer(selectedProject.id)
-								}}>
-									Add sub-project
-								</button>
-							) : null}
+							<button className="menu-item" data-action="open-project-composer" data-parent-project-id={selectedProject.id} type="button" onClick={() => {
+								setPanelAnchor(null)
+								openProjectComposer(selectedProject.id)
+							}}>
+								Add sub-project
+							</button>
 							<button className="menu-item" data-action="expand-all-projects" type="button" onClick={() => {
 								setPanelAnchor(null)
 								expandAllProjects()

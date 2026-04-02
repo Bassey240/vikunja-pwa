@@ -23,6 +23,7 @@ test.beforeEach(async ({page}) => {
 })
 
 test('registration flow creates an account and signs in', async ({page}) => {
+	await expect(page.getByRole('button', {name: 'Create account'})).toBeVisible()
 	await page.getByRole('button', {name: 'Create account'}).click()
 	await expect(page.locator('[data-form="account-register"]')).toBeVisible()
 
@@ -65,6 +66,105 @@ test('forgot-password and reset-password flows accept a new password', async ({p
 	await page.locator('[data-account-field="password"]').fill('smoke-password-2')
 	await page.getByRole('button', {name: 'Connect'}).click()
 	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
+})
+
+test('password login prompts for a TOTP code when the account has 2FA enabled', async ({browser}) => {
+	const totpStack = await startTestStack({
+		legacyConfigured: false,
+		mockVikunjaOptions: {
+			totpState: {
+				enabled: true,
+			},
+		},
+	})
+
+	const page = await browser.newPage()
+
+	try {
+		await page.setViewportSize({width: 900, height: 900})
+		await page.goto(totpStack.appUrl)
+		await expect(page.getByRole('heading', {name: 'Connect to your Vikunja server'})).toBeVisible()
+		await expect(page.getByRole('button', {name: 'Dark'})).toHaveCount(0)
+		await expect(page.getByRole('button', {name: 'Light'})).toHaveCount(0)
+		await expect(page.getByRole('button', {name: 'Continue with server fallback'})).toHaveCount(0)
+		await page.locator('[data-account-field="baseUrl"]').fill(`${totpStack.mock.origin}/api/v1`)
+		await page.locator('[data-account-field="username"]').fill('smoke-user')
+		await page.locator('[data-account-field="password"]').fill('smoke-password')
+		await page.getByRole('button', {name: 'Connect'}).click()
+
+		await expect(page.getByText('This app is an independent client and is not affiliated with the official Vikunja project.')).toHaveCount(0)
+		await expect(page.locator('[data-form="account-login-totp"]')).toBeVisible()
+		await expect(page.getByText('Enter the code from your authenticator app for')).toHaveCount(0)
+		await page.locator('[data-account-field="totpPasscode"]').fill('000000')
+		await page.getByRole('button', {name: 'Verify and Sign In'}).click()
+		await expect(page.getByText('Invalid totp passcode.')).toBeVisible()
+		await page.locator('[data-account-field="totpPasscode"]').fill('123456')
+		await page.getByRole('button', {name: 'Verify and Sign In'}).click()
+		await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
+	} finally {
+		await page.close()
+		await totpStack.stop()
+	}
+})
+
+test('registration link stays hidden when the server disables self-registration', async ({browser}) => {
+	const lockedStack = await startTestStack({
+		legacyConfigured: false,
+		mockVikunjaOptions: {
+			registrationEnabled: false,
+		},
+	})
+
+	const page = await browser.newPage()
+
+	try {
+		await page.setViewportSize({width: 900, height: 900})
+		await page.goto(lockedStack.appUrl)
+		await expect(page.getByRole('heading', {name: 'Connect to your Vikunja server'})).toBeVisible()
+		await page.locator('[data-account-field="baseUrl"]').fill(`${lockedStack.mock.origin}/api/v1`)
+		await expect(page.getByText('This Vikunja server does not allow password account creation from this screen.')).toBeVisible()
+		await expect(page.getByRole('button', {name: 'Create account'})).toHaveCount(0)
+		await expect(page.getByRole('button', {name: 'Forgot password?'})).toBeVisible()
+	} finally {
+		await page.close()
+		await lockedStack.stop()
+	}
+})
+
+test('instance info disables local password actions and exposes configured OIDC providers', async ({browser}) => {
+	const oidcStack = await startTestStack({
+		legacyConfigured: false,
+		mockVikunjaOptions: {
+			localAuthEnabled: false,
+			registrationEnabled: false,
+			oidcProviders: [
+				{
+					name: 'Acme SSO',
+					key: 'acme',
+					auth_url: 'https://sso.example.test/login',
+				},
+			],
+		},
+	})
+
+	const page = await browser.newPage()
+
+	try {
+		await page.setViewportSize({width: 900, height: 900})
+		await page.goto(oidcStack.appUrl)
+		await expect(page.getByRole('heading', {name: 'Connect to your Vikunja server'})).toBeVisible()
+		await page.locator('[data-account-field="baseUrl"]').fill(`${oidcStack.mock.origin}/api/v1`)
+		await page.locator('[data-account-field="username"]').fill('smoke-user')
+		await page.locator('[data-account-field="password"]').fill('smoke-password')
+		await expect(page.getByText('Local username/password sign-in is disabled on this Vikunja instance.')).toBeVisible()
+		await expect(page.getByRole('button', {name: 'Sign in with Acme SSO'})).toBeVisible()
+		await expect(page.getByRole('button', {name: 'Create account'})).toHaveCount(0)
+		await expect(page.getByRole('button', {name: 'Forgot password?'})).toHaveCount(0)
+		await expect(page.getByRole('button', {name: 'Connect'})).toBeDisabled()
+	} finally {
+		await page.close()
+		await oidcStack.stop()
+	}
 })
 
 test('reset-password screen shows an invalid-link warning without params', async ({page}) => {

@@ -1,14 +1,16 @@
-import {api} from '@/api'
+import {api, type ApiError} from '@/api'
 import {defaultProjectFilters, defaultTaskFilters} from '@/hooks/useFilters'
 import type {
 	Account,
 	AccountForm,
+	AuthServerInfo,
 	AuthMode,
 	ServerConfig,
 	Session,
 	UserProfile,
+	VikunjaInfo,
 } from '@/types'
-import {formatError} from '@/utils/formatting'
+import {formatError, normalizeVikunjaDateValue} from '@/utils/formatting'
 import {storageKeys} from '@/storageKeys'
 import {clearLegacyUiState, loadJson, saveJson, saveNumber} from '@/utils/storage'
 import type {StateCreator} from 'zustand'
@@ -47,11 +49,45 @@ interface ResetPasswordForm {
 	confirmPassword: string
 }
 
+interface ChangeEmailForm {
+	password: string
+	newEmail: string
+}
+
+interface DataExportStatus {
+	status: 'pending' | 'ready' | null
+	createdAt: string | null
+}
+
+interface AccountDeletionForm {
+	password: string
+	confirmText: string
+}
+
+function normalizeDeletionScheduledAtValue(value: unknown) {
+	return typeof value === 'string' ? normalizeVikunjaDateValue(value) || null : null
+}
+
+function normalizeAccount(account: Account) {
+	if (!account.user) {
+		return account
+	}
+
+	return {
+		...account,
+		user: {
+			...account.user,
+			deletionScheduledAt: normalizeDeletionScheduledAtValue(account.user.deletionScheduledAt),
+		},
+	}
+}
+
 const defaultAccountForm: AccountForm = {
 	authMode: 'password',
 	baseUrl: '',
 	username: '',
 	password: '',
+	totpPasscode: '',
 	apiToken: '',
 }
 
@@ -59,6 +95,11 @@ const defaultChangePasswordForm: ChangePasswordForm = {
 	oldPassword: '',
 	newPassword: '',
 	confirmPassword: '',
+}
+
+const defaultChangeEmailForm: ChangeEmailForm = {
+	password: '',
+	newEmail: '',
 }
 
 const defaultForgotPasswordForm: ForgotPasswordForm = {
@@ -70,6 +111,11 @@ const defaultResetPasswordForm: ResetPasswordForm = {
 	token: '',
 	password: '',
 	confirmPassword: '',
+}
+
+const defaultAccountDeletionForm: AccountDeletionForm = {
+	password: '',
+	confirmText: '',
 }
 
 function buildRegistrationForm(baseUrl = ''): RegistrationForm {
@@ -154,16 +200,19 @@ function buildPreservedAccountForm(currentForm: AccountForm, account: Account | 
 	}
 }
 
-function persistOfflineAuthSnapshot(state: AppStore) {
-	mergeOfflineSnapshot({
+async function persistOfflineAuthSnapshot(state: AppStore) {
+	await mergeOfflineSnapshot({
 		serverConfig: state.serverConfig,
 		account: state.account,
 		defaultProjectId: state.defaultProjectId,
 	})
 }
 
-function restoreOfflineSnapshotState(get: () => AppStore, set: Parameters<StateCreator<AppStore, [], [], AuthSlice>>[0]) {
-	const snapshot = loadOfflineSnapshot()
+async function restoreOfflineSnapshotState(
+	get: () => AppStore,
+	set: Parameters<StateCreator<AppStore, [], [], AuthSlice>>[0],
+) {
+	const snapshot = await loadOfflineSnapshot()
 	if (!snapshot?.account) {
 		return false
 	}
@@ -207,21 +256,21 @@ function restoreOfflineSnapshotState(get: () => AppStore, set: Parameters<StateC
 		loadingInbox: false,
 		loadingUpcoming: false,
 		loadingNotifications: false,
-		accountForm: {
-			...buildPreservedAccountForm(state.accountForm, snapshot.account),
-			baseUrl:
-				snapshot.account.baseUrl ||
-				snapshot.serverConfig?.defaultBaseUrl ||
-				state.serverConfig?.defaultBaseUrl ||
-				state.accountForm.baseUrl,
+			accountForm: {
+				...buildPreservedAccountForm(state.accountForm, snapshot.account),
+				baseUrl:
+					snapshot.account?.baseUrl ||
+					snapshot.serverConfig?.defaultBaseUrl ||
+					state.serverConfig?.defaultBaseUrl ||
+					state.accountForm.baseUrl,
 		},
 	}))
 
 	return get().connected
 }
 
-function getOfflineFallbackState(state: AppStore) {
-	const snapshot = loadOfflineSnapshot()
+async function getOfflineFallbackState(state: AppStore) {
+	const snapshot = await loadOfflineSnapshot()
 	if (!snapshot?.account) {
 		return null
 	}
@@ -274,6 +323,14 @@ function getOfflineFallbackState(state: AppStore) {
 	}
 }
 
+function isTotpLoginChallenge(error: ApiError | null | undefined) {
+	const message = formatError(error).toLowerCase()
+	const detailsMessage = typeof error?.details === 'object' && error.details && 'message' in error.details
+		? `${(error.details as {message?: string}).message || ''}`.toLowerCase()
+		: ''
+	return message.includes('totp') || detailsMessage.includes('totp')
+}
+
 export interface AuthSlice {
 	initialized: boolean
 	initializing: boolean
@@ -285,16 +342,36 @@ export interface AuthSlice {
 	defaultProjectId: number | null
 	settingsSubmitting: boolean
 	settingsNotice: string | null
+	timezoneNotice: string | null
+	changeEmailNotice: string | null
+	dataExportNotice: string | null
+	accountDeletionNotice: string | null
 	accountSessionsLoading: boolean
 	accountSessionsLoaded: boolean
 	accountSessions: Session[]
 	passwordChangeSubmitting: boolean
 	changePasswordForm: ChangePasswordForm
+	changeEmailForm: ChangeEmailForm
+	changeEmailSubmitting: boolean
+	dataExportStatus: DataExportStatus | null
+	dataExportStatusLoading: boolean
+	dataExportRequesting: boolean
+	dataExportDownloading: boolean
+	accountDeletionForm: AccountDeletionForm
+	accountDeletionRequesting: boolean
+	accountDeletionPending: boolean
+	accountDeletionConfirming: boolean
+	accountDeletionCancelling: boolean
 	timezoneOptionsLoading: boolean
 	timezoneOptionsLoaded: boolean
 	timezoneOptions: string[]
 	timezoneSubmitting: boolean
 	accountForm: AccountForm
+	totpLoginRequired: boolean
+	authServerInfo: AuthServerInfo | null
+	authServerInfoLoading: boolean
+	vikunjaInfo: VikunjaInfo | null
+	vikunjaInfoLoading: boolean
 	registrationForm: RegistrationForm
 	registrationSubmitting: boolean
 	registrationError: string | null
@@ -306,7 +383,7 @@ export interface AuthSlice {
 	resetPasswordDone: boolean
 	resetPasswordError: string | null
 	init: () => Promise<void>
-	enterOfflineReadOnlyMode: () => void
+	enterOfflineReadOnlyMode: () => Promise<void>
 	loadAccountStatus: () => Promise<void>
 	resetConnectedData: (options?: {clearOfflineSnapshot?: boolean}) => void
 	loadCurrentUser: () => Promise<void>
@@ -319,10 +396,23 @@ export interface AuthSlice {
 	updateTimezone: (timezone: string) => Promise<boolean>
 	setChangePasswordField: <K extends keyof ChangePasswordForm>(field: K, value: ChangePasswordForm[K]) => void
 	changePassword: () => Promise<boolean>
+	setChangeEmailField: <K extends keyof ChangeEmailForm>(field: K, value: ChangeEmailForm[K]) => void
+	changeEmail: () => Promise<boolean>
+	checkDataExportStatus: () => Promise<void>
+	requestDataExport: (password: string) => Promise<boolean>
+	downloadDataExport: (password: string) => Promise<boolean>
+	setAccountDeletionField: <K extends keyof AccountDeletionForm>(field: K, value: AccountDeletionForm[K]) => void
+	requestAccountDeletion: () => Promise<boolean>
+	confirmAccountDeletion: (token: string) => Promise<boolean>
+	cancelAccountDeletion: () => Promise<boolean>
 	login: () => Promise<boolean>
 	refreshAppData: () => Promise<void>
 	setAccountField: <K extends keyof AccountForm>(field: K, value: AccountForm[K]) => void
 	setAccountAuthMode: (mode: AuthMode) => void
+	cancelTotpLoginChallenge: () => void
+	loadAuthServerInfo: (baseUrl: string) => Promise<void>
+	loadVikunjaInfo: () => Promise<void>
+	probeInstanceInfo: (baseUrl: string) => Promise<VikunjaInfo | null>
 	setRegistrationField: <K extends keyof RegistrationForm>(field: K, value: RegistrationForm[K]) => void
 	register: () => Promise<boolean>
 	setForgotPasswordEmail: (email: string) => void
@@ -343,16 +433,36 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 	defaultProjectId: null,
 	settingsSubmitting: false,
 	settingsNotice: null,
+	timezoneNotice: null,
+	changeEmailNotice: null,
+	dataExportNotice: null,
+	accountDeletionNotice: null,
 	accountSessionsLoading: false,
 	accountSessionsLoaded: false,
 	accountSessions: [],
 	passwordChangeSubmitting: false,
 	changePasswordForm: defaultChangePasswordForm,
+	changeEmailForm: defaultChangeEmailForm,
+	changeEmailSubmitting: false,
+	dataExportStatus: null,
+	dataExportStatusLoading: false,
+	dataExportRequesting: false,
+	dataExportDownloading: false,
+	accountDeletionForm: defaultAccountDeletionForm,
+	accountDeletionRequesting: false,
+	accountDeletionPending: false,
+	accountDeletionConfirming: false,
+	accountDeletionCancelling: false,
 	timezoneOptionsLoading: false,
 	timezoneOptionsLoaded: false,
 	timezoneOptions: [],
 	timezoneSubmitting: false,
 	accountForm: buildAccountForm(),
+	totpLoginRequired: false,
+	authServerInfo: null,
+	authServerInfoLoading: false,
+	vikunjaInfo: null,
+	vikunjaInfoLoading: false,
 	registrationForm: buildRegistrationForm(),
 	registrationSubmitting: false,
 	registrationError: null,
@@ -379,7 +489,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 				},
 			}))
 			persistAccountForm(get().accountForm)
-			mergeOfflineSnapshot({serverConfig: config})
+			await mergeOfflineSnapshot({serverConfig: config})
 
 			await get().loadAccountStatus()
 			if (get().connected) {
@@ -390,6 +500,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 				if (!get().connected) {
 					return
 				}
+				void get().loadVikunjaInfo()
 				if (!get().account?.linkShareAuth) {
 					await get().loadProjects()
 					void get().ensureProjectFilterTasksLoaded()
@@ -400,7 +511,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 				}
 			}
 		} catch (error) {
-			if (!get().isOnline && restoreOfflineSnapshotState(get, set)) {
+			if (!get().isOnline && await restoreOfflineSnapshotState(get, set)) {
 				set({error: null})
 			} else {
 				set({error: formatError(error as Error)})
@@ -410,13 +521,14 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 		}
 	},
 
-	enterOfflineReadOnlyMode() {
+	async enterOfflineReadOnlyMode() {
 		if (get().offlineReadOnlyMode) {
 			return
 		}
 
+		const offlineFallbackState = await getOfflineFallbackState(get())
 		set(state => ({
-			...(getOfflineFallbackState(state) || {}),
+			...(offlineFallbackState || {}),
 			offlineReadOnlyMode: true,
 			error: null,
 			accountLoading: false,
@@ -427,7 +539,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 			loadingInbox: false,
 			loadingUpcoming: false,
 			loadingNotifications: false,
-			settingsNotice: 'Offline mode active. Cached data is available in read-only mode until the connection returns.',
+			settingsNotice: 'Offline mode active. Cached data is available locally until the connection returns.',
 		}))
 	},
 
@@ -448,20 +560,21 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 				return
 			}
 
-			const account = payload.account
+			const account = normalizeAccount(payload.account)
 
 			set(state => ({
 				connected: true,
 				offlineReadOnlyMode: false,
 				account,
+				accountDeletionPending: Boolean(account.user?.deletionScheduledAt),
 				accountForm: buildPreservedAccountForm(state.accountForm, account),
 				accountSessions: account.sessionsSupported ? state.accountSessions : [],
 				accountSessionsLoaded: account.sessionsSupported ? state.accountSessionsLoaded : false,
 			}))
 			persistAccountForm(get().accountForm)
-			persistOfflineAuthSnapshot(get())
+			void persistOfflineAuthSnapshot(get())
 		} catch (error) {
-			if (!get().isOnline && restoreOfflineSnapshotState(get, set)) {
+			if (!get().isOnline && await restoreOfflineSnapshotState(get, set)) {
 				set({error: null})
 			} else {
 				set({error: formatError(error as Error)})
@@ -475,27 +588,45 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 	resetConnectedData({clearOfflineSnapshot: shouldClearOfflineSnapshot = false} = {}) {
 		saveNumber(storageKeys.selectedProjectId, null)
 		if (shouldClearOfflineSnapshot) {
-			clearOfflineSnapshot()
+			void clearOfflineSnapshot()
 		}
 		get().clearPendingMutation()
 		get().resetUsersState()
 		get().resetTeamsState()
 		get().resetProjectSharingState()
+		get().resetSecurityState()
 		get().resetSubscriptionsState()
 		set(state => ({
 			connected: false,
 			offlineReadOnlyMode: false,
 			account: null,
 			defaultProjectId: null,
-				accountSessionsLoading: false,
-				accountSessionsLoaded: false,
-				accountSessions: [],
+			accountSessionsLoading: false,
+			accountSessionsLoaded: false,
+			accountSessions: [],
 				passwordChangeSubmitting: false,
 				changePasswordForm: defaultChangePasswordForm,
+				changeEmailForm: defaultChangeEmailForm,
+				changeEmailSubmitting: false,
+				dataExportStatus: null,
+				dataExportStatusLoading: false,
+				dataExportRequesting: false,
+				dataExportDownloading: false,
+				changeEmailNotice: null,
+				dataExportNotice: null,
+				accountDeletionForm: defaultAccountDeletionForm,
+				accountDeletionNotice: null,
+				accountDeletionRequesting: false,
+				accountDeletionPending: false,
+				accountDeletionConfirming: false,
+				accountDeletionCancelling: false,
 				timezoneOptionsLoading: false,
 				timezoneOptionsLoaded: false,
 				timezoneOptions: [],
 				timezoneSubmitting: false,
+				timezoneNotice: null,
+				vikunjaInfo: null,
+				vikunjaInfoLoading: false,
 				openMenu: null,
 			labels: [],
 			labelsLoaded: false,
@@ -537,6 +668,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 			taskDetailOpen: false,
 			taskDetailLoading: false,
 			taskDetail: null,
+			taskReactions: {},
 			focusedTaskId: null,
 			focusedTaskProjectId: null,
 			focusedTaskSourceScreen: null,
@@ -577,9 +709,11 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 			bulkTaskSubmitting: false,
 			bulkSelectedTaskIds: new Set(),
 			pendingUndoMutation: null,
+			totpLoginRequired: false,
 			accountForm: {
 				...state.accountForm,
 				password: '',
+				totpPasscode: '',
 				apiToken: '',
 			},
 			registrationForm: buildRegistrationForm(state.accountForm.baseUrl || state.serverConfig?.defaultBaseUrl || ''),
@@ -603,8 +737,29 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 
 		try {
 			const user = await api<UserProfile>('/api/user')
+			const deletionScheduledAt = normalizeDeletionScheduledAtValue(
+				typeof user.deletionScheduledAt === 'string'
+					? user.deletionScheduledAt
+					: typeof (user as UserProfile & {deletion_scheduled_at?: unknown}).deletion_scheduled_at === 'string'
+						? `${(user as UserProfile & {deletion_scheduled_at?: unknown}).deletion_scheduled_at || ''}`
+						: null,
+			)
+			const isLocalUser =
+				typeof user.isLocalUser === 'boolean'
+					? user.isLocalUser
+					: typeof (user as UserProfile & {is_local_user?: unknown}).is_local_user === 'boolean'
+						? Boolean((user as UserProfile & {is_local_user?: unknown}).is_local_user)
+						: null
+			const authProvider =
+				typeof user.authProvider === 'string'
+					? user.authProvider
+					: typeof (user as UserProfile & {auth_provider?: unknown}).auth_provider === 'string'
+						? `${(user as UserProfile & {auth_provider?: unknown}).auth_provider || ''}`.trim() || null
+						: null
 			set(state => ({
+				error: null,
 				defaultProjectId: user.settings?.default_project_id || null,
+				accountDeletionPending: Boolean(deletionScheduledAt),
 				account: state.account
 					? {
 						...state.account,
@@ -613,15 +768,29 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 							name: user.name || '',
 							username: user.username || '',
 							email: user.email || state.account?.user?.email || '',
+							deletionScheduledAt,
+							isLocalUser,
+							authProvider,
 							settings: user.settings || {},
 						},
 					}
 					: null,
 			}))
-			persistOfflineAuthSnapshot(get())
+			void persistOfflineAuthSnapshot(get())
 		} catch (error) {
 			const authError = error as Error & {statusCode?: number}
 			if (authError.statusCode === 401) {
+				try {
+					await get().loadAccountStatus()
+				} catch {
+					// Fall through to the expired-session state below.
+				}
+
+				if (get().connected) {
+					set({error: null})
+					return
+				}
+
 				get().resetConnectedData({clearOfflineSnapshot: true})
 				set({error: 'Your Vikunja session expired. Sign in again.'})
 				return
@@ -780,7 +949,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 			return false
 		}
 
-		set({timezoneSubmitting: true, error: null, settingsNotice: null})
+		set({timezoneSubmitting: true, error: null, settingsNotice: null, timezoneNotice: null})
 
 		try {
 			await api<{ok: boolean; user?: UserProfile}>('/api/session/settings/general', {
@@ -791,7 +960,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 				},
 			})
 			await get().loadCurrentUser()
-			set({settingsNotice: 'Timezone updated.'})
+			set({settingsNotice: null, timezoneNotice: 'Timezone updated.'})
 			return true
 		} catch (error) {
 			set({error: formatError(error as Error)})
@@ -858,6 +1027,271 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 		}
 	},
 
+	setChangeEmailField(field, value) {
+		set(state => ({
+			changeEmailForm: {
+				...state.changeEmailForm,
+				[field]: value,
+			},
+		}))
+	},
+
+	async changeEmail() {
+		if (get().changeEmailSubmitting) {
+			return false
+		}
+
+		const {password, newEmail} = get().changeEmailForm
+		if (!password || !newEmail.trim()) {
+			set({error: 'Password and new email are required.'})
+			return false
+		}
+
+		set({changeEmailSubmitting: true, error: null, settingsNotice: null, changeEmailNotice: null})
+
+		try {
+			await api('/api/session/settings/email', {
+				method: 'POST',
+				body: {
+					password,
+					newEmail: newEmail.trim(),
+				},
+			})
+			set({
+				changeEmailForm: defaultChangeEmailForm,
+				settingsNotice: null,
+				changeEmailNotice: 'Email update requested. Check your inbox for a confirmation link.',
+			})
+			return true
+		} catch (error) {
+			set({error: formatError(error as Error)})
+			return false
+		} finally {
+			set({changeEmailSubmitting: false})
+		}
+	},
+
+	async checkDataExportStatus() {
+		if (!get().connected) {
+			return
+		}
+
+		set({dataExportStatusLoading: true})
+
+		try {
+			const status = await api<Record<string, unknown>>('/api/user/export')
+			set({
+				dataExportStatus: {
+					status:
+						status.status === 'pending' || status.status === 'ready'
+							? status.status
+							: null,
+					createdAt:
+						typeof status.createdAt === 'string'
+							? status.createdAt
+							: typeof status.created === 'string'
+								? status.created
+								: null,
+				},
+			})
+		} catch {
+			// Export status is informational only.
+		} finally {
+			set({dataExportStatusLoading: false})
+		}
+	},
+
+	async requestDataExport(password) {
+		if (get().dataExportRequesting) {
+			return false
+		}
+
+		const nextPassword = `${password || ''}`
+		if (!nextPassword) {
+			set({error: 'Password is required.'})
+			return false
+		}
+
+		set({dataExportRequesting: true, error: null, settingsNotice: null, dataExportNotice: null})
+
+		try {
+			await api('/api/user/export/request', {
+				method: 'POST',
+				body: {password: nextPassword},
+			})
+			set({
+				settingsNotice: null,
+				dataExportNotice: 'Export requested. Vikunja will email you when it is ready to download.',
+			})
+			await get().checkDataExportStatus()
+			return true
+		} catch (error) {
+			set({error: formatError(error as Error)})
+			return false
+		} finally {
+			set({dataExportRequesting: false})
+		}
+	},
+
+	async downloadDataExport(password) {
+		if (get().dataExportDownloading) {
+			return false
+		}
+
+		const nextPassword = `${password || ''}`
+		if (!nextPassword) {
+			set({error: 'Password is required.'})
+			return false
+		}
+
+		set({dataExportDownloading: true, error: null})
+
+		try {
+			const response = await fetch('/api/user/export/download', {
+				method: 'POST',
+				credentials: 'same-origin',
+				headers: {
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify({password: nextPassword}),
+			})
+			if (!response.ok) {
+				const payload = await response.json().catch(() => ({}))
+				throw new Error((payload as {error?: string}).error || 'Download failed.')
+			}
+
+			const blob = await response.blob()
+			const objectUrl = URL.createObjectURL(blob)
+			const anchor = document.createElement('a')
+			anchor.href = objectUrl
+			anchor.download = 'vikunja-export.zip'
+			document.body.appendChild(anchor)
+			anchor.click()
+			document.body.removeChild(anchor)
+			URL.revokeObjectURL(objectUrl)
+			return true
+		} catch (error) {
+			set({error: formatError(error as Error)})
+			return false
+		} finally {
+			set({dataExportDownloading: false})
+		}
+	},
+
+	setAccountDeletionField(field, value) {
+		set(state => ({
+			accountDeletionForm: {
+				...state.accountDeletionForm,
+				[field]: value,
+			},
+		}))
+	},
+
+	async requestAccountDeletion() {
+		if (get().accountDeletionRequesting) {
+			return false
+		}
+
+		const {password, confirmText} = get().accountDeletionForm
+		const isLocalUser = get().account?.user?.isLocalUser !== false
+		if (confirmText !== 'DELETE') {
+			set({error: 'Type DELETE to confirm.'})
+			return false
+		}
+		if (isLocalUser && !password) {
+			set({error: 'Password is required.'})
+			return false
+		}
+
+		set({accountDeletionRequesting: true, error: null, settingsNotice: null, accountDeletionNotice: null})
+
+		try {
+			const body = isLocalUser ? {password} : {}
+			await api('/api/user/deletion/request', {
+				method: 'POST',
+				body,
+			})
+			set({
+				accountDeletionForm: defaultAccountDeletionForm,
+				settingsNotice: null,
+				accountDeletionNotice:
+					'Deletion requested. Check your email for the confirmation link. Vikunja only schedules the deletion after that link is opened.',
+			})
+			return true
+		} catch (error) {
+			set({error: formatError(error as Error)})
+			return false
+		} finally {
+			set({accountDeletionRequesting: false})
+		}
+	},
+
+	async confirmAccountDeletion(token) {
+		if (get().accountDeletionConfirming) {
+			return false
+		}
+
+		const nextToken = `${token || ''}`.trim()
+		if (!nextToken) {
+			set({error: 'Token is required.'})
+			return false
+		}
+
+		set({accountDeletionConfirming: true, error: null, settingsNotice: null, accountDeletionNotice: null})
+
+		try {
+			await api('/api/user/deletion/confirm', {
+				method: 'POST',
+				body: {token: nextToken},
+			})
+			await get().loadCurrentUser()
+			set({
+				settingsNotice: null,
+				accountDeletionNotice: 'Deletion confirmed. Vikunja will delete your account in three days unless you cancel it first.',
+			})
+			return true
+		} catch (error) {
+			set({error: formatError(error as Error)})
+			return false
+		} finally {
+			set({accountDeletionConfirming: false})
+		}
+	},
+
+	async cancelAccountDeletion() {
+		if (get().accountDeletionCancelling) {
+			return false
+		}
+
+		const password = `${get().accountDeletionForm.password || ''}`
+		const isLocalUser = get().account?.user?.isLocalUser !== false
+		if (isLocalUser && !password) {
+			set({error: 'Password is required to cancel deletion.'})
+			return false
+		}
+
+		set({accountDeletionCancelling: true, error: null, settingsNotice: null, accountDeletionNotice: null})
+
+		try {
+			await api('/api/user/deletion/cancel', {
+				method: 'POST',
+				body: isLocalUser ? {password} : {},
+			})
+			await get().loadCurrentUser()
+			set({
+				accountDeletionForm: defaultAccountDeletionForm,
+				settingsNotice: null,
+				accountDeletionNotice: 'Account deletion cancelled.',
+			})
+			return true
+		} catch (error) {
+			set({error: formatError(error as Error)})
+			return false
+		} finally {
+			set({accountDeletionCancelling: false})
+		}
+	},
+
 	async login() {
 		if (get().settingsSubmitting) {
 			return false
@@ -869,11 +1303,11 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 			})
 			return false
 		}
+		const {accountForm} = get()
 
 		set({settingsSubmitting: true, error: null, settingsNotice: null})
 
 		try {
-			const {accountForm} = get()
 			const payload: Record<string, string> = {
 				authMode: accountForm.authMode,
 				baseUrl: accountForm.baseUrl.trim(),
@@ -882,6 +1316,9 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 			if (accountForm.authMode === 'password') {
 				payload.username = accountForm.username.trim()
 				payload.password = accountForm.password
+				if (accountForm.totpPasscode.trim()) {
+					payload.totpPasscode = accountForm.totpPasscode.trim()
+				}
 			} else {
 				payload.apiToken = accountForm.apiToken.trim()
 			}
@@ -892,9 +1329,11 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 			})
 
 			set(state => ({
+				totpLoginRequired: false,
 				accountForm: {
 					...state.accountForm,
 					password: '',
+					totpPasscode: '',
 					apiToken: '',
 				},
 			}))
@@ -906,6 +1345,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 			}
 
 			await get().loadCurrentUser()
+			void get().loadVikunjaInfo()
 			if (!get().account?.linkShareAuth) {
 				await get().loadProjects()
 				void get().ensureProjectFilterTasksLoaded()
@@ -917,7 +1357,16 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 			set({offlineReadOnlyMode: false})
 			return true
 		} catch (error) {
-			set({error: formatError(error as Error)})
+			const authError = error as ApiError
+			if (accountForm.authMode === 'password' && isTotpLoginChallenge(authError)) {
+				const hasEnteredPasscode = Boolean(accountForm.totpPasscode.trim())
+				set({
+					totpLoginRequired: true,
+					error: hasEnteredPasscode ? formatError(authError) : null,
+				})
+				return false
+			}
+			set({error: formatError(authError), totpLoginRequired: false})
 			return false
 		} finally {
 			set({settingsSubmitting: false})
@@ -945,10 +1394,15 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 		set(state => {
 			const accountForm = {
 				...state.accountForm,
+				...(field === 'totpPasscode' ? {} : {totpPasscode: ''}),
 				[field]: value,
 			}
 			persistAccountForm(accountForm)
-			return {accountForm}
+			return {
+				accountForm,
+				error: null,
+				totpLoginRequired: field === 'totpPasscode' ? state.totpLoginRequired : false,
+			}
 		})
 	},
 
@@ -957,10 +1411,91 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 			const accountForm = {
 				...state.accountForm,
 				authMode: mode,
+				totpPasscode: '',
 			}
 			persistAccountForm(accountForm)
-			return {accountForm}
+			return {
+				accountForm,
+				totpLoginRequired: false,
+			}
 		})
+	},
+
+	cancelTotpLoginChallenge() {
+		set(state => ({
+			totpLoginRequired: false,
+			error: null,
+			accountForm: {
+				...state.accountForm,
+				password: '',
+				totpPasscode: '',
+			},
+		}))
+		persistAccountForm(get().accountForm)
+	},
+
+	async loadAuthServerInfo(baseUrl) {
+		const requestedBaseUrl = baseUrl.trim()
+		if (!requestedBaseUrl || !get().isOnline) {
+			set({
+				authServerInfo: null,
+				authServerInfoLoading: false,
+			})
+			return
+		}
+
+		set({
+			authServerInfoLoading: true,
+		})
+
+		try {
+			const info = await api<AuthServerInfo>(`/api/session/auth-info?baseUrl=${encodeURIComponent(requestedBaseUrl)}`)
+			if (get().accountForm.baseUrl.trim() !== requestedBaseUrl && get().registrationForm.baseUrl.trim() !== requestedBaseUrl) {
+				return
+			}
+			set({
+				authServerInfo: info,
+				authServerInfoLoading: false,
+			})
+		} catch {
+			if (get().accountForm.baseUrl.trim() !== requestedBaseUrl && get().registrationForm.baseUrl.trim() !== requestedBaseUrl) {
+				return
+			}
+			set({
+				authServerInfo: null,
+				authServerInfoLoading: false,
+			})
+		}
+	},
+
+	async loadVikunjaInfo() {
+		if (!get().connected) {
+			return
+		}
+
+		set({vikunjaInfoLoading: true})
+
+		try {
+			const info = await api<VikunjaInfo>('/api/info')
+			set({vikunjaInfo: info})
+		} catch {
+			// Server info is informational only.
+		} finally {
+			set({vikunjaInfoLoading: false})
+		}
+	},
+
+	async probeInstanceInfo(baseUrl) {
+		const requestedBaseUrl = baseUrl.trim()
+		if (!requestedBaseUrl) {
+			return null
+		}
+
+		try {
+			return await api<VikunjaInfo>(`/api/instance-info?baseUrl=${encodeURIComponent(requestedBaseUrl)}`)
+		} catch {
+			return null
+		}
 	},
 
 	setRegistrationField(field, value) {
@@ -975,6 +1510,15 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 
 	async register() {
 		if (get().registrationSubmitting) {
+			return false
+		}
+
+		if (get().authServerInfo?.localEnabled === false) {
+			set({registrationError: 'This Vikunja server does not allow password account creation.'})
+			return false
+		}
+		if (get().authServerInfo?.registrationEnabled === false) {
+			set({registrationError: 'This Vikunja server does not allow self-registration.'})
 			return false
 		}
 
@@ -1017,6 +1561,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 			}
 
 			await get().loadCurrentUser()
+			void get().loadVikunjaInfo()
 			if (!get().account?.linkShareAuth) {
 				await get().loadProjects()
 				void get().ensureProjectFilterTasksLoaded()

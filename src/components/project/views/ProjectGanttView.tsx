@@ -1,12 +1,31 @@
 import {api} from '@/api'
+import UserAvatar from '@/components/common/UserAvatar'
 import CompactDatePicker from '@/components/common/CompactDatePicker'
+import GanttBarTooltip from '@/components/project/views/gantt/GanttBarTooltip'
+import GanttDependencyArrows from '@/components/project/views/gantt/GanttDependencyArrows'
+import {useGanttBarDrag} from '@/components/project/views/gantt/gantt-drag'
+import TaskMenu from '@/components/tasks/TaskMenu'
+import {
+	buildGanttPresets,
+	buildTimeline,
+	DAY_MS,
+	endOfDay,
+	type DatedEntry,
+	fromDateInputValue,
+	getBarColorStyle,
+	getBarGridPosition,
+	type GanttSort,
+	getTaskPercentDone,
+	type GanttZoom,
+	MAX_TIMELINE_DAYS_BY_ZOOM,
+	startOfDay,
+	toDateInputValue,
+} from '@/components/project/views/gantt/gantt-helpers'
 import {useAppStore} from '@/store'
 import type {Task} from '@/types'
-import {formatShortDate, normalizeTaskDateValue} from '@/utils/formatting'
-import {Fragment, useEffect, useMemo, useState} from 'react'
-
-const DAY_MS = 24 * 60 * 60 * 1000
-const MAX_TIMELINE_DAYS = 120
+import {getMenuAnchor} from '@/utils/menuPosition'
+import {formatShortDate, normalizeHexColor, normalizeTaskDateValue} from '@/utils/formatting'
+import {Fragment, useCallback, useEffect, useMemo, useRef, useState} from 'react'
 
 export default function ProjectGanttView({
 	projectId,
@@ -19,12 +38,22 @@ export default function ProjectGanttView({
 	const openFocusedTask = useAppStore(state => state.openFocusedTask)
 	const openTaskDetail = useAppStore(state => state.openTaskDetail)
 	const refreshCurrentCollections = useAppStore(state => state.refreshCurrentCollections)
+	const openMenu = useAppStore(state => state.openMenu)
+	const setOpenMenu = useAppStore(state => state.setOpenMenu)
+	const toggleTaskMenu = useAppStore(state => state.toggleTaskMenu)
+	const duplicateTask = useAppStore(state => state.duplicateTask)
+	const deleteTask = useAppStore(state => state.deleteTask)
 	const setError = useAppStore(state => state.setError)
 	const setOfflineActionNotice = useAppStore(state => state.setOfflineActionNotice)
 	const [showTasksWithoutDates, setShowTasksWithoutDates] = useState(false)
 	const [composerOpen, setComposerOpen] = useState(false)
 	const [title, setTitle] = useState('')
 	const [submitting, setSubmitting] = useState(false)
+	const [zoom, setZoom] = useState<GanttZoom>('day')
+	const [sortBy, setSortBy] = useState<GanttSort>('start_date')
+	const [hoveredTaskId, setHoveredTaskId] = useState<number | null>(null)
+	const [dragOverrides, setDragOverrides] = useState<Map<number, {start: Date; end: Date}>>(new Map())
+	const gridRef = useRef<HTMLDivElement | null>(null)
 
 	const datedTasks = useMemo(() => {
 		return tasks
@@ -55,12 +84,7 @@ export default function ProjectGanttView({
 					end: end >= start ? end : start,
 				}
 			})
-			.filter(Boolean)
-			.sort((left, right) => left.start.getTime() - right.start.getTime()) as Array<{
-				task: Task
-				start: Date
-				end: Date
-			}>
+			.filter(Boolean) as DatedEntry[]
 	}, [tasks])
 
 	const undatedTasks = useMemo(
@@ -74,7 +98,7 @@ export default function ProjectGanttView({
 
 	const defaultRange = useMemo(() => {
 		if (datedTasks.length === 0) {
-			const today = startOfDay(new Date().toISOString()) || new Date()
+			const today = startOfDay(new Date()) || new Date()
 			const nextWeek = new Date(today.getTime() + 7 * DAY_MS)
 			return {
 				from: toDateInputValue(today),
@@ -82,8 +106,9 @@ export default function ProjectGanttView({
 			}
 		}
 
-		const minStart = datedTasks[0].start
-		const maxEnd = datedTasks.reduce((latest, entry) => (entry.end > latest ? entry.end : latest), datedTasks[0].end)
+		const sortedEntries = [...datedTasks].sort((left, right) => left.start.getTime() - right.start.getTime())
+		const minStart = sortedEntries[0].start
+		const maxEnd = sortedEntries.reduce((latest, entry) => (entry.end > latest ? entry.end : latest), sortedEntries[0].end)
 		return {
 			from: toDateInputValue(minStart),
 			to: toDateInputValue(maxEnd),
@@ -107,14 +132,14 @@ export default function ProjectGanttView({
 
 		const from = rangeFromDate <= rangeToDate ? rangeFromDate : rangeToDate
 		const rawTo = rangeFromDate <= rangeToDate ? rangeToDate : rangeFromDate
-		const maxTo = new Date(from.getTime() + (MAX_TIMELINE_DAYS - 1) * DAY_MS)
+		const maxTo = new Date(from.getTime() + (MAX_TIMELINE_DAYS_BY_ZOOM[zoom] - 1) * DAY_MS)
 		const to = rawTo > maxTo ? maxTo : rawTo
 		return {
 			from,
 			to,
 			clamped: rawTo > maxTo,
 		}
-	}, [rangeFromDate, rangeToDate])
+	}, [rangeFromDate, rangeToDate, zoom])
 
 	const visibleDatedTasks = useMemo(() => {
 		return datedTasks.filter(entry => {
@@ -126,19 +151,108 @@ export default function ProjectGanttView({
 		})
 	}, [datedTasks, normalizedRange.from, normalizedRange.to])
 
-	const timeline = useMemo(() => {
-		if (!normalizedRange.from || !normalizedRange.to) {
-			return []
-		}
-
-		const days: Date[] = []
-		for (let cursor = normalizedRange.from.getTime(); cursor <= normalizedRange.to.getTime(); cursor += DAY_MS) {
-			days.push(new Date(cursor))
-		}
-		return days
-	}, [normalizedRange.from, normalizedRange.to])
-
+	const timeline = useMemo(
+		() => buildTimeline(normalizedRange.from, normalizedRange.to, zoom),
+		[normalizedRange.from, normalizedRange.to, zoom],
+	)
 	const presets = useMemo(() => buildGanttPresets(), [])
+	const columnMinWidth = zoom === 'day' ? '42px' : zoom === 'week' ? '64px' : '90px'
+	const taskById = useMemo(() => new Map(tasks.map(task => [task.id, task])), [tasks])
+
+	const openTask = useCallback((task: Task) => {
+		void openTaskDetail(task.id)
+	}, [openTaskDetail])
+
+	const handleDragUpdate = useCallback((taskId: number, startDate: Date, endDate: Date) => {
+		setDragOverrides(prev => {
+			const next = new Map(prev)
+			next.set(taskId, {
+				start: new Date(startDate.getTime()),
+				end: new Date(endDate.getTime()),
+			})
+			return next
+		})
+	}, [])
+
+	const handleDragEnd = useCallback(async (taskId: number, startDate: Date, endDate: Date) => {
+		const sourceTask = taskById.get(taskId) || null
+		setDragOverrides(prev => {
+			const next = new Map(prev)
+			next.delete(taskId)
+			return next
+		})
+
+		if (offlineReadOnlyMode) {
+			setError(null)
+			setOfflineActionNotice("You're offline. Reconnect to update tasks.")
+			return
+		}
+
+		try {
+			await api(`/api/tasks/${taskId}`, {
+				method: 'POST',
+				body: {
+					title: sourceTask?.title,
+					start_date: startDate.toISOString(),
+					end_date: endOfDay(endDate).toISOString(),
+					priority: sourceTask?.priority ?? 0,
+					done: sourceTask?.done === true,
+				},
+			})
+			await refreshCurrentCollections()
+		} catch (error) {
+			setError(error instanceof Error ? error.message : 'Unable to update task dates.')
+		}
+	}, [offlineReadOnlyMode, refreshCurrentCollections, setError, setOfflineActionNotice, taskById])
+
+	const {activeDrag, getBarPointerProps, shouldSuppressClick} = useGanttBarDrag({
+		zoom,
+		onDragUpdate: handleDragUpdate,
+		onDragEnd: handleDragEnd,
+	})
+
+	const displayedEntries = useMemo(() => {
+		const stableStartByTaskId = new Map(visibleDatedTasks.map(entry => [entry.task.id, entry.start.getTime()]))
+		const entries = visibleDatedTasks.map(entry => {
+			const override = dragOverrides.get(entry.task.id)
+			if (!override) {
+				return entry
+			}
+
+			return {
+				...entry,
+				start: override.start,
+				end: override.end,
+			}
+		})
+
+		const sortedEntries = [...entries]
+		sortedEntries.sort((left, right) => {
+			switch (sortBy) {
+				case 'priority':
+					return Number(right.task.priority || 0) - Number(left.task.priority || 0) ||
+						left.start.getTime() - right.start.getTime()
+				case 'title':
+					return left.task.title.localeCompare(right.task.title) ||
+						left.start.getTime() - right.start.getTime()
+				case 'percent_done':
+					return getTaskPercentDone(right.task) - getTaskPercentDone(left.task) ||
+						left.start.getTime() - right.start.getTime()
+				case 'start_date':
+				default:
+					return (
+						(activeDrag?.taskId && activeDrag.taskId === left.task.id
+							? stableStartByTaskId.get(left.task.id) ?? left.start.getTime()
+							: left.start.getTime()) -
+						(activeDrag?.taskId && activeDrag.taskId === right.task.id
+							? stableStartByTaskId.get(right.task.id) ?? right.start.getTime()
+							: right.start.getTime())
+					) ||
+						left.task.title.localeCompare(right.task.title)
+			}
+		})
+		return sortedEntries
+	}, [activeDrag?.taskId, dragOverrides, sortBy, visibleDatedTasks])
 
 	async function handleCreateTask() {
 		const trimmedTitle = title.trim()
@@ -183,6 +297,24 @@ export default function ProjectGanttView({
 					<CompactDatePicker label="To" value={rangeTo} onChange={setRangeTo} />
 				</div>
 				<div className="project-gantt-toolbar-actions">
+					<div className="gantt-zoom-toggle">
+						{(['day', 'week', 'month'] as const).map(level => (
+							<button
+								key={level}
+								className={`pill-button subtle${zoom === level ? ' is-active' : ''}`.trim()}
+								type="button"
+								onClick={() => setZoom(level)}
+							>
+								{level.charAt(0).toUpperCase() + level.slice(1)}
+							</button>
+						))}
+					</div>
+					<select className="gantt-sort-select" value={sortBy} onChange={event => setSortBy(event.currentTarget.value as GanttSort)}>
+						<option value="start_date">Sort by start date</option>
+						<option value="priority">Sort by priority</option>
+						<option value="title">Sort by title</option>
+						<option value="percent_done">Sort by progress</option>
+					</select>
 					<label className="gantt-checkbox-field">
 						<input type="checkbox" checked={showTasksWithoutDates} onChange={event => setShowTasksWithoutDates(event.currentTarget.checked)} />
 						<span>Show tasks without dates</span>
@@ -193,7 +325,7 @@ export default function ProjectGanttView({
 					}}>
 						Reset
 					</button>
-					<button className={`pill-button subtle ${composerOpen ? 'is-active' : ''}`.trim()} type="button" onClick={() => setComposerOpen(open => !open)}>
+					<button className={`pill-button subtle ${composerOpen ? ' is-active' : ''}`.trim()} type="button" onClick={() => setComposerOpen(open => !open)}>
 						Add task
 					</button>
 				</div>
@@ -243,48 +375,174 @@ export default function ProjectGanttView({
 			) : null}
 			{normalizedRange.clamped ? (
 				<div className="inline-composer-helper">
-					Gantt rendering is limited to the first {MAX_TIMELINE_DAYS} days of the selected range.
+					Gantt rendering is limited to the first {MAX_TIMELINE_DAYS_BY_ZOOM[zoom]} days of the selected range.
 				</div>
 			) : null}
 			<div className="project-gantt-scroll">
-				<div className="project-gantt-grid" style={{gridTemplateColumns: `280px repeat(${Math.max(1, timeline.length)}, minmax(42px, 1fr))`}}>
-					<div className="project-gantt-corner">Task</div>
-					{timeline.map(day => (
-						<div key={day.toISOString()} className="project-gantt-day">
-							{formatShortDate(day.toISOString())}
-						</div>
-					))}
-					{visibleDatedTasks.map(entry => {
-						const startIndex = timeline.findIndex(day => day.getTime() === entry.start.getTime())
-						const endIndex = timeline.findIndex(day => day.getTime() === entry.end.getTime())
-						const gridColumnStart = Math.max(2, startIndex + 2)
-						const gridColumnEnd = Math.max(gridColumnStart + 1, endIndex + 3)
-						return (
-							<Fragment key={entry.task.id}>
-								<button
-									className="project-gantt-task-label"
-									type="button"
-									onClick={() => {
-										void openTaskDetail(entry.task.id)
-										openFocusedTask(entry.task.id, entry.task.project_id, 'tasks')
-									}}
-								>
-									<span>{entry.task.title}</span>
-								</button>
-								<div className="project-gantt-task-track">
-									<div
-										className="project-gantt-task-bar"
-										style={{
-											gridColumnStart,
-											gridColumnEnd,
-										}}
+				<div className="project-gantt-grid-shell">
+					<div
+						ref={gridRef}
+						className="project-gantt-grid"
+						style={{gridTemplateColumns: `104px repeat(${Math.max(1, timeline.length)}, minmax(${columnMinWidth}, 1fr))`}}
+					>
+						<div className="project-gantt-corner">Meta</div>
+						{timeline.map(column => (
+							<div
+								key={column.key}
+								className={`project-gantt-day${column.isToday ? ' is-today' : ''}${column.isWeekend ? ' is-weekend' : ''}`.trim()}
+							>
+								{column.label}
+							</div>
+						))}
+						{displayedEntries.map(entry => {
+							const position = getBarGridPosition(entry, timeline)
+							if (!position) {
+								return null
+							}
+
+							const labels = Array.isArray(entry.task.labels) ? entry.task.labels.filter(label => label?.id) : []
+							const assignees = Array.isArray(entry.task.assignees) ? entry.task.assignees.filter(assignee => assignee?.id) : []
+							const visibleAssignees = assignees.slice(0, 2)
+							const assigneeOverflow = assignees.length - visibleAssignees.length
+							const visibleLabels = labels.slice(0, 2)
+							const percentDone = getTaskPercentDone(entry.task)
+							const isDragging = activeDrag?.taskId === entry.task.id
+							const isHovering = hoveredTaskId === entry.task.id && !isDragging
+							const menuOpen = openMenu?.kind === 'task' && openMenu.id === entry.task.id
+
+							return (
+								<Fragment key={entry.task.id}>
+									<button
+										className={`project-gantt-task-label${entry.task.done ? ' is-done' : ''}`.trim()}
+										type="button"
+										onClick={() => openTask(entry.task)}
 									>
-										{entry.task.title}
+										<span className="gantt-task-label-kicker">#{entry.task.id}</span>
+										<span className="gantt-task-label-meta">
+											{entry.task.done
+												? 'Done'
+												: entry.task.priority
+													? `P${entry.task.priority}`
+													: percentDone > 0
+														? `${percentDone}%`
+														: 'Task'}
+										</span>
+									</button>
+									<div className="project-gantt-task-track">
+										<div
+											data-gantt-task-id={entry.task.id}
+											className={`project-gantt-task-bar${entry.task.done ? ' is-done' : ''}${isDragging ? ' is-dragging' : ''}`.trim()}
+											style={{
+												gridColumnStart: position.gridColumnStart,
+												gridColumnEnd: position.gridColumnEnd,
+												...getBarColorStyle(entry.task),
+											}}
+											onClick={() => {
+												if (shouldSuppressClick(entry.task.id)) {
+													return
+												}
+												openTask(entry.task)
+											}}
+											onMouseEnter={() => setHoveredTaskId(entry.task.id)}
+											onMouseLeave={() => setHoveredTaskId(current => (current === entry.task.id ? null : current))}
+											{...getBarPointerProps(entry.task.id, entry.start, entry.end)}
+										>
+											{percentDone > 0 ? (
+												<div
+													className="gantt-bar-progress"
+													style={{width: `${percentDone}%`}}
+												/>
+											) : null}
+											<div className="gantt-bar-content">
+												<span className="gantt-bar-label">{entry.task.title}</span>
+												{visibleLabels.length > 0 ? (
+													<span className="gantt-bar-labels">
+														{visibleLabels.map(label => (
+															<span key={label.id} className="gantt-bar-label-chip">
+																<span
+																	className="gantt-bar-label-chip-dot"
+																	style={{background: normalizeHexColor(label.hex_color || label.hexColor || '') || '#dbe8ff'}}
+																/>
+																<span className="gantt-bar-label-chip-text">{label.title}</span>
+															</span>
+														))}
+														{labels.length > visibleLabels.length ? (
+															<span className="gantt-bar-label-chip gantt-bar-label-chip-overflow">+{labels.length - visibleLabels.length}</span>
+														) : null}
+													</span>
+												) : null}
+											</div>
+											{assignees.length > 0 ? (
+												<span className="gantt-bar-avatars">
+													{visibleAssignees.map(assignee => (
+														<UserAvatar key={assignee.id} user={assignee} size={18} />
+													))}
+													{assigneeOverflow > 0 ? <span className="gantt-bar-avatar-overflow">+{assigneeOverflow}</span> : null}
+												</span>
+											) : null}
+											<button
+												className="menu-button gantt-bar-menu-button"
+												data-action="toggle-gantt-task-menu"
+												data-task-id={entry.task.id}
+												data-menu-toggle="true"
+												type="button"
+												aria-label={`Task actions for ${entry.task.title}`}
+												onPointerDown={event => {
+													event.preventDefault()
+													event.stopPropagation()
+												}}
+												onClick={event => {
+													event.preventDefault()
+													event.stopPropagation()
+													toggleTaskMenu(entry.task.id, getMenuAnchor(event.currentTarget))
+												}}
+											>
+												⋯
+											</button>
+											{isDragging ? (
+												<div className="gantt-drag-tooltip">
+													{formatShortDate(entry.start)} — {formatShortDate(entry.end)}
+												</div>
+											) : null}
+											{isHovering ? (
+												<GanttBarTooltip task={entry.task} startDate={entry.start} endDate={entry.end} />
+											) : null}
+										</div>
 									</div>
-								</div>
-							</Fragment>
-						)
-					})}
+									{menuOpen && openMenu.kind === 'task' ? (
+										<TaskMenu
+											task={entry.task}
+											anchor={openMenu.anchor}
+											extraItems={[
+												{
+													action: 'open-gantt-task-focus',
+													label: 'Open focus view',
+													onClick: () => {
+														setOpenMenu(null)
+														void openTaskDetail(entry.task.id)
+														openFocusedTask(entry.task.id, entry.task.project_id, 'tasks')
+													},
+												},
+											]}
+											onEdit={() => {
+												setOpenMenu(null)
+												void openTaskDetail(entry.task.id)
+											}}
+											onDuplicate={() => {
+												setOpenMenu(null)
+												void duplicateTask(entry.task.id)
+											}}
+											onDelete={() => {
+												setOpenMenu(null)
+												void deleteTask(entry.task.id)
+											}}
+										/>
+									) : null}
+								</Fragment>
+							)
+						})}
+					</div>
+					<GanttDependencyArrows entries={displayedEntries} gridRef={gridRef} />
 				</div>
 			</div>
 			{showTasksWithoutDates && undatedTasks.length > 0 ? (
@@ -296,10 +554,7 @@ export default function ProjectGanttView({
 								key={task.id}
 								className="project-gantt-undated-item"
 								type="button"
-								onClick={() => {
-									void openTaskDetail(task.id)
-									openFocusedTask(task.id, task.project_id, 'tasks')
-								}}
+								onClick={() => openTask(task)}
 							>
 								{task.title}
 							</button>
@@ -309,84 +564,4 @@ export default function ProjectGanttView({
 			) : null}
 		</div>
 	)
-}
-
-function startOfDay(value: string) {
-	const normalized = normalizeTaskDateValue(value)
-	if (!normalized) {
-		return null
-	}
-
-	const date = new Date(normalized)
-	if (Number.isNaN(date.getTime())) {
-		return null
-	}
-
-	date.setHours(0, 0, 0, 0)
-	return date
-}
-
-function endOfDay(date: Date) {
-	const nextDate = new Date(date.getTime())
-	nextDate.setHours(23, 59, 0, 0)
-	return nextDate
-}
-
-function toDateInputValue(date: Date) {
-	return date.toISOString().slice(0, 10)
-}
-
-function fromDateInputValue(value: string) {
-	if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-		return null
-	}
-
-	const [year, month, day] = value.split('-').map(Number)
-	const parsed = new Date(year, month - 1, day)
-	if (Number.isNaN(parsed.getTime())) {
-		return null
-	}
-	parsed.setHours(0, 0, 0, 0)
-	return parsed
-}
-
-function buildGanttPresets() {
-	const today = startOfDay(new Date().toISOString()) || new Date()
-	const startOfThisWeek = startOfWeek(today)
-	const endOfThisWeek = new Date(startOfThisWeek.getTime() + 6 * DAY_MS)
-	const startOfNextWeek = new Date(startOfThisWeek.getTime() + 7 * DAY_MS)
-	const endOfNextWeek = new Date(startOfNextWeek.getTime() + 6 * DAY_MS)
-	const startOfLastWeek = new Date(startOfThisWeek.getTime() - 7 * DAY_MS)
-	const endOfLastWeek = new Date(startOfThisWeek.getTime() - DAY_MS)
-	const startOfMonthDate = new Date(today.getFullYear(), today.getMonth(), 1)
-	const endOfMonthDate = new Date(today.getFullYear(), today.getMonth() + 1, 0)
-	const startOfNextMonthDate = new Date(today.getFullYear(), today.getMonth() + 1, 1)
-	const endOfNextMonthDate = new Date(today.getFullYear(), today.getMonth() + 2, 0)
-	const startOfThisYearDate = new Date(today.getFullYear(), 0, 1)
-	const endOfThisYearDate = new Date(today.getFullYear(), 11, 31)
-	const startOfLastYearDate = new Date(today.getFullYear() - 1, 0, 1)
-	const endOfLastYearDate = new Date(today.getFullYear() - 1, 11, 31)
-	const startOfNextYearDate = new Date(today.getFullYear() + 1, 0, 1)
-	const endOfNextYearDate = new Date(today.getFullYear() + 1, 11, 31)
-
-	return [
-		{label: 'Today', from: toDateInputValue(today), to: toDateInputValue(today)},
-		{label: 'This week', from: toDateInputValue(startOfThisWeek), to: toDateInputValue(endOfThisWeek)},
-		{label: 'Next week', from: toDateInputValue(startOfNextWeek), to: toDateInputValue(endOfNextWeek)},
-		{label: 'Last week', from: toDateInputValue(startOfLastWeek), to: toDateInputValue(endOfLastWeek)},
-		{label: 'This month', from: toDateInputValue(startOfMonthDate), to: toDateInputValue(endOfMonthDate)},
-		{label: 'Next month', from: toDateInputValue(startOfNextMonthDate), to: toDateInputValue(endOfNextMonthDate)},
-		{label: 'Last year', from: toDateInputValue(startOfLastYearDate), to: toDateInputValue(endOfLastYearDate)},
-		{label: 'This year', from: toDateInputValue(startOfThisYearDate), to: toDateInputValue(endOfThisYearDate)},
-		{label: 'Next year', from: toDateInputValue(startOfNextYearDate), to: toDateInputValue(endOfNextYearDate)},
-	]
-}
-
-function startOfWeek(date: Date) {
-	const nextDate = new Date(date.getTime())
-	const day = nextDate.getDay()
-	const normalizedDay = day === 0 ? 7 : day
-	nextDate.setDate(nextDate.getDate() - normalizedDay + 1)
-	nextDate.setHours(0, 0, 0, 0)
-	return nextDate
 }

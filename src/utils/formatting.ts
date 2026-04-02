@@ -54,7 +54,7 @@ export function formatDateTimeInput(value: string | number | Date | null | undef
 	return `${year}-${month}-${day}T${hours}:${minutes}`
 }
 
-export function normalizeTaskDateValue(value: string | null | undefined) {
+export function normalizeVikunjaDateValue(value: string | null | undefined) {
 	if (!value) {
 		return ''
 	}
@@ -70,6 +70,10 @@ export function normalizeTaskDateValue(value: string | null | undefined) {
 	}
 
 	return raw
+}
+
+export function normalizeTaskDateValue(value: string | null | undefined) {
+	return normalizeVikunjaDateValue(value)
 }
 
 export function normalizeTaskReminders(reminders: TaskReminder[] | null | undefined) {

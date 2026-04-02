@@ -1,4 +1,4 @@
-import {useEffect, useMemo, useRef, useState} from 'react'
+import {type InputHTMLAttributes, useEffect, useMemo, useRef, useState} from 'react'
 
 const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const WEEKDAY_LABELS = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su']
@@ -11,6 +11,7 @@ export default function CompactDatePicker({
 	allowEmpty = false,
 	placeholder,
 	showLabel = true,
+	inputProps,
 }: {
 	label: string
 	value: string
@@ -19,6 +20,10 @@ export default function CompactDatePicker({
 	allowEmpty?: boolean
 	placeholder?: string
 	showLabel?: boolean
+	inputProps?: Omit<
+		InputHTMLAttributes<HTMLInputElement>,
+		'type' | 'value' | 'onChange' | 'onFocus' | 'onClick' | 'onPaste' | 'onBlur' | 'onKeyDown' | 'placeholder'
+	>
 }) {
 	const rootRef = useRef<HTMLDivElement | null>(null)
 	const inputRef = useRef<HTMLInputElement | null>(null)
@@ -104,6 +109,7 @@ export default function CompactDatePicker({
 					type="text"
 					inputMode="numeric"
 					placeholder={placeholder || (mode === 'datetime' ? 'DD/MM/YYYY HH:MM' : 'DD/MM/YYYY')}
+					{...inputProps}
 					value={draft}
 					onChange={event => {
 						const nextValue = event.currentTarget.value

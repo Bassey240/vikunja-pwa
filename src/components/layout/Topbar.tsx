@@ -52,6 +52,8 @@ export default function Topbar({
 	const connected = useAppStore(state => state.connected)
 	const isOnline = useAppStore(state => state.isOnline)
 	const offlineReadOnlyMode = useAppStore(state => state.offlineReadOnlyMode)
+	const offlineQueueCount = useAppStore(state => state.offlineQueueCount)
+	const offlineQueueFailedCount = useAppStore(state => state.offlineQueueFailedCount)
 	const notifications = useAppStore(state => state.notifications)
 	const loadNotifications = useAppStore(state => state.loadNotifications)
 	const openMenu = useAppStore(state => state.openMenu)
@@ -87,15 +89,10 @@ export default function Topbar({
 	const offlineNotice =
 		connected && !linkShareAuth && !isOnline && !isWideLayout
 			? offlineReadOnlyMode
-				? 'You’re offline. The last known signed-in state is restored in read-only mode until the connection returns.'
-				: 'You’re offline. Cached screens stay available, but syncing and edits may fail until the connection returns.'
+				? 'You’re offline. Changes you make here are saved locally and will sync when the connection returns.'
+				: 'You’re offline. Cached screens stay available, and offline changes queue until the connection returns.'
 			: null
-	const isComposerActionDisabled = (action: TopbarAction | null | undefined) =>
-		Boolean(
-			action &&
-			offlineReadOnlyMode &&
-			(action.action === 'open-root-composer' || action.action === 'open-project-composer'),
-		)
+	const isComposerActionDisabled = (_action: TopbarAction | null | undefined) => false
 	const overlayTray = notificationsOpen ? <NotificationTray /> : tray
 
 	useEffect(() => {
@@ -126,6 +123,8 @@ export default function Topbar({
 			return
 		}
 
+		const dismissTray = onDismissTray
+
 		function handlePointerDown(event: PointerEvent) {
 			const target = event.target
 			if (!(target instanceof Element)) {
@@ -136,7 +135,7 @@ export default function Topbar({
 				return
 			}
 
-			onDismissTray()
+			dismissTray()
 		}
 
 		document.addEventListener('pointerdown', handlePointerDown, true)
@@ -320,6 +319,26 @@ export default function Topbar({
 								</button>
 							)
 						})}
+						{connected && !linkShareAuth && (offlineQueueCount > 0 || offlineQueueFailedCount > 0) ? (
+							<div className="offline-queue-indicators" aria-label="Offline queue status">
+								{offlineQueueCount > 0 ? (
+									<span
+										className="offline-queue-badge"
+										title={`${offlineQueueCount} pending offline change${offlineQueueCount === 1 ? '' : 's'}`}
+									>
+										{offlineQueueCount}
+									</span>
+								) : null}
+								{offlineQueueFailedCount > 0 ? (
+									<span
+										className="offline-queue-badge is-failed"
+										title={`${offlineQueueFailedCount} failed sync attempt${offlineQueueFailedCount === 1 ? '' : 's'}`}
+									>
+										{offlineQueueFailedCount}
+									</span>
+								) : null}
+							</div>
+						) : null}
 					</div>
 				) : null}
 			</div>

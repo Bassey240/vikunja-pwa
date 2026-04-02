@@ -50,11 +50,52 @@ export interface ServerConfig {
 	}
 }
 
+export interface AuthServerInfo {
+	baseUrl: string
+	localEnabled: boolean | null
+	registrationEnabled: boolean | null
+}
+
+export interface VikunjaInfo {
+	version: string
+	frontend_url: string | null
+	motd: string | null
+	caldav_enabled?: boolean
+	task_attachments_enabled: boolean
+	enabled_background_providers: string[]
+	auth: {
+		local: {
+			enabled: boolean
+			registration_enabled?: boolean
+		}
+		openid?: {
+			enabled: boolean
+			providers: Array<{
+				name: string
+				key: string
+				auth_url: string
+			}>
+		}
+		openid_connect?: {
+			enabled: boolean
+			providers: Array<{
+				name: string
+				key: string
+				auth_url: string
+			}>
+		}
+	}
+	registration_enabled?: boolean
+}
+
 export interface UserProfile {
 	id: number
 	name: string
 	username: string
 	email: string
+	deletionScheduledAt?: string | null
+	isLocalUser?: boolean | null
+	authProvider?: string | null
 	settings?: {
 		default_project_id?: number | null
 		timezone?: string | null
@@ -149,6 +190,35 @@ export interface AdminRuntimeHealth {
 }
 
 export interface AdminMailDiagnosticsResult {
+	success: boolean
+	stdout: string | null
+	stderr: string | null
+}
+
+export interface AdminMigration {
+	id: string
+	name: string
+	applied: boolean
+}
+
+export interface AdminDumpResult {
+	ok: boolean
+	filename: string
+}
+
+export interface AdminRestoreResult {
+	ok: boolean
+	stdout: string | null
+	stderr: string | null
+}
+
+export interface AdminMigrateResult {
+	ok: boolean
+	stdout: string | null
+	stderr: string | null
+}
+
+export interface AdminRepairResult {
 	success: boolean
 	stdout: string | null
 	stderr: string | null
@@ -249,15 +319,46 @@ export interface ProjectLinkShare {
 	permission: SharePermission
 	sharing_type?: number | null
 	shared_by?: TaskAssignee | null
+	expires?: string | null
+	password_protected?: boolean | null
 	created?: string | null
 	updated?: string | null
 }
+
+export interface TotpSettings {
+	enabled: boolean
+	secret: string | null
+	totpUrl: string | null
+}
+
+export interface CalDavToken {
+	id: number
+	created: string
+}
+
+export interface ApiToken {
+	id: number
+	title: string
+	permissions: Record<string, string[]>
+	expires_at: string | null
+	created: string
+	token?: string | null
+}
+
+export interface ApiRouteDetail {
+	path: string
+	method: string
+}
+
+export type ApiRouteGroup = Record<string, ApiRouteDetail>
+export type ApiRouteGroups = Record<string, ApiRouteGroup>
 
 export interface AccountForm {
 	authMode: AuthMode
 	baseUrl: string
 	username: string
 	password: string
+	totpPasscode: string
 	apiToken: string
 }
 
@@ -369,6 +470,13 @@ export interface TaskComment {
 	created: string | null
 	updated: string | null
 }
+
+export interface TaskReaction {
+	value: string
+	user: UserProfile
+}
+
+export type ReactionMap = Record<string, TaskReaction[]>
 
 export interface TaskAttachmentFile {
 	id: number

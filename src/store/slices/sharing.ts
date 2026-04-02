@@ -21,10 +21,14 @@ export interface SharingSlice {
 	projectSharedUsers: ProjectSharedUser[]
 	projectSharedTeams: ProjectSharedTeam[]
 	projectLinkShares: ProjectLinkShare[]
+	selectedShareDetail: ProjectLinkShare | null
+	shareDetailLoading: boolean
 	projectSharingLoading: boolean
 	projectSharingSubmitting: boolean
 	projectSharingProjectId: number | null
 	loadProjectSharing: (projectId: number) => Promise<void>
+	loadShareDetail: (projectId: number, share: ProjectLinkShare) => Promise<void>
+	clearShareDetail: () => void
 	addProjectUserShare: (projectId: number, username: string, permission: SharePermission) => Promise<boolean>
 	updateProjectUserShare: (projectId: number, username: string, permission: SharePermission) => Promise<boolean>
 	removeProjectUserShare: (projectId: number, username: string) => Promise<boolean>
@@ -40,6 +44,8 @@ export const createSharingSlice: StateCreator<AppStore, [], [], SharingSlice> = 
 	projectSharedUsers: [],
 	projectSharedTeams: [],
 	projectLinkShares: [],
+	selectedShareDetail: null,
+	shareDetailLoading: false,
 	projectSharingLoading: false,
 	projectSharingSubmitting: false,
 	projectSharingProjectId: null,
@@ -94,6 +100,62 @@ export const createSharingSlice: StateCreator<AppStore, [], [], SharingSlice> = 
 		} finally {
 			set({projectSharingLoading: false})
 		}
+	},
+
+	async loadShareDetail(projectId, share) {
+		const optimisticShare = normalizeLinkShare(share)
+		const shareId = optimisticShare?.id || 0
+		if (!get().connected || projectId <= 0 || shareId <= 0) {
+			set({
+				selectedShareDetail: null,
+				shareDetailLoading: false,
+			})
+			return
+		}
+
+		set({
+			shareDetailLoading: true,
+			selectedShareDetail: optimisticShare,
+			error: null,
+		})
+
+		try {
+			const result = await api<{share: ProjectLinkShare}>(`/api/projects/${projectId}/shares/${shareId}`)
+			set({
+				selectedShareDetail: normalizeLinkShare(result.share) || optimisticShare,
+			})
+		} catch (error) {
+			const apiError = error as ApiError | null | undefined
+			if (apiError?.statusCode === 404 && optimisticShare?.hash) {
+				try {
+					await get().loadProjectSharing(projectId)
+					const refreshedShare = get().projectLinkShares.find(entry => entry.hash === optimisticShare.hash)
+					if (refreshedShare) {
+						set({
+							selectedShareDetail: refreshedShare,
+							error: null,
+						})
+						return
+					}
+				} catch {
+					// Fall through to the original error if the refresh attempt also fails.
+				}
+			}
+
+			set({
+				error: formatError(error as Error),
+				selectedShareDetail: optimisticShare,
+			})
+		} finally {
+			set({shareDetailLoading: false})
+		}
+	},
+
+	clearShareDetail() {
+		set({
+			selectedShareDetail: null,
+			shareDetailLoading: false,
+		})
 	},
 
 	async addProjectUserShare(projectId, username, permission) {
@@ -335,6 +397,8 @@ export const createSharingSlice: StateCreator<AppStore, [], [], SharingSlice> = 
 			projectSharedUsers: [],
 			projectSharedTeams: [],
 			projectLinkShares: [],
+			selectedShareDetail: null,
+			shareDetailLoading: false,
 			projectSharingLoading: false,
 			projectSharingSubmitting: false,
 			projectSharingProjectId: null,
@@ -456,6 +520,10 @@ function normalizeLinkShare(payload: unknown): ProjectLinkShare | null {
 		project_id: normalizeNullableNumber(payload.project_id ?? payload.projectId),
 		permission: normalizePermission(payload.permission ?? payload.right),
 		sharing_type: normalizeNullableNumber(payload.sharing_type ?? payload.sharingType),
+		expires: normalizeOptionalText(payload.expires ?? payload.expires_at),
+		password_protected:
+			normalizeOptionalBoolean(payload.password_protected ?? payload.passwordProtected) ??
+			Boolean(normalizeOptionalText(payload.password)),
 		shared_by: isRecord(payload.shared_by) ? {
 			id: normalizePositiveNumber(payload.shared_by.id) || 0,
 			name: normalizeText(payload.shared_by.name),

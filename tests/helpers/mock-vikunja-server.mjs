@@ -1,4 +1,5 @@
 import http from 'node:http'
+import {setTimeout as delay} from 'node:timers/promises'
 import {createMockFixture, cloneFixture} from './mock-data.mjs'
 
 const ONE_PIXEL_PNG = Buffer.from(
@@ -9,8 +10,26 @@ const ONE_PIXEL_PNG = Buffer.from(
 export async function createMockVikunjaServer({
 	avatarRouteStyle = 'suffix',
 	hideAuthenticatedUserEmail = false,
+	localAuthEnabled = true,
+	registrationEnabled = true,
+	caldavEnabled = true,
+	totpState = null,
+	oidcProviders = [],
+	enabledBackgroundProviders = ['unsplash'],
+	motd = 'Smoke suite MOTD',
+	taskAttachmentsEnabled = true,
+	loginAccessTokenLifetimeSeconds = 3600,
+	refreshAccessTokenLifetimeSeconds = 3600,
+	rotateRefreshTokens = false,
+	refreshResponseDelayMs = 0,
 } = {}) {
 	const initialFixture = createMockFixture()
+	if (totpState && typeof totpState === 'object') {
+		initialFixture.totp = {
+			...initialFixture.totp,
+			...totpState,
+		}
+	}
 	let state = buildMutableState(initialFixture)
 
 	const server = http.createServer(async (req, res) => {
@@ -45,14 +64,34 @@ export async function createMockVikunjaServer({
 				sendJson(res, 200, {
 					version: 'test',
 					frontend_url: 'http://127.0.0.1',
+					motd,
+					caldav_enabled: caldavEnabled,
+					task_attachments_enabled: taskAttachmentsEnabled,
+					enabled_background_providers: enabledBackgroundProviders,
 					link_sharing_enabled: true,
 					public_teams_enabled: true,
 					email_reminders_enabled: true,
+					auth: {
+						local: {
+							enabled: localAuthEnabled,
+							registration_enabled: registrationEnabled,
+						},
+						openid: {
+							enabled: oidcProviders.length > 0,
+							providers: oidcProviders,
+						},
+					},
+					registration_enabled: registrationEnabled,
 				})
 				return
 			}
 
 			if (route === 'register' && req.method === 'POST') {
+				if (!localAuthEnabled || !registrationEnabled) {
+					sendJson(res, 404, {message: 'Not Found'})
+					return
+				}
+
 				const username = `${body?.username || ''}`.trim()
 				const email = `${body?.email || ''}`.trim().toLowerCase()
 				const password = `${body?.password || ''}`
@@ -92,6 +131,7 @@ export async function createMockVikunjaServer({
 			if (route === 'login' && req.method === 'POST') {
 				const username = `${body?.username || ''}`.trim()
 				const password = `${body?.password || ''}`.trim()
+				const totpPasscode = `${body?.totp_passcode || body?.totpPasscode || ''}`.trim()
 				if (!username || !password) {
 					sendJson(res, 400, {error: 'Username and password are required.'})
 					return
@@ -101,29 +141,60 @@ export async function createMockVikunjaServer({
 					sendJson(res, 401, {error: 'Wrong username or password.'})
 					return
 				}
+				if (state.totp?.enabled && totpPasscode !== '123456') {
+					sendJson(res, 401, {error: 'Invalid totp passcode.'})
+					return
+				}
 
 				sendJson(
 					res,
 					200,
 					{
-						token: buildToken(username),
+						token: buildToken(username, loginAccessTokenLifetimeSeconds),
 					},
 					{
-						'Set-Cookie': 'vikunja_refresh_token=mock-refresh-token; Path=/; HttpOnly',
+						'Set-Cookie': buildRefreshCookie(issueRefreshToken(username, {reset: true})),
 					},
 				)
 				return
 			}
 
 			if (route === 'user/token/refresh' && req.method === 'POST') {
+				if (refreshResponseDelayMs > 0) {
+					await delay(refreshResponseDelayMs)
+				}
+
+				const refreshToken = getRefreshTokenFromRequest(req)
+				if (!refreshToken) {
+					sendJson(res, 401, {message: 'No refresh token provided.'})
+					return
+				}
+
+				const username = `${state.refreshTokenSubjects?.[refreshToken] || ''}`.trim()
+				if (!username) {
+					sendJson(
+						res,
+						401,
+						state.usedRefreshTokens?.has(refreshToken)
+							? {message: 'Refresh token already used.'}
+							: {message: 'Invalid or expired refresh token.'},
+					)
+					return
+				}
+
+				delete state.refreshTokenSubjects[refreshToken]
+				if (rotateRefreshTokens) {
+					state.usedRefreshTokens.add(refreshToken)
+				}
+
 				sendJson(
 					res,
 					200,
 					{
-						token: buildToken('refreshed-user'),
+						token: buildToken(username, refreshAccessTokenLifetimeSeconds),
 					},
 					{
-						'Set-Cookie': 'vikunja_refresh_token=mock-refresh-token; Path=/; HttpOnly',
+						'Set-Cookie': buildRefreshCookie(issueRefreshToken(username)),
 					},
 				)
 				return
@@ -234,6 +305,317 @@ export async function createMockVikunjaServer({
 				}
 				delete state.passwordResetTokens[token]
 				sendJson(res, 200, {message: 'The password was updated successfully.'})
+				return
+			}
+
+			if (route === 'user/settings/email' && req.method === 'POST') {
+				const authenticatedUser = getAuthenticatedUserProfile(req)
+				const password = `${body?.password || ''}`
+				const newEmail = `${body?.new_email || ''}`.trim().toLowerCase()
+				if (!password || !newEmail) {
+					sendJson(res, 400, {error: 'Password and new_email are required.'})
+					return
+				}
+				if (password !== `${state.passwordsByUsername[authenticatedUser.username] || ''}`) {
+					sendJson(res, 401, {error: 'Wrong username or password.'})
+					return
+				}
+
+				state.pendingEmailChange = {
+					username: authenticatedUser.username,
+					newEmail,
+					requestedAt: new Date().toISOString(),
+				}
+				sendJson(res, 200, {message: 'The email change was requested successfully.'})
+				return
+			}
+
+			if (route === 'user/export/request' && req.method === 'POST') {
+				const authenticatedUser = getAuthenticatedUserProfile(req)
+				const password = `${body?.password || ''}`
+				if (!password) {
+					sendJson(res, 400, {error: 'Password is required.'})
+					return
+				}
+				if (password !== `${state.passwordsByUsername[authenticatedUser.username] || ''}`) {
+					sendJson(res, 401, {error: 'Wrong username or password.'})
+					return
+				}
+
+				const createdAt = new Date().toISOString()
+				state.dataExport = {
+					...(state.dataExport || {}),
+					status: 'ready',
+					createdAt,
+				}
+				sendJson(res, 200, {message: 'The export was requested successfully.'})
+				return
+			}
+
+			if (route === 'user/export' && req.method === 'GET') {
+				sendJson(res, 200, {
+					status: state.dataExport?.status || null,
+					createdAt: state.dataExport?.createdAt || null,
+				})
+				return
+			}
+
+			if (route === 'user/export/download' && req.method === 'POST') {
+				const authenticatedUser = getAuthenticatedUserProfile(req)
+				const password = `${body?.password || ''}`
+				if (!password) {
+					sendJson(res, 400, {error: 'Password is required.'})
+					return
+				}
+				if (password !== `${state.passwordsByUsername[authenticatedUser.username] || ''}`) {
+					sendJson(res, 401, {error: 'Wrong username or password.'})
+					return
+				}
+				if (state.dataExport?.status !== 'ready') {
+					sendJson(res, 404, {error: 'No export is ready to download.'})
+					return
+				}
+
+				sendBuffer(res, 200, Buffer.from(`${state.dataExport?.contentBase64 || ''}`, 'base64'), {
+					'Content-Type': 'application/zip',
+					'Content-Disposition': `attachment; filename="${state.dataExport?.filename || 'vikunja-export.zip'}"`,
+				})
+				return
+			}
+
+			if (route === 'user/deletion/request' && req.method === 'POST') {
+				const authenticatedUser = getAuthenticatedUserProfile(req)
+				const password = `${body?.password || ''}`
+				if (authenticatedUser.is_local_user !== false && !password) {
+					sendJson(res, 400, {error: 'Password is required.'})
+					return
+				}
+				if (
+					authenticatedUser.is_local_user !== false &&
+					password !== `${state.passwordsByUsername[authenticatedUser.username] || ''}`
+				) {
+					sendJson(res, 401, {error: 'Wrong username or password.'})
+					return
+				}
+
+				state.accountDeletion = {
+					pending: true,
+					token: `delete-token-${authenticatedUser.id}`,
+					requestedAt: new Date().toISOString(),
+					deleted: false,
+				}
+				sendJson(res, 200, {message: 'The account deletion was requested successfully.'})
+				return
+			}
+
+			if (route === 'user/deletion/cancel' && req.method === 'POST') {
+				const authenticatedUser = getAuthenticatedUserProfile(req)
+				const password = `${body?.password || ''}`
+				if (authenticatedUser.is_local_user !== false && !password) {
+					sendJson(res, 400, {error: 'Password is required.'})
+					return
+				}
+				if (
+					authenticatedUser.is_local_user !== false &&
+					password !== `${state.passwordsByUsername[authenticatedUser.username] || ''}`
+				) {
+					sendJson(res, 401, {error: 'Wrong username or password.'})
+					return
+				}
+
+				state.accountDeletion = {
+					pending: false,
+					token: null,
+					requestedAt: null,
+					deleted: false,
+				}
+				updateUserProfile(authenticatedUser.username, user => ({
+					...user,
+					deletion_scheduled_at: '0001-01-01T00:00:00Z',
+				}))
+				sendJson(res, 200, {message: 'The account deletion was cancelled successfully.'})
+				return
+			}
+
+			if (route === 'user/deletion/confirm' && req.method === 'POST') {
+				const authenticatedUser = getAuthenticatedUserProfile(req)
+				const token = `${body?.token || ''}`.trim()
+				if (!token || token !== `${state.accountDeletion?.token || ''}`) {
+					sendJson(res, 400, {error: 'Invalid deletion token.'})
+					return
+				}
+
+				const scheduledAt = new Date(Date.now() + 3 * DAY_MS).toISOString()
+				state.accountDeletion = {
+					...(state.accountDeletion || {}),
+					pending: false,
+					deleted: false,
+					scheduledAt,
+				}
+				updateUserProfile(authenticatedUser.username, user => ({
+					...user,
+					deletion_scheduled_at: scheduledAt,
+				}))
+				sendJson(res, 200, {message: 'The account was deleted successfully.'})
+				return
+			}
+
+			if (route === 'user/settings/totp' && req.method === 'GET') {
+				sendJson(res, 200, normalizeTotpState(state.totp))
+				return
+			}
+
+			if (route === 'user/settings/totp/enroll' && req.method === 'POST') {
+				state.totp = {
+					enabled: false,
+					secret: 'SMOKE-TOTP-SECRET',
+					totp_url: 'otpauth://totp/Vikunja:smoke-user?secret=SMOKE-TOTP-SECRET&issuer=Vikunja',
+				}
+				sendJson(res, 200, normalizeTotpState(state.totp))
+				return
+			}
+
+			if (route === 'user/settings/totp/enable' && req.method === 'POST') {
+				const passcode = `${body?.passcode || ''}`.trim()
+				if (!passcode) {
+					sendJson(res, 400, {error: 'Passcode is required.'})
+					return
+				}
+
+				state.totp = {
+					...(state.totp || {}),
+					enabled: true,
+				}
+				sendJson(res, 200, {enabled: true})
+				return
+			}
+
+			if (route === 'user/settings/totp/disable' && req.method === 'POST') {
+				const authenticatedUser = getAuthenticatedUserProfile(req)
+				const password = `${body?.password || ''}`
+				if (!password) {
+					sendJson(res, 400, {error: 'Password is required.'})
+					return
+				}
+				if (password !== `${state.passwordsByUsername[authenticatedUser.username] || ''}`) {
+					sendJson(res, 401, {error: 'Wrong username or password.'})
+					return
+				}
+
+				state.totp = {
+					enabled: false,
+					secret: null,
+					totp_url: null,
+				}
+				sendJson(res, 200, {enabled: false})
+				return
+			}
+
+			if (route === 'user/settings/totp/qrcode' && req.method === 'GET') {
+				sendBuffer(res, 200, ONE_PIXEL_PNG, {
+					'Content-Type': 'image/png',
+					'Cache-Control': 'no-store',
+				})
+				return
+			}
+
+			if (route === 'user/settings/token/caldav' && req.method === 'GET') {
+				sendJson(res, 200, paginate((state.caldavTokens || []).map(stripSecretTokenFields), url))
+				return
+			}
+
+			if (route === 'user/settings/token/caldav' && req.method === 'PUT') {
+				const now = new Date().toISOString()
+				const tokenId = Number(state.nextCaldavTokenId || 1)
+				const token = {
+					id: tokenId,
+					created: now,
+					token: `caldav-token-${tokenId}`,
+				}
+				state.nextCaldavTokenId = tokenId + 1
+				state.caldavTokens = [...(state.caldavTokens || []), token]
+				sendJson(res, 200, token)
+				return
+			}
+
+			const caldavTokenMatch = route.match(/^user\/settings\/token\/caldav\/(\d+)$/)
+			if (caldavTokenMatch && req.method === 'DELETE') {
+				const tokenId = Number(caldavTokenMatch[1])
+				state.caldavTokens = (state.caldavTokens || []).filter(token => Number(token.id) !== tokenId)
+				sendJson(res, 200, {ok: true})
+				return
+			}
+
+			if (route === 'tokens' && req.method === 'GET') {
+				sendJson(res, 200, paginate((state.apiTokens || []).map(stripSecretTokenFields), url))
+				return
+			}
+
+			if (route === 'tokens' && req.method === 'PUT') {
+				if (!isValidApiTokenPayload(body, state.apiRoutes)) {
+					sendJson(res, 400, {error: 'Invalid Data'})
+					return
+				}
+
+				const tokenId = Number(state.nextApiTokenId || 1)
+				const token = normalizeApiToken({
+					id: tokenId,
+					title: `${body?.title || ''}`.trim(),
+					permissions: body?.permissions && typeof body.permissions === 'object' ? body.permissions : {},
+					expires_at: body?.expires_at || null,
+					created: new Date().toISOString(),
+					token: `api-token-${tokenId}`,
+				})
+				state.nextApiTokenId = tokenId + 1
+				state.apiTokens = [...(state.apiTokens || []), token]
+				sendJson(res, 200, token)
+				return
+			}
+
+			const apiTokenMatch = route.match(/^tokens\/(\d+)$/)
+			if (apiTokenMatch && req.method === 'DELETE') {
+				const tokenId = Number(apiTokenMatch[1])
+				state.apiTokens = (state.apiTokens || []).filter(token => Number(token.id) !== tokenId)
+				sendJson(res, 200, {ok: true})
+				return
+			}
+
+			if (route === 'routes' && req.method === 'GET') {
+				sendJson(res, 200, state.apiRoutes || {})
+				return
+			}
+
+			const reactionMatch = route.match(/^(tasks|comments|projects)\/(\d+)\/reactions$/)
+			if (reactionMatch && req.method === 'GET') {
+				const entity = reactionMatch[1]
+				const entityId = Number(reactionMatch[2])
+				sendJson(res, 200, listReactions(state, entity, entityId))
+				return
+			}
+
+			if (reactionMatch && req.method === 'PUT') {
+				const authenticatedUser = getAuthenticatedUserProfile(req)
+				const entity = reactionMatch[1]
+				const entityId = Number(reactionMatch[2])
+				const value = `${body?.value || ''}`.trim()
+				if (!value) {
+					sendJson(res, 400, {error: 'Reaction value is required.'})
+					return
+				}
+
+				upsertReaction(state, entity, entityId, value, authenticatedUser)
+				sendJson(res, 200, {ok: true})
+				return
+			}
+
+			const reactionDeleteMatch = route.match(/^(tasks|comments|projects)\/(\d+)\/reactions\/delete$/)
+			if (reactionDeleteMatch && req.method === 'POST') {
+				const authenticatedUser = getAuthenticatedUserProfile(req)
+				const entity = reactionDeleteMatch[1]
+				const entityId = Number(reactionDeleteMatch[2])
+				const value = `${body?.value || ''}`.trim()
+				removeReaction(state, entity, entityId, value, authenticatedUser)
+				sendJson(res, 200, {ok: true})
 				return
 			}
 
@@ -655,6 +1037,7 @@ export async function createMockVikunjaServer({
 					permission: normalizeSharePermission(body?.permission),
 					sharing_type: `${body?.password || ''}` ? 2 : 1,
 					password: `${body?.password || ''}`,
+					expires: normalizeDateString(body?.expires ?? body?.expires_at ?? null),
 					shared_by: getUser(state.user.id),
 					created: now,
 					updated: now,
@@ -665,6 +1048,18 @@ export async function createMockVikunjaServer({
 			}
 
 			const projectLinkShareMatch = route.match(/^projects\/(-?\d+)\/shares\/(\d+)$/)
+			if (projectLinkShareMatch && req.method === 'GET') {
+				const projectId = Number(projectLinkShareMatch[1])
+				const shareId = Number(projectLinkShareMatch[2])
+				const share = state.linkShares.find(entry => Number(entry.project_id) === projectId && Number(entry.id) === shareId)
+				if (!share) {
+					sendJson(res, 404, {error: 'The project share does not exist.', code: 13000})
+					return
+				}
+				sendJson(res, 200, normalizeLinkShare(share))
+				return
+			}
+
 			if (projectLinkShareMatch && req.method === 'DELETE') {
 				const projectId = Number(projectLinkShareMatch[1])
 				const shareId = Number(projectLinkShareMatch[2])
@@ -707,6 +1102,35 @@ export async function createMockVikunjaServer({
 					...bucket,
 					tasks: [],
 				})))
+				return
+			}
+
+			if (viewBucketsMatch && req.method === 'PUT') {
+				const projectId = Number(viewBucketsMatch[1])
+				const viewId = Number(viewBucketsMatch[2])
+				const title = `${body?.title || ''}`.trim()
+				if (!title) {
+					sendJson(res, 400, {error: 'Title is required.'})
+					return
+				}
+
+				const existingBuckets = Array.isArray(state.bucketsByViewId?.[viewId]) ? state.bucketsByViewId[viewId] : []
+				const nextBucketId = Math.max(0, ...existingBuckets.map(bucket => Number(bucket.id || 0))) + 1
+				const nextBucketPosition = Math.max(0, ...existingBuckets.map(bucket => Number(bucket.position || 0))) + 100
+				const bucket = {
+					id: nextBucketId,
+					project_id: projectId,
+					project_view_id: viewId,
+					title,
+					position: nextBucketPosition,
+					limit: 0,
+					tasks: [],
+				}
+				state.bucketsByViewId = {
+					...state.bucketsByViewId,
+					[viewId]: [...existingBuckets, bucket],
+				}
+				sendJson(res, 201, bucket)
 				return
 			}
 
@@ -1002,6 +1426,15 @@ export async function createMockVikunjaServer({
 			}
 
 			const taskAssigneeMatch = route.match(/^tasks\/(\d+)\/assignees\/(\d+)$/)
+			const taskAssigneesBulkMatch = route.match(/^tasks\/(\d+)\/assignees\/bulk$/)
+			if (taskAssigneesBulkMatch && req.method === 'POST') {
+				const task = getTask(Number(taskAssigneesBulkMatch[1]))
+				task.assignees = normalizeTaskAssignees(body?.assignees)
+				task.updated = new Date().toISOString()
+				sendJson(res, 200, {ok: true, assignees: task.assignees})
+				return
+			}
+
 			if (taskAssigneeMatch && req.method === 'DELETE') {
 				const task = getTask(Number(taskAssigneeMatch[1]))
 				const userId = Number(taskAssigneeMatch[2])
@@ -1205,6 +1638,18 @@ export async function createMockVikunjaServer({
 			}
 
 			const taskLabelMatch = route.match(/^tasks\/(\d+)\/labels\/(\d+)$/)
+			const taskLabelsBulkMatch = route.match(/^tasks\/(\d+)\/labels\/bulk$/)
+			if (taskLabelsBulkMatch && req.method === 'POST') {
+				const task = getTask(Number(taskLabelsBulkMatch[1]))
+				const labels = Array.isArray(body?.labels) ? body.labels : []
+				task.labelIds = labels
+					.map(label => Number(label?.id || 0))
+					.filter(Boolean)
+				task.updated = new Date().toISOString()
+				sendJson(res, 200, {ok: true, labels: serializeTask(task).labels})
+				return
+			}
+
 			if (taskLabelMatch && req.method === 'DELETE') {
 				const task = getTask(Number(taskLabelMatch[1]))
 				const labelId = Number(taskLabelMatch[2])
@@ -1346,6 +1791,12 @@ export async function createMockVikunjaServer({
 			.filter(Boolean)
 		const comments = normalizeTaskComments(task.comments)
 		const attachments = normalizeTaskAttachments(task.attachments)
+		const relatedTasks = Object.fromEntries(
+			Object.entries(task.relatedTasks || {}).map(([relation, taskIds]) => [
+				relation,
+				Array.isArray(taskIds) ? taskIds.map(taskId => makeTaskRef(getTask(taskId))) : [],
+			]),
+		)
 
 		return {
 			id: task.id,
@@ -1375,6 +1826,7 @@ export async function createMockVikunjaServer({
 			labels,
 			subscription: task.subscription ? {subscribed: Boolean(task.subscription.subscribed)} : null,
 			related_tasks: {
+				...relatedTasks,
 				parenttask: task.parentTaskId ? [makeTaskRef(getTask(task.parentTaskId))] : [],
 				subtask: state.tasks
 					.filter(entry => entry.parentTaskId === task.id)
@@ -1483,6 +1935,30 @@ export async function createMockVikunjaServer({
 			return subject
 		}
 		return `${state.user?.username || ''}`.trim()
+	}
+
+	function issueRefreshToken(username, {reset = false} = {}) {
+		if (reset) {
+			state.refreshTokenSubjects = {}
+			state.usedRefreshTokens = new Set()
+			state.nextRefreshTokenId = 1
+		}
+
+		const token = rotateRefreshTokens
+			? `mock-refresh-token-${state.nextRefreshTokenId++}`
+			: 'mock-refresh-token'
+		state.refreshTokenSubjects[token] = `${username || ''}`.trim()
+		return token
+	}
+
+	function buildRefreshCookie(token) {
+		return `${'vikunja_refresh_token'}=${token}; Path=/; HttpOnly`
+	}
+
+	function getRefreshTokenFromRequest(req) {
+		const cookieHeader = `${req.headers.cookie || ''}`
+		const match = cookieHeader.match(/(?:^|;\s*)vikunja_refresh_token=([^;]+)/)
+		return match ? match[1] : ''
 	}
 
 	function getAuthenticatedUserProfile(req) {
@@ -1737,12 +2213,17 @@ function buildMutableState(fixture) {
 	state.passwordsByUsername = {
 		'smoke-user': 'smoke-password',
 	}
+	state.refreshTokenSubjects = {}
+	state.usedRefreshTokens = new Set()
+	state.nextRefreshTokenId = 1
 	state.passwordResetTokens = {}
 	state.nextUserId = Math.max(0, ...(state.users || []).map(user => Number(user.id || 0))) + 1
 	state.nextPasswordResetTokenId = 1
 	state.nextProjectId = Math.max(...state.projects.filter(project => project.id > 0).map(project => project.id), 0) + 1
 	state.nextTeamId = Math.max(0, ...(state.teams || []).map(team => Number(team.id || 0))) + 1
 	state.nextLinkShareId = Math.max(0, ...(state.linkShares || []).map(share => Number(share.id || 0))) + 1
+	state.nextCaldavTokenId = Math.max(0, ...((state.caldavTokens || []).map(token => Number(token.id || 0)))) + 1
+	state.nextApiTokenId = Math.max(0, ...((state.apiTokens || []).map(token => Number(token.id || 0)))) + 1
 	state.nextTaskId = Math.max(...state.tasks.map(task => task.id), 0) + 1
 	state.nextCommentId = Math.max(
 		0,
@@ -1779,6 +2260,15 @@ function normalizeUserProfile(user) {
 		name: `${user?.name || ''}`.trim(),
 		username: `${user?.username || ''}`.trim(),
 		email: `${user?.email || ''}`.trim(),
+		deletion_scheduled_at:
+			typeof user?.deletion_scheduled_at === 'string'
+				? `${user.deletion_scheduled_at}`.trim() || null
+				: null,
+		is_local_user: user?.is_local_user !== false,
+		auth_provider:
+			typeof user?.auth_provider === 'string'
+				? `${user.auth_provider}`.trim() || 'local'
+				: 'local',
 		settings: {
 			...buildDefaultUserSettings(),
 			...(user?.settings || {}),
@@ -1858,10 +2348,177 @@ function normalizeLinkShare(share) {
 		project_id: Number(share?.project_id || 0),
 		permission: normalizeSharePermission(share?.permission),
 		sharing_type: Number(share?.sharing_type || 0),
+		expires: normalizeDateString(share?.expires || null),
+		password_protected: Number(share?.sharing_type || 0) === 2 || Boolean(`${share?.password || ''}`),
 		shared_by: normalizeTaskAssignee(share?.shared_by),
 		created: normalizeDateString(share?.created || null),
 		updated: normalizeDateString(share?.updated || null),
 	}
+}
+
+function normalizeTotpState(totp) {
+	return {
+		enabled: Boolean(totp?.enabled),
+		secret: `${totp?.secret || ''}`.trim() || null,
+		url: `${totp?.url || totp?.totp_url || ''}`.trim() || null,
+	}
+}
+
+function stripSecretTokenFields(token) {
+	const nextToken = {...token}
+	delete nextToken.token
+	return nextToken
+}
+
+function normalizeApiToken(token) {
+	return {
+		id: Number(token?.id || 0),
+		title: `${token?.title || ''}`.trim(),
+		permissions: token?.permissions && typeof token.permissions === 'object' && !Array.isArray(token.permissions)
+			? token.permissions
+			: {},
+		expires_at: normalizeDateString(token?.expires_at || null),
+		created: normalizeDateString(token?.created || null) || new Date().toISOString(),
+		token: `${token?.token || ''}`.trim() || null,
+	}
+}
+
+function isValidApiTokenPayload(body, apiRoutes) {
+	const title = `${body?.title || ''}`.trim()
+	if (!title) {
+		return false
+	}
+
+	if ('expires_at' in (body || {}) && (typeof body.expires_at !== 'string' || !body.expires_at.trim())) {
+		return false
+	}
+
+	if (!body?.permissions || typeof body.permissions !== 'object' || Array.isArray(body.permissions)) {
+		return false
+	}
+
+	const validPermissions = flattenApiRoutePermissions(apiRoutes)
+	let selectedPermissionCount = 0
+	for (const [resource, permissions] of Object.entries(body.permissions)) {
+		if (!Array.isArray(permissions) || permissions.length === 0) {
+			return false
+		}
+
+		const allowedPermissions = validPermissions.get(resource)
+		if (!allowedPermissions) {
+			return false
+		}
+
+		for (const permission of permissions) {
+			if (typeof permission !== 'string' || !allowedPermissions.has(permission)) {
+				return false
+			}
+			selectedPermissionCount += 1
+		}
+	}
+
+	return selectedPermissionCount > 0
+}
+
+function flattenApiRoutePermissions(apiRoutes) {
+	const permissions = new Map()
+
+	if (Array.isArray(apiRoutes)) {
+		for (const route of apiRoutes) {
+			const resource = `${route?.key || ''}`.trim()
+			const permission = `${route?.permission || ''}`.trim()
+			if (!resource || !permission) {
+				continue
+			}
+
+			if (!permissions.has(resource)) {
+				permissions.set(resource, new Set())
+			}
+			permissions.get(resource)?.add(permission)
+		}
+
+		return permissions
+	}
+
+	if (!apiRoutes || typeof apiRoutes !== 'object') {
+		return permissions
+	}
+
+	for (const [resource, routeGroup] of Object.entries(apiRoutes)) {
+		if (!routeGroup || typeof routeGroup !== 'object' || Array.isArray(routeGroup)) {
+			continue
+		}
+
+		const values = new Set()
+		for (const [permissionKey, routeDetail] of Object.entries(routeGroup)) {
+			if (
+				typeof permissionKey === 'string' &&
+				permissionKey.trim() &&
+				routeDetail &&
+				typeof routeDetail === 'object' &&
+				typeof routeDetail.path === 'string' &&
+				typeof routeDetail.method === 'string'
+			) {
+				values.add(permissionKey.trim())
+			}
+		}
+
+		if (values.size > 0) {
+			permissions.set(resource, values)
+		}
+	}
+
+	return permissions
+}
+
+function listReactions(state, entity, entityId) {
+	const entityStore = getReactionStore(state, entity)
+	const current = Array.isArray(entityStore?.[entityId]) ? entityStore[entityId] : []
+	return current.reduce((grouped, reaction) => {
+		const value = `${reaction?.value || ''}`.trim()
+		if (!value) {
+			return grouped
+		}
+
+		grouped[value] = Array.isArray(grouped[value]) ? grouped[value] : []
+		if (reaction?.user && typeof reaction.user === 'object') {
+			grouped[value].push(reaction.user)
+		}
+		return grouped
+	}, {})
+}
+
+function upsertReaction(state, entity, entityId, value, user) {
+	const entityStore = getReactionStore(state, entity)
+	const normalizedUser = normalizeUserProfile(user)
+	const current = Array.isArray(entityStore[entityId]) ? entityStore[entityId] : []
+	if (current.some(entry => `${entry?.value || ''}` === value && Number(entry?.user?.id || 0) === normalizedUser.id)) {
+		return
+	}
+	entityStore[entityId] = [
+		...current,
+		{
+			value,
+			user: normalizedUser,
+		},
+	]
+}
+
+function removeReaction(state, entity, entityId, value, user) {
+	const entityStore = getReactionStore(state, entity)
+	const current = Array.isArray(entityStore[entityId]) ? entityStore[entityId] : []
+	entityStore[entityId] = current.filter(entry =>
+		!(
+			`${entry?.value || ''}` === value &&
+			Number(entry?.user?.id || 0) === Number(user?.id || 0)
+		),
+	)
+}
+
+function getReactionStore(state, entity) {
+	state.reactions = state.reactions || {}
+	state.reactions[entity] = state.reactions[entity] || {}
+	return state.reactions[entity]
 }
 
 function normalizeNotifications(notifications) {
@@ -2350,9 +3007,9 @@ function buildAttachmentPayload(attachment, previewSize) {
 	}
 }
 
-function buildToken(subject) {
+function buildToken(subject, lifetimeSeconds = 3600) {
 	const encode = value => Buffer.from(JSON.stringify(value)).toString('base64url')
-	return `${encode({alg: 'none', typ: 'JWT'})}.${encode({sub: subject, exp: Math.floor(Date.now() / 1000) + 3600})}.signature`
+	return `${encode({alg: 'none', typ: 'JWT'})}.${encode({sub: subject, exp: Math.floor(Date.now() / 1000) + lifetimeSeconds})}.signature`
 }
 
 function listen(server) {

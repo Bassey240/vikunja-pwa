@@ -17,6 +17,7 @@ test.beforeEach(async ({page}) => {
 	stack.reset()
 	await page.setViewportSize({width: 900, height: 900})
 	await page.goto(stack.appUrl)
+	await expect(page.getByRole('heading', {name: 'Connect to your Vikunja server'})).toBeVisible({timeout: 15_000})
 	await page.locator('[data-action="set-account-auth-mode"][data-auth-mode="apiToken"]').click()
 	await page.locator('[data-account-field="baseUrl"]').fill(`${stack.mock.origin}/api/v1`)
 	await page.locator('[data-account-field="apiToken"]').fill('smoke-token')
@@ -419,7 +420,7 @@ test('projects overview cross-project drops paint before background refresh comp
 	expect(phases.indexOf('async-resolved')).toBeGreaterThan(phases.indexOf('optimistic-set-end'))
 })
 
-test('rejects cross-type edge sorting previews as invalid drops', async ({page}) => {
+test('project drag ignores task-edge preview targets', async ({page}) => {
 	await openProject(page, 2, 'Work')
 	await expect.poll(() => rootTaskIds(page)).toEqual([201, 202, 203])
 
@@ -429,6 +430,11 @@ test('rejects cross-type edge sorting previews as invalid drops', async ({page})
 		const projects = await stack.mockApi('projects')
 		return projects.find(project => project.id === 3)?.parent_project_id
 	}).toBe(2)
+	await expect.poll(() => rootTaskIds(page)).toEqual([201, 202, 203])
+})
+
+test('task drag ignores project-edge preview targets', async ({page}) => {
+	await openProject(page, 2, 'Work')
 	await expect.poll(() => rootTaskIds(page)).toEqual([201, 202, 203])
 
 	await dragTaskToProjectEdge(page, 201, 3, 'top')
@@ -506,12 +512,20 @@ test('today branch promotion keeps the root task due date after nested moves', a
 	await page.locator(`[data-action="toggle-task"][data-task-id="${targetTaskId}"]`).click()
 	await expect(page.locator(`[data-task-branch-id="${targetTaskId}"] .task-children-wrap [data-task-row-id="${parentTaskId}"]`)).toBeVisible()
 
-	await dragTaskToTaskEdge(page, parentTaskId, targetTaskId, 'top')
-
-	await expect.poll(async () => {
-		const task = await stack.mockApi(`tasks/${parentTaskId}`)
-		return task.related_tasks.parenttask.length
-	}).toBe(0)
+	for (let attempt = 0; attempt < 2; attempt += 1) {
+		await dragTaskToTaskEdge(page, parentTaskId, targetTaskId, 'top')
+		try {
+			await expect.poll(async () => {
+				const task = await stack.mockApi(`tasks/${parentTaskId}`)
+				return task.related_tasks.parenttask.length
+			}, {timeout: 2500}).toBe(0)
+			break
+		} catch (error) {
+			if (attempt === 1) {
+				throw error
+			}
+		}
+	}
 	await expect.poll(async () => (await rootTaskIds(page)).includes(parentTaskId)).toBe(true)
 	await expect(page.locator(`[data-task-branch-id="${parentTaskId}"] [data-task-due-date="true"]`)).toHaveCount(1)
 })

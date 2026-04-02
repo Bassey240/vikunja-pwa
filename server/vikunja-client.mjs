@@ -4,6 +4,8 @@ export function createVikunjaClient({
 	apiToken = '',
 	accessToken = '',
 	refreshCookie = '',
+	getAuthState = null,
+	coordinateRefresh = null,
 	onAuthStateChange = null,
 	onAuthFailure = null,
 }) {
@@ -172,7 +174,35 @@ export function createVikunjaClient({
 		})
 	}
 
+	function syncAuthStateFromSource() {
+		if (authMode !== 'password' || typeof getAuthState !== 'function') {
+			return false
+		}
+
+		const latestState = getAuthState()
+		if (!latestState || typeof latestState !== 'object') {
+			return false
+		}
+
+		const nextAccessToken = `${latestState.accessToken || ''}`.trim()
+		const nextRefreshCookie = `${latestState.refreshCookie || ''}`.trim()
+		const changed =
+			(Boolean(nextAccessToken) && nextAccessToken !== currentAccessToken) ||
+			(Boolean(nextRefreshCookie) && nextRefreshCookie !== currentRefreshCookie)
+
+		if (Boolean(nextAccessToken)) {
+			currentAccessToken = nextAccessToken
+		}
+		if (Boolean(nextRefreshCookie)) {
+			currentRefreshCookie = nextRefreshCookie
+		}
+
+		return changed
+	}
+
 	async function ensureFreshAccessToken() {
+		syncAuthStateFromSource()
+
 		if (!currentAccessToken) {
 			return
 		}
@@ -195,63 +225,83 @@ export function createVikunjaClient({
 			return null
 		}
 
-		if (!currentRefreshCookie) {
-			const error = new Error('No Vikunja refresh cookie is available.')
-			error.statusCode = 401
-			onAuthFailure?.({
-				statusCode: error.statusCode,
-				details: error.message,
-			})
-			throw error
-		}
+		const runRefresh = async () => {
+			syncAuthStateFromSource()
 
-		const response = await fetch(new URL('user/token/refresh', `${baseUrl}/`), {
-			method: 'POST',
-			headers: {
-				Accept: 'application/json',
-				Cookie: currentRefreshCookie,
-			},
-		})
-
-		const rawText = await response.text()
-		const payload = tryParseJson(rawText)
-
-		if (!response.ok) {
-			const error = new Error(`Vikunja refresh failed with ${response.status}`)
-			error.statusCode = response.status
-			error.details = payload || rawText || null
-			if (response.status === 400 || response.status === 401) {
+			if (!currentRefreshCookie) {
+				const error = new Error('No Vikunja refresh cookie is available.')
+				error.statusCode = 401
 				onAuthFailure?.({
-					statusCode: response.status,
-					details: error.details,
+					statusCode: error.statusCode,
+					details: error.message,
 				})
+				throw error
 			}
-			throw error
+
+			const response = await fetch(new URL('user/token/refresh', `${baseUrl}/`), {
+				method: 'POST',
+				headers: {
+					Accept: 'application/json',
+					Cookie: currentRefreshCookie,
+				},
+			})
+
+			const rawText = await response.text()
+			const payload = tryParseJson(rawText)
+
+			if (!response.ok) {
+				const error = new Error(`Vikunja refresh failed with ${response.status}`)
+				error.statusCode = response.status
+				error.details = payload || rawText || null
+
+				// Another request may already have rotated the refresh cookie and
+				// written the latest auth state back to the shared session.
+				if (response.status === 401 && syncAuthStateFromSource()) {
+					return currentAccessToken
+				}
+
+				if (response.status === 401) {
+					onAuthFailure?.({
+						statusCode: response.status,
+						details: error.details,
+					})
+				}
+				throw error
+			}
+
+			const nextToken = `${payload?.token || ''}`.trim()
+			if (!nextToken) {
+				const error = new Error('Vikunja refresh did not return a token.')
+				error.statusCode = 502
+				throw error
+			}
+
+			const nextRefreshCookie = extractRefreshCookie(response)
+			currentAccessToken = nextToken
+			if (nextRefreshCookie) {
+				currentRefreshCookie = nextRefreshCookie
+			}
+
+			onAuthStateChange?.({
+				accessToken: currentAccessToken,
+				refreshCookie: currentRefreshCookie,
+			})
+
+			return currentAccessToken
 		}
 
-		const nextToken = `${payload?.token || ''}`.trim()
-		if (!nextToken) {
-			const error = new Error('Vikunja refresh did not return a token.')
-			error.statusCode = 502
-			throw error
+		if (typeof coordinateRefresh === 'function') {
+			await coordinateRefresh(runRefresh)
+			syncAuthStateFromSource()
+			return currentAccessToken
 		}
 
-		const nextRefreshCookie = extractRefreshCookie(response)
-		currentAccessToken = nextToken
-		if (nextRefreshCookie) {
-			currentRefreshCookie = nextRefreshCookie
-		}
-
-		onAuthStateChange?.({
-			accessToken: currentAccessToken,
-			refreshCookie: currentRefreshCookie,
-		})
-
-		return currentAccessToken
+		return runRefresh()
 	}
 }
 
-export async function createPasswordAccount({baseUrl, username, password}) {
+export async function createPasswordAccount({baseUrl, username, password, totpPasscode = ''}) {
+	const nextTotpPasscode = `${totpPasscode || ''}`.trim()
 	const response = await fetch(new URL('login', `${baseUrl}/`), {
 		method: 'POST',
 		headers: {
@@ -261,6 +311,7 @@ export async function createPasswordAccount({baseUrl, username, password}) {
 		body: JSON.stringify({
 			username,
 			password,
+			...(nextTotpPasscode ? {totp_passcode: nextTotpPasscode} : {}),
 		}),
 	})
 

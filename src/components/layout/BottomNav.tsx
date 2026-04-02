@@ -44,7 +44,6 @@ function BottomNavButton({
 export default function BottomNav() {
 	const connected = useAppStore(state => state.connected)
 	const inboxProjectId = useAppStore(state => state.inboxProjectId)
-	const offlineReadOnlyMode = useAppStore(state => state.offlineReadOnlyMode)
 	const openMenu = useAppStore(state => state.openMenu)
 	const setOpenMenu = useAppStore(state => state.setOpenMenu)
 	const toggleNavMenu = useAppStore(state => state.toggleNavMenu)
@@ -89,7 +88,6 @@ export default function BottomNav() {
 					action="open-root-composer"
 					label="Add"
 					emphasize={true}
-					disabled={offlineReadOnlyMode}
 					onClick={() =>
 						openRootComposer({
 							projectId: screen === 'today' ? inboxProjectId : null,

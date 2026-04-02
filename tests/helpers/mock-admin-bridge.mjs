@@ -18,6 +18,10 @@ export async function createMockAdminBridge(rootDir, {
 	adminUsers = [],
 	testmail = {},
 	doctor = {},
+	migrations = [],
+	dump = {},
+	restore = {},
+	repairs = {},
 } = {}) {
 	const binDir = path.join(rootDir, 'mock-admin-bridge-bin')
 	const statePath = path.join(rootDir, 'mock-admin-bridge-state.json')
@@ -36,6 +40,10 @@ export async function createMockAdminBridge(rootDir, {
 		adminUsers,
 		testmail,
 		doctor,
+		migrations,
+		dump,
+		restore,
+		repairs,
 	})
 
 	await mkdir(binDir, {recursive: true})
@@ -108,6 +116,10 @@ function buildInitialState({
 	adminUsers,
 	testmail,
 	doctor,
+	migrations,
+	dump,
+	restore,
+	repairs,
 }) {
 	const users = Array.isArray(adminUsers) && adminUsers.length > 0
 		? adminUsers.map(user => ({
@@ -153,6 +165,7 @@ function buildInitialState({
 					[composePath]: initialComposeYaml,
 				}
 				: {},
+		binaryFiles: {},
 		envVars: {...envVars},
 		configReadError: normalizeCommandError(configReadError),
 		configWriteError: normalizeCommandError(configWriteError),
@@ -172,6 +185,32 @@ function buildInitialState({
 			stdout: `${doctor.stdout || 'doctor ok\n'}`,
 			stderr: `${doctor.stderr || ''}`,
 		},
+		migrations: Array.isArray(migrations) && migrations.length > 0
+			? migrations.map(migration => ({
+				id: `${migration.id || migration.name || ''}`.trim(),
+				name: `${migration.name || migration.id || ''}`.trim(),
+				applied: migration.applied !== false,
+			}))
+			: [
+				{id: '001', name: '001_initial', applied: true},
+				{id: '002', name: '002_add_tokens', applied: false},
+			],
+		dump: {
+			filename: `${dump.filename || 'vikunja-dump-smoke.zip'}`,
+			contentBase64: `${dump.contentBase64 || Buffer.from('mock-admin-dump-zip', 'utf8').toString('base64')}`,
+		},
+		restore: {
+			exitCode: Number(restore.exitCode || 0),
+			stdout: `${restore.stdout || 'restore ok\n'}`,
+			stderr: `${restore.stderr || ''}`,
+			lastUploadedBase64: null,
+		},
+		repairs: {
+			'file-mime-types': normalizeCommandResult(repairs['file-mime-types'], 'file mime types ok\n'),
+			'orphan-positions': normalizeCommandResult(repairs['orphan-positions'], 'orphan positions ok\n'),
+			projects: normalizeCommandResult(repairs.projects, 'projects ok\n'),
+			'task-positions': normalizeCommandResult(repairs['task-positions'], 'task positions ok\n'),
+		},
 	}
 }
 
@@ -190,6 +229,22 @@ function normalizeCommandError(value) {
 	return {
 		exitCode: Number(value.exitCode || 1),
 		stderr: `${value.stderr || value.message || 'Command failed.'}`,
+	}
+}
+
+function normalizeCommandResult(value, defaultStdout) {
+	if (!value) {
+		return {
+			exitCode: 0,
+			stdout: defaultStdout,
+			stderr: '',
+		}
+	}
+
+	return {
+		exitCode: Number(value.exitCode || 0),
+		stdout: `${value.stdout || defaultStdout || ''}`,
+		stderr: `${value.stderr || ''}`,
 	}
 }
 
@@ -276,6 +331,12 @@ function findUser(state, identifier) {
 function serializeUsers(users) {
 \tconst header = '| ID | Username | Email | Status | Issuer | Subject | Created | Updated |'
 \tconst rows = users.map(user => \`| \${user.id} | \${user.username} | \${user.email || ''} | \${user.status || (user.enabled === false ? 'disabled' : 'active')} | \${user.issuer || ''} | \${user.subject || ''} | \${user.created || ''} | \${user.updated || ''} |\`)
+\treturn [header, ...rows].join('\\n')
+}
+
+function serializeMigrations(migrations) {
+\tconst header = '| ID | Name | Applied |'
+\tconst rows = (migrations || []).map(migration => \`| \${migration.id} | \${migration.name} | \${migration.applied === true ? 'true' : 'false'} |\`)
 \treturn [header, ...rows].join('\\n')
 }
 
@@ -391,6 +452,73 @@ function handleCli(state, args) {
 \t\t\tprocess.stderr.write(String(doctor.stderr))
 \t\t}
 \t\tprocess.exit(Number(doctor.exitCode || 0))
+\t}
+
+\tif (command === 'dump') {
+\t\tconst filename = String(state.dump?.filename || 'vikunja-dump-smoke.zip')
+\t\tconst dumpPath = \`/tmp/\${filename}\`
+\t\tstate.binaryFiles = state.binaryFiles || {}
+\t\tstate.binaryFiles[dumpPath] = String(state.dump?.contentBase64 || '')
+\t\twriteState(state)
+\t\tprocess.stdout.write(\`Dump file saved at \${dumpPath}\\n\`)
+\t\treturn
+\t}
+
+\tif (command === 'restore') {
+\t\tconst targetPath = String(args[1] || '')
+\t\tstate.restore = state.restore || {}
+\t\tstate.restore.lastUploadedBase64 = String((state.binaryFiles || {})[targetPath] || '')
+\t\twriteState(state)
+\t\tif (state.restore.stdout) {
+\t\t\tprocess.stdout.write(String(state.restore.stdout))
+\t\t}
+\t\tif (state.restore.stderr) {
+\t\t\tprocess.stderr.write(String(state.restore.stderr))
+\t\t}
+\t\tprocess.exit(Number(state.restore.exitCode || 0))
+\t}
+
+\tif (command === 'migrate') {
+\t\tconst subcommand = String(args[1] || '')
+\t\tstate.migrations = state.migrations || []
+\t\tif (subcommand === 'list') {
+\t\t\tprocess.stdout.write(serializeMigrations(state.migrations))
+\t\t\treturn
+\t\t}
+\t\tif (subcommand === 'rollback') {
+\t\t\tconst name = findFlagValue(args, '--name')
+\t\t\tconst migration = (state.migrations || []).find(entry => String(entry.name) === name)
+\t\t\tif (!migration) {
+\t\t\t\tfail('Migration not found.')
+\t\t\t}
+\t\t\tmigration.applied = false
+\t\t\twriteState(state)
+\t\t\tprocess.stdout.write(\`Rolled back \${name}\\n\`)
+\t\t\treturn
+\t\t}
+\t\tfor (const migration of state.migrations) {
+\t\t\tif (migration.applied !== true) {
+\t\t\t\tmigration.applied = true
+\t\t\t}
+\t\t}
+\t\twriteState(state)
+\t\tprocess.stdout.write('Applied pending migrations\\n')
+\t\treturn
+\t}
+
+\tif (command === 'repair') {
+\t\tconst repairName = String(args[1] || '')
+\t\tconst repair = (state.repairs || {})[repairName]
+\t\tif (!repair) {
+\t\t\tfail(\`Unknown repair command: \${repairName}\`)
+\t\t}
+\t\tif (repair.stdout) {
+\t\t\tprocess.stdout.write(String(repair.stdout))
+\t\t}
+\t\tif (repair.stderr) {
+\t\t\tprocess.stderr.write(String(repair.stderr))
+\t\t}
+\t\tprocess.exit(Number(repair.exitCode || 0))
 \t}
 
 \tif (command === 'user') {
@@ -524,11 +652,27 @@ if (command === 'true') {
 
 if (command === 'cat') {
 \tconst targetPath = String(args[index + 1] || '')
+\tif (targetPath in (state.binaryFiles || {})) {
+\t\tprocess.stdout.write(Buffer.from(String(state.binaryFiles[targetPath] || ''), 'base64'))
+\t\tprocess.exit(0)
+\t}
 \tif (!(targetPath in (state.files || {}))) {
 \t\tprocess.stderr.write(\`cat: \${targetPath}: No such file or directory\\n\`)
 \t\tprocess.exit(1)
 \t}
 \tprocess.stdout.write(String(state.files[targetPath] || ''))
+\tprocess.exit(0)
+}
+
+if (command === 'rm' && String(args[index + 1] || '') === '-f') {
+\tconst targetPath = String(args[index + 2] || '')
+\tif (state.files && targetPath in state.files) {
+\t\tdelete state.files[targetPath]
+\t}
+\tif (state.binaryFiles && targetPath in state.binaryFiles) {
+\t\tdelete state.binaryFiles[targetPath]
+\t}
+\twriteState(state)
 \tprocess.exit(0)
 }
 
@@ -543,9 +687,18 @@ if (command === 'sh' && String(args[index + 1] || '') === '-c') {
 \tif (!interactive) {
 \t\tfail('Interactive stdin is required for config writes.')
 \t}
-\tconst stdin = readFileSync(0, 'utf8')
+\tconst script = String(args[index + 2] || '')
+\tconst stdinBuffer = readFileSync(0)
+\tconst uploadMatch = script.match(/^cat > (.+)$/)
+\tif (uploadMatch) {
+\t\tconst targetPath = String(uploadMatch[1] || '').trim()
+\t\tstate.binaryFiles = state.binaryFiles || {}
+\t\tstate.binaryFiles[targetPath] = Buffer.from(stdinBuffer).toString('base64')
+\t\twriteState(state)
+\t\tprocess.exit(0)
+\t}
 \tstate.files = state.files || {}
-\tstate.files[state.configPath] = stdin
+\tstate.files[state.configPath] = stdinBuffer.toString('utf8')
 \twriteState(state)
 \tprocess.exit(0)
 }

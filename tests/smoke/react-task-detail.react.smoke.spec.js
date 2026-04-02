@@ -30,7 +30,20 @@ async function expandSettingsSection(page, sectionId) {
 	return section
 }
 
+async function openTaskDetailSection(page, sectionId) {
+	const toggle = page.locator(`[data-detail-section-toggle="${sectionId}"]`)
+	if ((await toggle.getAttribute('aria-expanded')) !== 'true') {
+		await toggle.click()
+	}
+	return toggle
+}
+
 test('task detail edits title, priority, favorite state, and labels', async ({page}) => {
+	const pageErrors = []
+	page.on('pageerror', error => {
+		pageErrors.push(error.message)
+	})
+
 	await page.locator('.task-row').filter({hasText: 'Prepare daily summary'}).locator('[data-action="open-task-focus"]').click()
 	await page.locator('[data-action="open-focused-task-detail"]').click()
 	await expect(page.locator('[data-detail-title]')).toBeVisible()
@@ -46,31 +59,30 @@ test('task detail edits title, priority, favorite state, and labels', async ({pa
 	await expect(page.locator('[data-detail-section-toggle="planning"]')).toHaveAttribute('aria-expanded', 'true')
 	await page.locator('[data-detail-section-toggle="recurring"]').click()
 	await expect(page.locator('[data-detail-section-toggle="recurring"]')).toHaveAttribute('aria-expanded', 'true')
+	await expect(page.locator('[data-detail-section-toggle="planning"]')).toHaveAttribute('aria-expanded', 'false')
 	await page.locator('[data-detail-section-toggle="reminders"]').click()
 	await expect(page.locator('[data-detail-section-toggle="reminders"]')).toHaveAttribute('aria-expanded', 'true')
+	await expect(page.locator('[data-detail-section-toggle="recurring"]')).toHaveAttribute('aria-expanded', 'false')
 	await page.locator('[data-detail-section-toggle="assignees"]').click()
 	await expect(page.locator('[data-detail-section-toggle="assignees"]')).toHaveAttribute('aria-expanded', 'true')
+	await expect(page.locator('[data-detail-section-toggle="reminders"]')).toHaveAttribute('aria-expanded', 'false')
 	await page.locator('[data-detail-section-toggle="comments"]').click()
 	await expect(page.locator('[data-detail-section-toggle="comments"]')).toHaveAttribute('aria-expanded', 'true')
+	await expect(page.locator('[data-detail-section-toggle="assignees"]')).toHaveAttribute('aria-expanded', 'false')
 	await page.locator('[data-detail-section-toggle="attachments"]').click()
 	await expect(page.locator('[data-detail-section-toggle="attachments"]')).toHaveAttribute('aria-expanded', 'true')
+	await expect(page.locator('[data-detail-section-toggle="comments"]')).toHaveAttribute('aria-expanded', 'false')
 	await page.locator('[data-detail-section-toggle="info"]').click()
 	await expect(page.locator('[data-detail-section-toggle="info"]')).toHaveAttribute('aria-expanded', 'true')
-	await expect(page.locator('[data-detail-percent-done-value]')).toHaveText('35%')
-	await expect(page.locator('[data-task-metadata="done_at"]')).toHaveText('Not completed yet')
-	await expect(page.locator('[data-task-metadata="created"]')).not.toHaveText('Not available')
-	await expect(page.locator('[data-task-metadata="updated"]')).not.toHaveText('Not available')
-	await expect(page.locator('[data-task-repeat-summary]')).toHaveText('Does not repeat')
-	await expect(page.locator('[data-task-assignee]')).toHaveCount(0)
-	await expect(page.locator('[data-task-reminder]')).toHaveCount(0)
-	await expect(page.locator('[data-task-attachment]')).toHaveCount(0)
-	await expect(page.locator('[data-action="add-quick-reminder"][data-reminder-option="tomorrow"]')).toHaveCount(1)
+	await expect(page.locator('[data-detail-section-toggle="attachments"]')).toHaveAttribute('aria-expanded', 'false')
 
 	const titleInput = page.locator('[data-detail-title]')
 	await titleInput.fill('Prepare daily summary updated')
 	await titleInput.blur()
 	await expect(page.locator('.panel-title').filter({hasText: 'Prepare daily summary updated'})).toBeVisible()
 
+	await openTaskDetailSection(page, 'planning')
+	await expect(page.locator('[data-detail-percent-done-value]')).toHaveText('35%')
 	await page.locator('[data-detail-priority]').selectOption('4')
 	await expect(page.locator('[data-detail-priority]')).toHaveValue('4')
 
@@ -83,65 +95,13 @@ test('task detail edits title, priority, favorite state, and labels', async ({pa
 	}).toBe(100)
 	await expect(page.locator('[data-detail-percent-done-value]')).toHaveText('100%')
 
-	await page.locator('[data-detail-assignee-search]').fill('smoke')
-	await expect(page.locator('[data-action="add-task-assignee"][data-task-assignee-option="1"]')).toHaveCount(1)
-	await page.locator('[data-action="add-task-assignee"][data-task-assignee-option="1"]').click()
-	await expect.poll(async () => {
-		const task = await stack.mockApi('tasks/102')
-		return task.assignees?.length || 0
-	}).toBe(1)
-	await expect(page.locator('[data-task-assignee="1"]')).toHaveCount(1)
+	await openTaskDetailSection(page, 'info')
+	await expect(page.locator('[data-task-metadata="done_at"]')).toHaveText('Not completed yet')
+	await expect(page.locator('[data-task-metadata="created"]')).not.toHaveText('Not available')
+	await expect(page.locator('[data-task-metadata="updated"]')).not.toHaveText('Not available')
 
-	await page.locator('[data-action="remove-task-assignee"][data-task-assignee-id="1"]').click()
-	await expect.poll(async () => {
-		const task = await stack.mockApi('tasks/102')
-		return task.assignees?.length || 0
-	}).toBe(0)
-	await expect(page.locator('[data-task-assignee="1"]')).toHaveCount(0)
-
-	await page.locator('[data-detail-comment-input]').fill('Follow-up note for the summary.')
-	await page.locator('[data-form="add-comment"]').getByRole('button', {name: 'Add comment'}).click()
-	await expect.poll(async () => {
-		const task = await stack.mockApi('tasks/102')
-		return task.comments?.length || 0
-	}).toBe(1)
-	await expect(page.locator('[data-task-comment]')).toHaveCount(1)
-
-	await page.locator('[data-action="edit-task-comment"][data-task-comment-id="2"]').click()
-	await page.locator('[data-detail-edit-comment="2"]').fill('Updated follow-up note for the summary.')
-	await page.locator('[data-action="save-task-comment"][data-task-comment-id="2"]').click()
-	await expect.poll(async () => {
-		const task = await stack.mockApi('tasks/102')
-		return task.comments?.[0]?.comment || ''
-	}).toBe('Updated follow-up note for the summary.')
-	await expect(page.locator('[data-task-comment="2"]')).toContainText('Updated follow-up note for the summary.')
-
-	await page.locator('[data-action="delete-task-comment"][data-task-comment-id="2"]').click()
-	await expect.poll(async () => {
-		const task = await stack.mockApi('tasks/102')
-		return task.comments?.length || 0
-	}).toBe(0)
-	await expect(page.locator('[data-task-comment]')).toHaveCount(0)
-
-	await page.locator('[data-detail-attachment-input]').setInputFiles({
-		name: 'receipt.png',
-		mimeType: 'image/png',
-		buffer: Buffer.from('mock-png-content'),
-	})
-	await expect.poll(async () => {
-		const task = await stack.mockApi('tasks/102')
-		return task.attachments?.length || 0
-	}).toBe(1)
-	await expect(page.locator('[data-task-attachment]')).toHaveCount(1)
-	await expect(page.locator('[data-task-attachment] img')).toHaveCount(1)
-
-	await page.locator('[data-action="delete-task-attachment"]').click()
-	await expect.poll(async () => {
-		const task = await stack.mockApi('tasks/102')
-		return task.attachments?.length || 0
-	}).toBe(0)
-	await expect(page.locator('[data-task-attachment]')).toHaveCount(0)
-
+	await openTaskDetailSection(page, 'recurring')
+	await expect(page.locator('[data-task-repeat-summary]')).toHaveText('Does not repeat')
 	await page.locator('[data-action="set-repeat-preset"][data-repeat-preset="weeks"]').click()
 	await expect.poll(async () => {
 		const task = await stack.mockApi('tasks/102')
@@ -176,6 +136,74 @@ test('task detail edits title, priority, favorite state, and labels', async ({pa
 	}).toBe(false)
 	await expect(page.locator('[data-task-repeat-summary]')).toHaveText('Does not repeat')
 
+	await openTaskDetailSection(page, 'assignees')
+	await expect(page.locator('[data-task-assignee]')).toHaveCount(0)
+	await page.locator('[data-detail-assignee-search]').fill('smoke')
+	await expect(page.locator('[data-action="add-task-assignee"][data-task-assignee-option="1"]')).toHaveCount(1)
+	await page.locator('[data-action="add-task-assignee"][data-task-assignee-option="1"]').click()
+	await expect.poll(async () => {
+		const task = await stack.mockApi('tasks/102')
+		return task.assignees?.length || 0
+	}).toBe(1)
+	await expect(page.locator('[data-task-assignee="1"]')).toHaveCount(1)
+
+	await page.locator('[data-action="remove-task-assignee"][data-task-assignee-id="1"]').click()
+	await expect.poll(async () => {
+		const task = await stack.mockApi('tasks/102')
+		return task.assignees?.length || 0
+	}).toBe(0)
+	await expect(page.locator('[data-task-assignee="1"]')).toHaveCount(0)
+
+	await openTaskDetailSection(page, 'comments')
+	await page.locator('[data-detail-comment-input]').fill('Follow-up note for the summary.')
+	await page.locator('[data-form="add-comment"]').getByRole('button', {name: 'Add comment'}).click()
+	await expect.poll(async () => {
+		const task = await stack.mockApi('tasks/102')
+		return task.comments?.length || 0
+	}).toBe(1)
+	await expect(page.locator('[data-task-comment]')).toHaveCount(1)
+	await expect(page.getByText('Route not found.')).toHaveCount(0)
+
+	await page.locator('[data-action="edit-task-comment"][data-task-comment-id="2"]').click()
+	await page.locator('[data-detail-edit-comment="2"]').fill('Updated follow-up note for the summary.')
+	await page.locator('[data-action="save-task-comment"][data-task-comment-id="2"]').click()
+	await expect.poll(async () => {
+		const task = await stack.mockApi('tasks/102')
+		return task.comments?.[0]?.comment || ''
+	}).toBe('Updated follow-up note for the summary.')
+	await expect(page.locator('[data-task-comment="2"]')).toContainText('Updated follow-up note for the summary.')
+
+	await page.locator('[data-action="delete-task-comment"][data-task-comment-id="2"]').click()
+	await expect.poll(async () => {
+		const task = await stack.mockApi('tasks/102')
+		return task.comments?.length || 0
+	}).toBe(0)
+	await expect(page.locator('[data-task-comment]')).toHaveCount(0)
+
+	await openTaskDetailSection(page, 'attachments')
+	await expect(page.locator('[data-task-attachment]')).toHaveCount(0)
+	await page.locator('[data-detail-attachment-input]').setInputFiles({
+		name: 'receipt.png',
+		mimeType: 'image/png',
+		buffer: Buffer.from('mock-png-content'),
+	})
+	await expect.poll(async () => {
+		const task = await stack.mockApi('tasks/102')
+		return task.attachments?.length || 0
+	}).toBe(1)
+	await expect(page.locator('[data-task-attachment]')).toHaveCount(1)
+	await expect(page.locator('[data-task-attachment] img')).toHaveCount(1)
+
+	await page.locator('[data-action="delete-task-attachment"]').click()
+	await expect.poll(async () => {
+		const task = await stack.mockApi('tasks/102')
+		return task.attachments?.length || 0
+	}).toBe(0)
+	await expect(page.locator('[data-task-attachment]')).toHaveCount(0)
+
+	await openTaskDetailSection(page, 'reminders')
+	await expect(page.locator('[data-task-reminder]')).toHaveCount(0)
+	await expect(page.locator('[data-action="add-quick-reminder"][data-reminder-option="tomorrow"]')).toHaveCount(1)
 	await page.locator('[data-action="add-quick-reminder"][data-reminder-option="tomorrow"]').click()
 	await expect.poll(async () => {
 		const task = await stack.mockApi('tasks/102')
@@ -196,13 +224,7 @@ test('task detail edits title, priority, favorite state, and labels', async ({pa
 		const task = await stack.mockApi('tasks/102')
 		return task.reminders?.some(reminder => reminder.relative_to === 'due_date') || false
 	}).toBe(true)
-
-	if ((await page.locator('[data-detail-section-toggle="reminders"]').getAttribute('aria-expanded')) !== 'true') {
-		await page.locator('[data-detail-section-toggle="reminders"]').click()
-	}
-
 	await expect(page.locator('[data-form="add-reminder"] .compact-date-picker-input')).toBeVisible()
-
 	await page.locator('[data-action="remove-task-reminder"][data-task-reminder-index="0"]').click()
 	await expect.poll(async () => {
 		const task = await stack.mockApi('tasks/102')
@@ -221,6 +243,7 @@ test('task detail edits title, priority, favorite state, and labels', async ({pa
 		const task = await stack.mockApi('tasks/102')
 		return Boolean(task.done_at)
 	}).toBe(true)
+	await openTaskDetailSection(page, 'info')
 	await expect(page.locator('[data-task-metadata="done_at"]')).not.toHaveText('Not completed yet')
 
 	await page.locator('[data-detail-section-toggle="organization"]').click()
@@ -233,6 +256,7 @@ test('task detail edits title, priority, favorite state, and labels', async ({pa
 	await expect(page.locator('.label-chip').filter({hasText: 'Personal'})).toHaveCount(0)
 	await page.locator('.workspace-screen.is-active .topbar [data-action="close-detail-overlay"]').click()
 	await expect(page.locator('[data-detail-title]')).toHaveCount(0)
+	expect(pageErrors).toEqual([])
 })
 
 test('root composer creates tasks and inline subtask composer creates subtasks', async ({page}) => {
@@ -281,9 +305,9 @@ test('task detail renders avatars, marks tasks read, and toggles subscriptions',
 		})
 		.not.toBeNull()
 
-	await page.locator('[data-detail-section-toggle="assignees"]').click()
-	await page.locator('[data-detail-section-toggle="comments"]').click()
+	await openTaskDetailSection(page, 'assignees')
 	await expect(page.locator('[data-task-assignee="2"] img.user-avatar')).toHaveCount(1)
+	await openTaskDetailSection(page, 'comments')
 	await expect(page.locator('[data-task-comment="1"] img.user-avatar')).toHaveCount(1)
 
 	await expect(page.locator('[data-action="toggle-task-subscription"]')).toHaveText('Subscribed')
@@ -295,6 +319,35 @@ test('task detail renders avatars, marks tasks read, and toggles subscriptions',
 			return task.subscription?.subscribed ?? null
 		})
 		.toBe(false)
+})
+
+test('task comments can add and remove reactions', async ({page}) => {
+	await page.goto(`${stack.appUrl}/projects`)
+	await expect(page.getByRole('heading', {name: 'Projects'})).toBeVisible()
+	await page.locator('[data-project-node-id="2"] [data-action="select-project"][data-project-id="2"]').click()
+	await expect(page.getByRole('heading', {name: 'Work'})).toBeVisible()
+
+	await page.locator('.task-row').filter({hasText: 'Smoke suite rollout'}).locator('[data-action="open-task-focus"]').click()
+	await page.locator('[data-action="open-focused-task-detail"]').click()
+	await openTaskDetailSection(page, 'comments')
+
+	await page.locator('[data-action="toggle-comment-reaction-picker"][data-task-comment-id="1"]').click()
+	await page.locator('[data-action="add-comment-reaction"][data-task-comment-id="1"][data-task-comment-reaction-value="🎉"]').click()
+	await expect(page.locator('[data-action="toggle-comment-reaction"][data-task-comment-id="1"][data-task-comment-reaction-value="🎉"]')).toContainText('🎉 1')
+	await expect
+		.poll(async () => {
+			const reactions = await stack.mockApi('comments/1/reactions')
+			return Object.values(reactions).reduce((count, users) => count + users.length, 0)
+		})
+		.toBe(1)
+
+	await page.locator('[data-action="toggle-comment-reaction"][data-task-comment-id="1"][data-task-comment-reaction-value="🎉"]').click()
+	await expect
+		.poll(async () => {
+			const reactions = await stack.mockApi('comments/1/reactions')
+			return Object.values(reactions).reduce((count, users) => count + users.length, 0)
+		})
+		.toBe(0)
 })
 
 test('switching to initials updates the current-user avatar on task surfaces', async ({page}) => {
@@ -311,7 +364,7 @@ test('switching to initials updates the current-user avatar on task surfaces', a
 	const taskRow = page.locator('.task-row').filter({hasText: 'Prepare daily summary'})
 	await taskRow.locator('[data-action="open-task-focus"]').first().click()
 	await page.locator('[data-action="open-focused-task-detail"]').click()
-	await page.locator('[data-detail-section-toggle="assignees"]').click()
+	await openTaskDetailSection(page, 'assignees')
 	await page.locator('[data-detail-assignee-search]').fill('smoke')
 	await page.locator('[data-action="add-task-assignee"][data-task-assignee-option="1"]').click()
 	await expect(page.locator('[data-task-assignee="1"] .user-avatar-initials')).toHaveCount(1)

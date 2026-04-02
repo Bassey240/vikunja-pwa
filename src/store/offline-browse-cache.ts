@@ -135,8 +135,8 @@ export function resolveOfflineProjectViewId({
 	)
 }
 
-export function persistOfflineBrowseSnapshot(state: AppStore) {
-	const snapshot = loadOfflineSnapshot()
+export async function persistOfflineBrowseSnapshot(state: AppStore) {
+	const snapshot = await loadOfflineSnapshot()
 	const hasCurrentProjectTasks = Boolean(state.currentTasksProjectId)
 	const hasGlobalProjectTaskCache = state.projectFilterTasksLoaded || (snapshot?.projectFilterTasksLoaded ?? false)
 	const projectFilterTasks =
@@ -157,7 +157,7 @@ export function persistOfflineBrowseSnapshot(state: AppStore) {
 			: {}),
 	}
 
-	mergeOfflineSnapshot({
+	await mergeOfflineSnapshot({
 		currentTasksProjectId: state.currentTasksProjectId,
 		currentProjectViewId: state.currentProjectViewId,
 		currentInboxViewId: state.currentInboxViewId,

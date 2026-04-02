@@ -46,7 +46,7 @@ export const createNotificationsSlice: StateCreator<AppStore, [], [], Notificati
 				notifications: normalizeNotifications(notifications),
 				notificationsLoaded: true,
 			})
-			mergeOfflineSnapshot({
+			void mergeOfflineSnapshot({
 				notifications: get().notifications,
 			})
 		} catch (error) {

@@ -63,6 +63,7 @@ const sessionStore = createSessionStore({
 	filePath: appSessionStorePath,
 	keyPath: appSessionKeyPath,
 })
+const accountRefreshOperations = new Map()
 const loginRateLimiter = createRateLimiter({
 	windowMs: loginRateLimitWindowSeconds * 1000,
 	max: loginRateLimitMax,
@@ -72,7 +73,7 @@ const sessionMutationRateLimiter = createRateLimiter({
 	max: sessionMutationRateLimitMax,
 })
 const legacyConfigured = Boolean(vikunjaBaseUrl && vikunjaApiToken)
-const buildId = '2026-03-31-hotfix-0.2.1'
+const buildId = '2026-04-02-alpha-0.3.0'
 const adminBridge = createAdminBridge({
 	bridgeMode: vikunjaBridgeMode,
 	vikunjaContainerName,
@@ -205,6 +206,36 @@ async function handleApi(req, res, url) {
 		return
 	}
 
+	if (url.pathname === '/api/instance-info' && req.method === 'GET') {
+		const rawBase = url.searchParams.get('baseUrl') || ''
+		const probeUrl = normalizeBaseUrl(rawBase)
+		if (!probeUrl) {
+			sendJson(res, 400, {error: 'baseUrl is required.'})
+			return
+		}
+
+		let infoRes
+		try {
+			infoRes = await fetch(new URL('info', `${probeUrl}/`), {
+				headers: {
+					Accept: 'application/json',
+				},
+			})
+		} catch {
+			sendJson(res, 502, {error: 'Could not reach Vikunja instance.'})
+			return
+		}
+
+		if (!infoRes.ok) {
+			sendJson(res, infoRes.status, {error: 'Could not reach Vikunja instance.'})
+			return
+		}
+
+		const info = await infoRes.json().catch(() => ({}))
+		sendJson(res, 200, info)
+		return
+	}
+
 	if (url.pathname === '/api/session' && req.method === 'GET') {
 		const context = await getVikunjaContext(req, res)
 		if (!context) {
@@ -219,6 +250,17 @@ async function handleApi(req, res, url) {
 			connected: true,
 			account: summarizeAccount(context.account, context.source),
 		})
+		return
+	}
+
+	if (url.pathname === '/api/session/auth-info' && req.method === 'GET') {
+		const baseUrl = normalizeBaseUrl(url.searchParams.get('baseUrl') || defaultVikunjaBaseUrl || '')
+		if (!baseUrl) {
+			sendJson(res, 400, {error: 'A Vikunja base URL is required.'})
+			return
+		}
+
+		sendJson(res, 200, await fetchUpstreamAuthInfo(baseUrl))
 		return
 	}
 
@@ -240,6 +282,7 @@ async function handleApi(req, res, url) {
 		if (authMode === 'password') {
 			const username = `${body.username || ''}`.trim()
 			const password = `${body.password || ''}`
+			const totpPasscode = `${body.totpPasscode || ''}`.trim()
 			if (!username || !password) {
 				sendJson(res, 400, {error: 'Username and password are required.'})
 				return
@@ -249,6 +292,7 @@ async function handleApi(req, res, url) {
 				baseUrl,
 				username,
 				password,
+				totpPasscode,
 			})
 			account = await hydrateOperatorAccountIdentity(account)
 		} else {
@@ -309,6 +353,16 @@ async function handleApi(req, res, url) {
 		const password = `${body.password || ''}`
 		if (!username || !email || !password) {
 			sendJson(res, 400, {error: 'Username, email, and password are required.'})
+			return
+		}
+
+		const authInfo = await fetchUpstreamAuthInfo(baseUrl)
+		if (authInfo.localEnabled === false) {
+			sendJson(res, 403, {error: 'This Vikunja server does not allow password account creation.'})
+			return
+		}
+		if (authInfo.registrationEnabled === false) {
+			sendJson(res, 403, {error: 'This Vikunja server does not allow self-registration.'})
 			return
 		}
 
@@ -592,6 +646,41 @@ async function handleApi(req, res, url) {
 				],
 			},
 		)
+		return
+	}
+
+	if (url.pathname === '/api/info' && req.method === 'GET') {
+		const context = await requireVikunjaContext(req, res)
+		const info = await context.client.request('info')
+		sendJson(res, 200, info)
+		return
+	}
+
+	if (url.pathname === '/api/user/deletion/confirm' && req.method === 'POST') {
+		const context = await requireVikunjaContext(req, res)
+		const body = await readJsonBody(req)
+		const token = `${body.token || ''}`.trim()
+		if (!token) {
+			sendJson(res, 400, {error: 'Token is required.'})
+			return
+		}
+
+		try {
+			await context.client.request('user/deletion/confirm', {
+				method: 'POST',
+				body: {token},
+			})
+		} catch (error) {
+			const statusCode = Number(error?.statusCode || 0) || 500
+			const message =
+				typeof error?.message === 'string' && error.message.trim()
+					? error.message
+					: 'Confirmation failed.'
+			sendJson(res, statusCode, {error: message})
+			return
+		}
+
+		sendJson(res, 200, {ok: true})
 		return
 	}
 
@@ -880,6 +969,67 @@ async function handleApi(req, res, url) {
 		return
 	}
 
+	if (url.pathname === '/api/admin/dump' && req.method === 'POST') {
+		await requireAdminSession(req, res)
+		const {buffer, filename} = await adminBridge.runDump()
+		sendBuffer(res, 200, buffer, {
+			'Content-Type': 'application/zip',
+			'Content-Disposition': `attachment; filename="${filename}"`,
+			'Cache-Control': 'no-store',
+		})
+		return
+	}
+
+	if (url.pathname === '/api/admin/restore' && req.method === 'POST') {
+		await requireAdminSession(req, res)
+		const zipBuffer = await readRawBody(req)
+		if (!zipBuffer.length) {
+			sendJson(res, 400, {error: 'A backup ZIP file is required.'})
+			return
+		}
+
+		const result = await adminBridge.runRestore(zipBuffer)
+		sendJson(res, 200, {ok: true, ...result})
+		return
+	}
+
+	if (url.pathname === '/api/admin/migrate/list' && req.method === 'GET') {
+		await requireAdminSession(req, res)
+		const migrations = await adminBridge.listMigrations()
+		sendJson(res, 200, {migrations})
+		return
+	}
+
+	if (url.pathname === '/api/admin/migrate' && req.method === 'POST') {
+		await requireAdminSession(req, res)
+		const result = await adminBridge.runMigrate()
+		sendJson(res, 200, {ok: true, ...result})
+		return
+	}
+
+	if (url.pathname === '/api/admin/migrate/rollback' && req.method === 'POST') {
+		await requireAdminSession(req, res)
+		const body = await readJsonBody(req)
+		const name = `${body.name || ''}`.trim()
+		if (!name) {
+			sendJson(res, 400, {error: 'Migration name is required.'})
+			return
+		}
+
+		const result = await adminBridge.rollbackMigration(name)
+		sendJson(res, 200, {ok: true, ...result})
+		return
+	}
+
+	const repairMatch = url.pathname.match(/^\/api\/admin\/repair\/([^/]+)$/)
+	if (repairMatch && req.method === 'POST') {
+		await requireAdminSession(req, res)
+		const command = decodeURIComponent(repairMatch[1])
+		const result = await adminBridge.runRepair(command)
+		sendJson(res, result.success ? 200 : 500, result)
+		return
+	}
+
 	if (url.pathname === '/api/admin/config/mailer' && req.method === 'GET') {
 		await requireAdminSession(req, res, {allowBridgeUnavailable: true})
 		const config = await adminConfig.readMailerConfig()
@@ -920,6 +1070,232 @@ async function handleApi(req, res, url) {
 	const vikunja = context.client
 	const avatarMatch = url.pathname.match(/^\/api\/avatar\/([^/]+)$/)
 	const subscriptionMatch = url.pathname.match(/^\/api\/subscriptions\/([^/]+)\/(\d+)$/)
+
+	if (url.pathname === '/api/session/settings/email' && req.method === 'POST') {
+		if (!enforceRateLimit(req, res, sessionMutationRateLimiter, 'session-mutation')) {
+			return
+		}
+
+		const body = await readJsonBody(req)
+		const password = `${body.password || ''}`
+		const newEmail = `${body.newEmail || ''}`.trim()
+		if (!password || !newEmail) {
+			sendJson(res, 400, {error: 'Password and new email are required.'})
+			return
+		}
+
+		await vikunja.request('user/settings/email', {
+			method: 'POST',
+			body: {
+				password,
+				new_email: newEmail,
+			},
+		})
+		sendJson(res, 200, {ok: true})
+		return
+	}
+
+	if (url.pathname === '/api/user/export/request' && req.method === 'POST') {
+		const body = await readJsonBody(req)
+		const password = `${body.password || ''}`
+		if (!password) {
+			sendJson(res, 400, {error: 'Password is required.'})
+			return
+		}
+
+		await vikunja.request('user/export/request', {
+			method: 'POST',
+			body: {password},
+		})
+		sendJson(res, 200, {ok: true})
+		return
+	}
+
+	if (url.pathname === '/api/user/export' && req.method === 'GET') {
+		const status = await vikunja.request('user/export')
+		sendJson(res, 200, status)
+		return
+	}
+
+	if (url.pathname === '/api/user/export/download' && req.method === 'POST') {
+		const body = await readJsonBody(req)
+		const password = `${body.password || ''}`
+		if (!password) {
+			sendJson(res, 400, {error: 'Password is required.'})
+			return
+		}
+
+		const raw = await vikunja.requestRaw('user/export/download', {
+			method: 'POST',
+			body: {password},
+		})
+		const buffer = Buffer.from(await raw.arrayBuffer())
+		sendBuffer(res, raw.status, buffer, {
+			'Content-Type': raw.headers.get('content-type') || 'application/zip',
+			'Content-Disposition':
+				raw.headers.get('content-disposition') || 'attachment; filename="vikunja-export.zip"',
+		})
+		return
+	}
+
+	if (url.pathname === '/api/user/deletion/request' && req.method === 'POST') {
+		if (!enforceRateLimit(req, res, sessionMutationRateLimiter, 'session-mutation')) {
+			return
+		}
+
+		const body = await readJsonBody(req)
+		const password = `${body.password || ''}`
+
+		await vikunja.request('user/deletion/request', {
+			method: 'POST',
+			body: password ? {password} : {},
+		})
+		sendJson(res, 200, {ok: true})
+		return
+	}
+
+	if (url.pathname === '/api/user/deletion/cancel' && req.method === 'POST') {
+		const body = await readJsonBody(req)
+		const password = `${body.password || ''}`
+
+		await vikunja.request('user/deletion/cancel', {
+			method: 'POST',
+			body: password ? {password} : {},
+		})
+		sendJson(res, 200, {ok: true})
+		return
+	}
+
+	if (url.pathname === '/api/session/totp' && req.method === 'GET') {
+		const totp = await vikunja.request('user/settings/totp')
+		sendJson(res, 200, totp)
+		return
+	}
+
+	if (url.pathname === '/api/session/totp/enroll' && req.method === 'POST') {
+		if (!enforceRateLimit(req, res, sessionMutationRateLimiter, 'session-mutation')) {
+			return
+		}
+
+		const totp = await vikunja.request('user/settings/totp/enroll', {
+			method: 'POST',
+		})
+		sendJson(res, 200, totp)
+		return
+	}
+
+	if (url.pathname === '/api/session/totp/enable' && req.method === 'POST') {
+		if (!enforceRateLimit(req, res, sessionMutationRateLimiter, 'session-mutation')) {
+			return
+		}
+
+		const body = await readJsonBody(req)
+		const passcode = `${body.passcode || ''}`.trim()
+		if (!passcode) {
+			sendJson(res, 400, {error: 'Passcode is required.'})
+			return
+		}
+
+		await vikunja.request('user/settings/totp/enable', {
+			method: 'POST',
+			body: {passcode},
+		})
+		sendJson(res, 200, {ok: true, enabled: true})
+		return
+	}
+
+	if (url.pathname === '/api/session/totp/disable' && req.method === 'POST') {
+		if (!enforceRateLimit(req, res, sessionMutationRateLimiter, 'session-mutation')) {
+			return
+		}
+
+		const body = await readJsonBody(req)
+		const password = `${body.password || ''}`
+		if (!password) {
+			sendJson(res, 400, {error: 'Password is required.'})
+			return
+		}
+
+		await vikunja.request('user/settings/totp/disable', {
+			method: 'POST',
+			body: {password},
+		})
+		sendJson(res, 200, {ok: true, enabled: false})
+		return
+	}
+
+	if (url.pathname === '/api/session/totp/qrcode' && req.method === 'GET') {
+		const raw = await vikunja.requestRaw('user/settings/totp/qrcode')
+		const buffer = Buffer.from(await raw.arrayBuffer())
+		sendBuffer(res, raw.status, buffer, {
+			'Content-Type': raw.headers.get('content-type') || 'image/png',
+			'Cache-Control': 'no-store',
+		})
+		return
+	}
+
+	if (url.pathname === '/api/session/caldav-tokens' && req.method === 'GET') {
+		const tokens = await vikunja.request('user/settings/token/caldav')
+		sendJson(res, 200, {tokens: Array.isArray(tokens) ? tokens : []})
+		return
+	}
+
+	if (url.pathname === '/api/session/caldav-tokens' && req.method === 'PUT') {
+		const token = await vikunja.request('user/settings/token/caldav', {
+			method: 'PUT',
+		})
+		sendJson(res, 200, token)
+		return
+	}
+
+	const caldavTokenMatch = url.pathname.match(/^\/api\/session\/caldav-tokens\/(\d+)$/)
+	if (caldavTokenMatch && req.method === 'DELETE') {
+		const tokenId = Number(caldavTokenMatch[1])
+		await vikunja.request(`user/settings/token/caldav/${tokenId}`, {
+			method: 'DELETE',
+		})
+		sendJson(res, 200, {ok: true})
+		return
+	}
+
+	if (url.pathname === '/api/tokens' && req.method === 'GET') {
+		const tokens = await vikunja.fetchAllPages('tokens')
+		sendJson(res, 200, {tokens})
+		return
+	}
+
+	if (url.pathname === '/api/tokens' && req.method === 'PUT') {
+		const body = await readJsonBody(req)
+		const upstreamToken = {
+			title: `${body.title || ''}`.trim(),
+			permissions: body.permissions || {},
+		}
+		if (typeof body.expires_at === 'string' && body.expires_at.trim()) {
+			upstreamToken.expires_at = body.expires_at
+		}
+		const token = await vikunja.request('tokens', {
+			method: 'PUT',
+			body: upstreamToken,
+		})
+		sendJson(res, 200, token)
+		return
+	}
+
+	const apiTokenMatch = url.pathname.match(/^\/api\/tokens\/(\d+)$/)
+	if (apiTokenMatch && req.method === 'DELETE') {
+		const tokenId = Number(apiTokenMatch[1])
+		await vikunja.request(`tokens/${tokenId}`, {
+			method: 'DELETE',
+		})
+		sendJson(res, 200, {ok: true})
+		return
+	}
+
+	if (url.pathname === '/api/routes' && req.method === 'GET') {
+		const routes = await vikunja.request('routes')
+		sendJson(res, 200, {routes})
+		return
+	}
 
 	if (url.pathname === '/api/user' && req.method === 'GET') {
 		const user = await vikunja.request('user')
@@ -997,6 +1373,79 @@ async function handleApi(req, res, url) {
 			sendJson(res, 200, {ok: true, subscribed: false})
 			return
 		}
+	}
+
+	const reactionsMatch = url.pathname.match(/^\/api\/(tasks|comments|projects)\/(\d+)\/reactions$/)
+	const reactionsDeleteMatch = url.pathname.match(/^\/api\/(tasks|comments|projects)\/(\d+)\/reactions\/delete$/)
+	if (reactionsMatch) {
+		const kind = reactionsMatch[1]
+		const id = Number(reactionsMatch[2])
+		if (req.method === 'GET') {
+			const reactions = await vikunja.request(`${kind}/${id}/reactions`)
+			sendJson(res, 200, {reactions: normalizeReactionEntities(reactions)})
+			return
+		}
+		if (req.method === 'PUT') {
+			const body = await readJsonBody(req)
+			await vikunja.request(`${kind}/${id}/reactions`, {
+				method: 'PUT',
+				body: {
+					value: `${body.value || ''}`,
+				},
+			})
+			sendJson(res, 200, {ok: true})
+			return
+		}
+	}
+
+	if (reactionsDeleteMatch && req.method === 'POST') {
+		const kind = reactionsDeleteMatch[1]
+		const id = Number(reactionsDeleteMatch[2])
+		const body = await readJsonBody(req)
+		await vikunja.request(`${kind}/${id}/reactions/delete`, {
+			method: 'POST',
+			body: {
+				value: `${body.value || ''}`,
+			},
+		})
+		sendJson(res, 200, {ok: true})
+		return
+	}
+
+	function normalizeReactionEntities(reactions) {
+		if (Array.isArray(reactions)) {
+			return reactions
+				.filter(reaction => reaction && typeof reaction === 'object')
+				.map(reaction => ({
+					value: `${reaction.value || ''}`.trim(),
+					user: reaction.user || null,
+				}))
+				.filter(reaction => reaction.value && reaction.user)
+		}
+
+		if (!reactions || typeof reactions !== 'object') {
+			return []
+		}
+
+		const normalized = []
+		for (const [value, users] of Object.entries(reactions)) {
+			if (!Array.isArray(users)) {
+				continue
+			}
+
+			for (const user of users) {
+				if (!user || typeof user !== 'object') {
+					continue
+				}
+
+				normalized.push({
+					value: `${value || ''}`.trim(),
+					user,
+				})
+			}
+		}
+
+		return normalized
 	}
 
 	const teamsCollectionMatch = url.pathname.match(/^\/api\/teams$/)
@@ -1455,6 +1904,14 @@ async function handleApi(req, res, url) {
 		return
 	}
 
+	if (projectLinkShareMatch && req.method === 'GET') {
+		const projectId = Number(projectLinkShareMatch[1])
+		const shareId = Number(projectLinkShareMatch[2])
+		const share = await vikunja.request(`projects/${projectId}/shares/${shareId}`)
+		sendJson(res, 200, {share})
+		return
+	}
+
 	if (projectLinkShareMatch && req.method === 'DELETE') {
 		const projectId = Number(projectLinkShareMatch[1])
 		const shareId = Number(projectLinkShareMatch[2])
@@ -1757,12 +2214,14 @@ async function handleApi(req, res, url) {
 	const taskRelationsMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/relations$/)
 	const taskRelationDeleteMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/relations\/(\w+)\/(\d+)$/)
 	const taskAssigneesMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/assignees$/)
+	const taskAssigneesBulkMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/assignees\/bulk$/)
 	const taskAssigneeMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/assignees\/(\d+)$/)
 	const taskCommentsMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/comments$/)
 	const taskCommentMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/comments\/(\d+)$/)
 	const taskAttachmentsMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/attachments$/)
 	const taskAttachmentMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/attachments\/(\d+)$/)
 	const taskLabelCollectionMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/labels$/)
+	const taskLabelsBulkMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/labels\/bulk$/)
 	const taskLabelMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/labels\/(\d+)$/)
 
 	if (url.pathname === '/api/tasks/bulk' && req.method === 'POST') {
@@ -1795,6 +2254,19 @@ async function handleApi(req, res, url) {
 		const search = `${url.searchParams.get('s') || ''}`.trim()
 		const assignees = await vikunja.fetchAllPages(`tasks/${taskId}/assignees`, search ? {s: search} : {})
 		sendJson(res, 200, {assignees})
+		return
+	}
+
+	if (taskAssigneesBulkMatch && req.method === 'POST') {
+		const taskId = Number(taskAssigneesBulkMatch[1])
+		const body = await readJsonBody(req)
+		const result = await vikunja.request(`tasks/${taskId}/assignees/bulk`, {
+			method: 'POST',
+			body: {
+				assignees: body.assignees || [],
+			},
+		})
+		sendJson(res, 200, result)
 		return
 	}
 
@@ -2075,6 +2547,19 @@ async function handleApi(req, res, url) {
 		return
 	}
 
+	if (taskLabelsBulkMatch && req.method === 'POST') {
+		const taskId = Number(taskLabelsBulkMatch[1])
+		const body = await readJsonBody(req)
+		const result = await vikunja.request(`tasks/${taskId}/labels/bulk`, {
+			method: 'POST',
+			body: {
+				labels: body.labels || [],
+			},
+		})
+		sendJson(res, 200, result)
+		return
+	}
+
 	if (taskLabelMatch && req.method === 'DELETE') {
 		const taskId = Number(taskLabelMatch[1])
 		const labelId = Number(taskLabelMatch[2])
@@ -2189,6 +2674,7 @@ function invalidateAppSession(res, sessionId, {setIgnoreLegacy = true} = {}) {
 		return
 	}
 
+	accountRefreshOperations.delete(sessionId)
 	sessionStore.delete(sessionId)
 	if (!res || res.headersSent) {
 		return
@@ -2224,6 +2710,58 @@ function invalidateAppSession(res, sessionId, {setIgnoreLegacy = true} = {}) {
 			]
 			: []),
 	])
+}
+
+function coordinateAccountRefresh(sessionId, refreshOperation) {
+	if (!sessionId || typeof refreshOperation !== 'function') {
+		return Promise.resolve().then(() => refreshOperation())
+	}
+
+	const current = accountRefreshOperations.get(sessionId)
+	if (current) {
+		return current
+	}
+
+	const next = Promise.resolve()
+		.then(() => refreshOperation())
+		.finally(() => {
+			if (accountRefreshOperations.get(sessionId) === next) {
+				accountRefreshOperations.delete(sessionId)
+			}
+		})
+
+	accountRefreshOperations.set(sessionId, next)
+	return next
+}
+
+async function fetchUpstreamAuthInfo(baseUrl) {
+	let infoResponse
+	try {
+		infoResponse = await fetch(new URL('info', `${baseUrl}/`), {
+			headers: {
+				Accept: 'application/json',
+			},
+		})
+	} catch {
+		const error = new Error('Unable to load auth settings from the Vikunja server.')
+		error.statusCode = 502
+		throw error
+	}
+
+	if (!infoResponse.ok) {
+		const error = new Error('Unable to load auth settings from the Vikunja server.')
+		error.statusCode = 502
+		throw error
+	}
+
+	const payload = await infoResponse.json().catch(() => ({}))
+	const localAuth = typeof payload?.auth?.local === 'object' && payload.auth.local ? payload.auth.local : null
+	return {
+		baseUrl,
+		localEnabled: typeof localAuth?.enabled === 'boolean' ? localAuth.enabled : null,
+		registrationEnabled:
+			typeof localAuth?.registration_enabled === 'boolean' ? localAuth.registration_enabled : null,
+	}
 }
 
 async function getVikunjaContext(req, res = null) {
@@ -2413,9 +2951,11 @@ function createAccountClient(account, sessionId, res = null) {
 		apiToken: account.apiToken || '',
 		accessToken: account.accessToken || '',
 		refreshCookie: account.refreshCookie || '',
+		getAuthState: () => sessionStore.get(sessionId)?.account || null,
+		coordinateRefresh: refreshOperation => coordinateAccountRefresh(sessionId, refreshOperation),
 		onAuthFailure: failure => {
 			const statusCode = Number(failure?.statusCode || 0)
-			if (statusCode === 400 || statusCode === 401) {
+			if (statusCode === 401) {
 				invalidateAppSession(res, sessionId)
 			}
 		},
@@ -2510,8 +3050,18 @@ function normalizeTaskGraph(tasks) {
 	const normalizedTasks = tasks.map(task => ({
 		...task,
 		related_tasks: {
-			parenttask: [...(task.related_tasks?.parenttask || [])],
-			subtask: [...(task.related_tasks?.subtask || [])],
+			...Object.fromEntries(
+				Object.entries(task.related_tasks || {}).map(([relation, refs]) => [
+					relation,
+					Array.isArray(refs) ? refs.map(ref => ({...ref})) : [],
+				]),
+			),
+			parenttask: Array.isArray(task.related_tasks?.parenttask)
+				? task.related_tasks.parenttask.map(ref => ({...ref}))
+				: [],
+			subtask: Array.isArray(task.related_tasks?.subtask)
+				? task.related_tasks.subtask.map(ref => ({...ref}))
+				: [],
 		},
 	}))
 	const taskMap = new Map(normalizedTasks.map(task => [task.id, task]))

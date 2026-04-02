@@ -1,6 +1,7 @@
 import {formatError} from '@/utils/formatting'
 import type {StateCreator} from 'zustand'
 import type {AppStore} from '../index'
+import type {ConflictEntry} from '../offline-sync'
 
 type BrowserNotificationPermissionState = NotificationPermission | 'unsupported'
 
@@ -68,6 +69,26 @@ function getOnlineStatus() {
 	return window.navigator.onLine
 }
 
+async function getReachableOnlineStatus() {
+	if (!browserHasWindow()) {
+		return true
+	}
+
+	if (window.navigator.onLine) {
+		return true
+	}
+
+	try {
+		const response = await fetch('/health', {
+			method: 'GET',
+			cache: 'no-store',
+		})
+		return response.ok
+	} catch {
+		return false
+	}
+}
+
 function getNotificationPermission(): BrowserNotificationPermissionState {
 	if (!browserHasWindow() || !('Notification' in window)) {
 		return 'unsupported'
@@ -89,8 +110,16 @@ export interface RuntimeSlice {
 	pushManagerSupported: boolean
 	browserNotificationPermission: BrowserNotificationPermissionState
 	notificationPermissionRequesting: boolean
+	offlineQueueCount: number
+	offlineQueueFailedCount: number
+	offlineSyncInProgress: boolean
+	offlineSyncConflicts: ConflictEntry[]
 	initRuntime: () => Promise<void>
 	refreshRuntimeState: () => Promise<void>
+	refreshOfflineQueueCounts: () => Promise<void>
+	setOfflineSyncInProgress: (value: boolean) => void
+	setOfflineSyncConflicts: (conflicts: ConflictEntry[]) => void
+	clearOfflineSyncConflicts: () => void
 	requestBrowserNotificationPermission: () => Promise<boolean>
 	sendTestBrowserNotification: () => Promise<boolean>
 	applyServiceWorkerUpdate: () => Promise<boolean>
@@ -151,6 +180,10 @@ export const createRuntimeSlice: StateCreator<AppStore, [], [], RuntimeSlice> = 
 	pushManagerSupported: browserHasWindow() && 'PushManager' in window,
 	browserNotificationPermission: getNotificationPermission(),
 	notificationPermissionRequesting: false,
+	offlineQueueCount: 0,
+	offlineQueueFailedCount: 0,
+	offlineSyncInProgress: false,
+	offlineSyncConflicts: [],
 
 	async initRuntime() {
 		if (get().runtimeInitialized || !browserHasWindow()) {
@@ -169,13 +202,10 @@ export const createRuntimeSlice: StateCreator<AppStore, [], [], RuntimeSlice> = 
 			pushManagerSupported: 'PushManager' in window,
 			browserNotificationPermission: getNotificationPermission(),
 		})
+		await get().refreshOfflineQueueCounts()
 
 		const handleOnlineState = () => {
-			const isOnline = getOnlineStatus()
-			set({isOnline})
-			if (!isOnline && get().connected) {
-				get().enterOfflineReadOnlyMode()
-			}
+			void get().refreshRuntimeState()
 		}
 
 		const handleRuntimeRefresh = () => {
@@ -217,8 +247,10 @@ export const createRuntimeSlice: StateCreator<AppStore, [], [], RuntimeSlice> = 
 			return
 		}
 
+		const isOnline = await getReachableOnlineStatus()
+
 		set({
-			isOnline: getOnlineStatus(),
+			isOnline,
 			isSecureContext: window.isSecureContext,
 			standaloneDisplayMode:
 				window.matchMedia('(display-mode: standalone)').matches ||
@@ -230,7 +262,7 @@ export const createRuntimeSlice: StateCreator<AppStore, [], [], RuntimeSlice> = 
 		})
 
 		if (!get().isOnline && get().connected) {
-			get().enterOfflineReadOnlyMode()
+			void get().enterOfflineReadOnlyMode()
 		}
 
 		if (!('serviceWorker' in window.navigator)) {
@@ -256,6 +288,33 @@ export const createRuntimeSlice: StateCreator<AppStore, [], [], RuntimeSlice> = 
 				serviceWorkerError: formatError(error as Error),
 			})
 		}
+	},
+
+	async refreshOfflineQueueCounts() {
+		try {
+			const {getFailedCount, getPendingCount} = await import('@/store/offline-queue')
+			set({
+				offlineQueueCount: await getPendingCount(),
+				offlineQueueFailedCount: await getFailedCount(),
+			})
+		} catch {
+			set({
+				offlineQueueCount: 0,
+				offlineQueueFailedCount: 0,
+			})
+		}
+	},
+
+	setOfflineSyncInProgress(offlineSyncInProgress) {
+		set({offlineSyncInProgress})
+	},
+
+	setOfflineSyncConflicts(offlineSyncConflicts) {
+		set({offlineSyncConflicts})
+	},
+
+	clearOfflineSyncConflicts() {
+		set({offlineSyncConflicts: []})
 	},
 
 	async requestBrowserNotificationPermission() {

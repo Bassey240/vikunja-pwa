@@ -1,12 +1,15 @@
 import StatusCards from '@/components/layout/StatusCards'
 import {useAppStore} from '@/store'
+import type {VikunjaInfo} from '@/types'
 import {type FormEvent, useEffect, useState} from 'react'
 import {useNavigate} from 'react-router-dom'
 
 export default function AuthScreen() {
 	const navigate = useNavigate()
 	const [authSubscreen, setAuthSubscreen] = useState<'login' | 'register' | 'forgot-password'>('login')
-	const serverConfig = useAppStore(state => state.serverConfig)
+	const [instanceInfo, setInstanceInfo] = useState<VikunjaInfo | null>(null)
+	const [instanceInfoBaseUrl, setInstanceInfoBaseUrl] = useState('')
+	const [instanceInfoLoading, setInstanceInfoLoading] = useState(false)
 	const accountForm = useAppStore(state => state.accountForm)
 	const registrationForm = useAppStore(state => state.registrationForm)
 	const registrationSubmitting = useAppStore(state => state.registrationSubmitting)
@@ -16,24 +19,41 @@ export default function AuthScreen() {
 	const forgotPasswordSent = useAppStore(state => state.forgotPasswordSent)
 	const settingsSubmitting = useAppStore(state => state.settingsSubmitting)
 	const settingsNotice = useAppStore(state => state.settingsNotice)
+	const error = useAppStore(state => state.error)
+	const totpLoginRequired = useAppStore(state => state.totpLoginRequired)
 	const isOnline = useAppStore(state => state.isOnline)
-	const theme = useAppStore(state => state.theme)
 	const setAccountField = useAppStore(state => state.setAccountField)
 	const setAccountAuthMode = useAppStore(state => state.setAccountAuthMode)
+	const cancelTotpLoginChallenge = useAppStore(state => state.cancelTotpLoginChallenge)
+	const probeInstanceInfo = useAppStore(state => state.probeInstanceInfo)
 	const setRegistrationField = useAppStore(state => state.setRegistrationField)
 	const setForgotPasswordEmail = useAppStore(state => state.setForgotPasswordEmail)
-	const setTheme = useAppStore(state => state.setTheme)
 	const login = useAppStore(state => state.login)
 	const register = useAppStore(state => state.register)
 	const requestPasswordReset = useAppStore(state => state.requestPasswordReset)
-	const restoreLegacyFallback = useAppStore(state => state.restoreLegacyFallback)
-	const connected = useAppStore(state => state.connected)
 
 	const showPasswordForm = accountForm.authMode === 'password'
-	const hasServerFallback = Boolean(serverConfig?.legacyConfigured)
-	const connectDisabled = settingsSubmitting || !isOnline
-	const registrationDisabled = registrationSubmitting || !isOnline
-	const forgotPasswordDisabled = forgotPasswordSubmitting || !isOnline
+	const authCapabilityBaseUrl = authSubscreen === 'register' ? registrationForm.baseUrl : accountForm.baseUrl
+	const normalizedAuthCapabilityBaseUrl = authCapabilityBaseUrl.trim()
+	const currentInstanceInfo =
+		instanceInfo && instanceInfoBaseUrl === normalizedAuthCapabilityBaseUrl ? instanceInfo : null
+	const registrationEnabled = getRegistrationEnabled(currentInstanceInfo)
+	const localPasswordEnabled = getLocalPasswordEnabled(currentInstanceInfo)
+	const oidcProviders = getOidcProviders(currentInstanceInfo)
+	const connectDisabled = settingsSubmitting || !isOnline || (showPasswordForm && localPasswordEnabled === false)
+	const totpFieldDisabled = settingsSubmitting || !isOnline
+	const totpSubmitDisabled = totpFieldDisabled || !accountForm.totpPasscode.trim()
+	const forgotPasswordDisabled = forgotPasswordSubmitting || !isOnline || localPasswordEnabled === false
+	const registrationBlockedByServer = localPasswordEnabled === false || registrationEnabled === false
+	const registrationDisabled = registrationSubmitting || !isOnline || instanceInfoLoading || registrationBlockedByServer
+	const showTotpLoginStep = authSubscreen === 'login' && showPasswordForm && totpLoginRequired
+	const showCreateAccountLink = Boolean(
+		showPasswordForm &&
+		normalizedAuthCapabilityBaseUrl &&
+		localPasswordEnabled !== false &&
+		registrationEnabled !== false,
+	)
+	const showForgotPasswordLink = Boolean(showPasswordForm && localPasswordEnabled !== false)
 
 	useEffect(() => {
 		if (authSubscreen !== 'register' || registrationForm.baseUrl || !accountForm.baseUrl) {
@@ -43,17 +63,38 @@ export default function AuthScreen() {
 		setRegistrationField('baseUrl', accountForm.baseUrl)
 	}, [accountForm.baseUrl, authSubscreen, registrationForm.baseUrl, setRegistrationField])
 
+	useEffect(() => {
+		if (!isOnline || !normalizedAuthCapabilityBaseUrl) {
+			setInstanceInfo(null)
+			setInstanceInfoBaseUrl('')
+			setInstanceInfoLoading(false)
+			return
+		}
+
+		let cancelled = false
+		const timeoutId = window.setTimeout(() => {
+			void (async () => {
+				setInstanceInfoLoading(true)
+				const info = await probeInstanceInfo(normalizedAuthCapabilityBaseUrl)
+				if (cancelled) {
+					return
+				}
+				setInstanceInfo(info)
+				setInstanceInfoBaseUrl(normalizedAuthCapabilityBaseUrl)
+				setInstanceInfoLoading(false)
+			})()
+		}, 600)
+
+		return () => {
+			cancelled = true
+			window.clearTimeout(timeoutId)
+		}
+	}, [isOnline, normalizedAuthCapabilityBaseUrl, probeInstanceInfo])
+
 	async function handleSubmit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault()
 		const success = await login()
 		if (success) {
-			navigate('/', {replace: true})
-		}
-	}
-
-	async function handleServerFallback() {
-		const success = await restoreLegacyFallback()
-		if (success || useAppStore.getState().connected || connected) {
 			navigate('/', {replace: true})
 		}
 	}
@@ -105,171 +146,210 @@ export default function AuthScreen() {
 				<section className="auth-card">
 					<div className="auth-card-head">
 						<div>
-							<div className="detail-label">Welcome</div>
+							{showTotpLoginStep ? null : <div className="detail-label">Welcome</div>}
 							<h2>Connect to your Vikunja server</h2>
-							<p>This app is an independent client and is not affiliated with the official Vikunja project.</p>
-						</div>
-						<div className="settings-toggle-row">
-							<button
-								className={`pill-button ${theme === 'dark' ? '' : 'subtle'}`.trim()}
-								type="button"
-								onClick={() => setTheme('dark')}
-							>
-								Dark
-							</button>
-							<button
-								className={`pill-button ${theme === 'light' ? '' : 'subtle'}`.trim()}
-								type="button"
-								onClick={() => setTheme('light')}
-							>
-								Light
-							</button>
+							{showTotpLoginStep ? null : (
+								<p>This app is an independent client and is not affiliated with the official Vikunja project.</p>
+							)}
 						</div>
 					</div>
 
-					<StatusCards />
-					{!isOnline ? (
+					{showTotpLoginStep ? null : <StatusCards />}
+					{!showTotpLoginStep && !isOnline ? (
 						<div className="status-card warning">
 							You&apos;re offline. Sign-in requires a live connection. If you connected before, the installed app can reopen the last known shell in read-only mode.
 						</div>
 					) : null}
-					{settingsNotice ? <div className="empty-state compact">{settingsNotice}</div> : null}
-
-					{hasServerFallback ? (
-						<div className="auth-fallback-card">
-							<div className="detail-label">Developer Fallback</div>
-							<div className="auth-fallback-copy">
-								Use the server-managed fallback session from the local environment instead of entering account
-								credentials.
-							</div>
-							<button
-								className="pill-button"
-								data-action="use-server-fallback"
-								type="button"
-								disabled={settingsSubmitting}
-								onClick={() => void handleServerFallback()}
-							>
-								Continue with server fallback
-							</button>
-						</div>
-					) : null}
+					{!showTotpLoginStep && settingsNotice ? <div className="empty-state compact">{settingsNotice}</div> : null}
 
 					<div className="auth-form-card">
 						{authSubscreen === 'login' ? (
 							<>
-								<div className="detail-label">Connect Account</div>
-								<div className="settings-toggle-row">
-									<button
-										className={`pill-button ${showPasswordForm ? '' : 'subtle'}`.trim()}
-										data-action="set-account-auth-mode"
-										data-auth-mode="password"
-										type="button"
-										onClick={() => setAccountAuthMode('password')}
-									>
-										Password
-									</button>
-									<button
-										className={`pill-button ${showPasswordForm ? 'subtle' : ''}`.trim()}
-										data-action="set-account-auth-mode"
-										data-auth-mode="apiToken"
-										type="button"
-										onClick={() => setAccountAuthMode('apiToken')}
-									>
-										API Token
-									</button>
-								</div>
-
-								<form className="detail-grid settings-form" data-form="account-login" onSubmit={handleSubmit}>
-									<label className="detail-item detail-item-full detail-field">
-										<div className="detail-label">Server URL</div>
-										<input
-											className="detail-input"
-											data-account-field="baseUrl"
-											name="baseUrl"
-											type="url"
-											inputMode="url"
-											autoComplete="url"
-											spellCheck={false}
-											placeholder="https://vikunja.example.com"
-											value={accountForm.baseUrl}
-											disabled={connectDisabled}
-											onChange={event => setAccountField('baseUrl', event.currentTarget.value)}
-										/>
-									</label>
-									{showPasswordForm ? (
-										<>
-											<label className="detail-item detail-field">
-												<div className="detail-label">Username</div>
+								{showTotpLoginStep ? (
+									<>
+										<div className="detail-label">Two-Factor Authentication</div>
+										{error ? <div className="status-card danger">{error}</div> : null}
+										<form className="detail-grid settings-form" data-form="account-login-totp" onSubmit={handleSubmit}>
+											<label className="detail-item detail-item-full detail-field">
+												<div className="detail-label">Authentication code</div>
 												<input
 													className="detail-input"
-													data-account-field="username"
-													name="username"
+													data-account-field="totpPasscode"
+													name="totpPasscode"
 													type="text"
-													autoComplete="username"
-													autoCapitalize="none"
-													spellCheck={false}
-													value={accountForm.username}
-													disabled={connectDisabled}
-													onChange={event => setAccountField('username', event.currentTarget.value)}
+													inputMode="numeric"
+													autoComplete="one-time-code"
+													value={accountForm.totpPasscode}
+													disabled={totpFieldDisabled}
+													onChange={event => setAccountField('totpPasscode', event.currentTarget.value)}
 												/>
 											</label>
-											<label className="detail-item detail-field">
-												<div className="detail-label">Password</div>
+											<div className="detail-item detail-item-full detail-field">
+												<button className="composer-submit" type="submit" disabled={totpSubmitDisabled}>
+													{settingsSubmitting ? 'Verifying…' : !isOnline ? 'Offline' : 'Verify and Sign In'}
+												</button>
+											</div>
+										</form>
+										<button className="auth-text-link" type="button" onClick={cancelTotpLoginChallenge}>
+											Back to sign in
+										</button>
+									</>
+								) : (
+									<>
+										<div className="detail-label">Connect Account</div>
+										<div className="settings-toggle-row">
+											<button
+												className={`pill-button ${showPasswordForm ? '' : 'subtle'}`.trim()}
+												data-action="set-account-auth-mode"
+												data-auth-mode="password"
+												type="button"
+												onClick={() => setAccountAuthMode('password')}
+											>
+												Password
+											</button>
+											<button
+												className={`pill-button ${showPasswordForm ? 'subtle' : ''}`.trim()}
+												data-action="set-account-auth-mode"
+												data-auth-mode="apiToken"
+												type="button"
+												onClick={() => setAccountAuthMode('apiToken')}
+											>
+												API Token
+											</button>
+										</div>
+
+										<form className="detail-grid settings-form" data-form="account-login" onSubmit={handleSubmit}>
+											<label className="detail-item detail-item-full detail-field">
+												<div className="detail-label">Server URL</div>
 												<input
 													className="detail-input"
-													data-account-field="password"
-													name="password"
-													type="password"
-													autoComplete="current-password"
-													value={accountForm.password}
+													data-account-field="baseUrl"
+													name="baseUrl"
+													type="url"
+													inputMode="url"
+													autoComplete="url"
+													spellCheck={false}
+													placeholder="https://vikunja.example.com"
+													value={accountForm.baseUrl}
 													disabled={connectDisabled}
-													onChange={event => setAccountField('password', event.currentTarget.value)}
+													onChange={event => setAccountField('baseUrl', event.currentTarget.value)}
 												/>
 											</label>
-										</>
-									) : (
-										<label className="detail-item detail-item-full detail-field">
-											<div className="detail-label">API Token</div>
-											<input
-												className="detail-input"
-												data-account-field="apiToken"
-												name="apiToken"
-												type="password"
-												autoComplete="off"
-												autoCapitalize="none"
-												spellCheck={false}
-												value={accountForm.apiToken}
-												disabled={connectDisabled}
-												onChange={event => setAccountField('apiToken', event.currentTarget.value)}
-											/>
-										</label>
-									)}
-									<div className="detail-item detail-item-full detail-field">
-										<button className="composer-submit" type="submit" disabled={connectDisabled}>
-											{settingsSubmitting ? 'Connecting…' : !isOnline ? 'Offline' : 'Connect'}
-										</button>
-									</div>
-								</form>
-								<div className="auth-link-row">
-									<button
-										className="auth-text-link"
-										type="button"
-										onClick={() => setAuthSubscreen('register')}
-									>
-										Create account
-									</button>
-									<button
-										className="auth-text-link"
-										type="button"
-										onClick={() => setAuthSubscreen('forgot-password')}
-									>
-										Forgot password?
-									</button>
-								</div>
-								<div className="empty-state compact">
-									Password login is recommended for self-hosted Vikunja. API tokens are proxied through this
-									backend and are never stored in browser storage.
-								</div>
+											{showPasswordForm ? (
+												<>
+													<label className="detail-item detail-field">
+														<div className="detail-label">Username</div>
+														<input
+															className="detail-input"
+															data-account-field="username"
+															name="username"
+															type="text"
+															autoComplete="username"
+															autoCapitalize="none"
+															spellCheck={false}
+															value={accountForm.username}
+															disabled={connectDisabled}
+															onChange={event => setAccountField('username', event.currentTarget.value)}
+														/>
+													</label>
+													<label className="detail-item detail-field">
+														<div className="detail-label">Password</div>
+														<input
+															className="detail-input"
+															data-account-field="password"
+															name="password"
+															type="password"
+															autoComplete="current-password"
+															value={accountForm.password}
+															disabled={connectDisabled}
+															onChange={event => setAccountField('password', event.currentTarget.value)}
+														/>
+													</label>
+												</>
+											) : (
+												<label className="detail-item detail-item-full detail-field">
+													<div className="detail-label">API Token</div>
+													<input
+														className="detail-input"
+														data-account-field="apiToken"
+														name="apiToken"
+														type="password"
+														autoComplete="off"
+														autoCapitalize="none"
+														spellCheck={false}
+														value={accountForm.apiToken}
+														disabled={connectDisabled}
+														onChange={event => setAccountField('apiToken', event.currentTarget.value)}
+													/>
+												</label>
+											)}
+											<div className="detail-item detail-item-full detail-field">
+												<button className="composer-submit" type="submit" disabled={connectDisabled}>
+													{settingsSubmitting ? 'Connecting…' : !isOnline ? 'Offline' : 'Connect'}
+												</button>
+											</div>
+										</form>
+										{showPasswordForm && oidcProviders.length > 0 ? (
+											<div className="detail-core-card settings-subsection">
+												<div className="detail-label">Single sign-on</div>
+												<div className="detail-inline-actions">
+													{oidcProviders.map(provider => (
+														<button
+															key={provider.key}
+															className="pill-button subtle"
+															type="button"
+															onClick={() => {
+																window.open(provider.auth_url, '_blank', 'noopener,noreferrer')
+															}}
+														>
+															Sign in with {provider.name || provider.key}
+														</button>
+													))}
+												</div>
+												<div className="empty-state compact">
+													OIDC callback handling is not wired in this build yet. These buttons preview the configured providers.
+												</div>
+											</div>
+										) : null}
+										<div className="auth-link-row">
+											{showCreateAccountLink ? (
+												<button
+													className="auth-text-link"
+													type="button"
+													onClick={() => setAuthSubscreen('register')}
+												>
+													Create account
+												</button>
+											) : null}
+											{showForgotPasswordLink ? (
+												<button
+													className="auth-text-link"
+													type="button"
+													onClick={() => setAuthSubscreen('forgot-password')}
+												>
+													Forgot password?
+												</button>
+											) : null}
+										</div>
+										{showPasswordForm && normalizedAuthCapabilityBaseUrl && instanceInfoLoading ? (
+											<div className="empty-state compact">Checking sign-in options for this server…</div>
+										) : null}
+										{showPasswordForm && normalizedAuthCapabilityBaseUrl && registrationBlockedByServer ? (
+											<div className="empty-state compact">
+												This Vikunja server does not allow password account creation from this screen.
+											</div>
+										) : null}
+										{showPasswordForm && normalizedAuthCapabilityBaseUrl && localPasswordEnabled === false ? (
+											<div className="empty-state compact">
+												Local username/password sign-in is disabled on this Vikunja instance.
+											</div>
+										) : null}
+										<div className="empty-state compact">
+											Password login is recommended for self-hosted Vikunja. API tokens are proxied through this
+											backend and are never stored in browser storage.
+										</div>
+									</>
+								)}
 							</>
 						) : null}
 
@@ -277,83 +357,89 @@ export default function AuthScreen() {
 							<>
 								<div className="detail-label">Create Account</div>
 								{registrationError ? <div className="status-card danger">{registrationError}</div> : null}
-								<form className="detail-grid settings-form" data-form="account-register" onSubmit={handleRegisterSubmit}>
-									<label className="detail-item detail-item-full detail-field">
-										<div className="detail-label">Server URL</div>
-										<input
-											className="detail-input"
-											data-registration-field="baseUrl"
-											name="baseUrl"
-											type="url"
-											inputMode="url"
-											autoComplete="url"
-											spellCheck={false}
-											placeholder="https://vikunja.example.com"
-											value={registrationForm.baseUrl}
-											disabled={registrationDisabled}
-											onChange={event => setRegistrationField('baseUrl', event.currentTarget.value)}
-										/>
-									</label>
-									<label className="detail-item detail-field">
-										<div className="detail-label">Username</div>
-										<input
-											className="detail-input"
-											data-registration-field="username"
-											name="username"
-											type="text"
-											autoComplete="username"
-											autoCapitalize="none"
-											spellCheck={false}
-											value={registrationForm.username}
-											disabled={registrationDisabled}
-											onChange={event => setRegistrationField('username', event.currentTarget.value)}
-										/>
-									</label>
-									<label className="detail-item detail-field">
-										<div className="detail-label">Email</div>
-										<input
-											className="detail-input"
-											data-registration-field="email"
-											name="email"
-											type="email"
-											autoComplete="email"
-											value={registrationForm.email}
-											disabled={registrationDisabled}
-											onChange={event => setRegistrationField('email', event.currentTarget.value)}
-										/>
-									</label>
-									<label className="detail-item detail-field">
-										<div className="detail-label">Password</div>
-										<input
-											className="detail-input"
-											data-registration-field="password"
-											name="password"
-											type="password"
-											autoComplete="new-password"
-											value={registrationForm.password}
-											disabled={registrationDisabled}
-											onChange={event => setRegistrationField('password', event.currentTarget.value)}
-										/>
-									</label>
-									<label className="detail-item detail-field">
-										<div className="detail-label">Confirm Password</div>
-										<input
-											className="detail-input"
-											data-registration-field="confirmPassword"
-											name="confirmPassword"
-											type="password"
-											autoComplete="new-password"
-											value={registrationForm.confirmPassword}
-											disabled={registrationDisabled}
-											onChange={event => setRegistrationField('confirmPassword', event.currentTarget.value)}
-										/>
-									</label>
-									<div className="detail-item detail-item-full detail-field">
-										<button className="composer-submit" type="submit" disabled={registrationDisabled}>
-											{registrationSubmitting ? 'Creating account…' : !isOnline ? 'Offline' : 'Create Account'}
-										</button>
+								{registrationBlockedByServer ? (
+									<div className="status-card warning">
+										This Vikunja server does not allow self-registration.
 									</div>
-								</form>
+								) : (
+									<form className="detail-grid settings-form" data-form="account-register" onSubmit={handleRegisterSubmit}>
+										<label className="detail-item detail-item-full detail-field">
+											<div className="detail-label">Server URL</div>
+											<input
+												className="detail-input"
+												data-registration-field="baseUrl"
+												name="baseUrl"
+												type="url"
+												inputMode="url"
+												autoComplete="url"
+												spellCheck={false}
+												placeholder="https://vikunja.example.com"
+												value={registrationForm.baseUrl}
+												disabled={registrationDisabled}
+												onChange={event => setRegistrationField('baseUrl', event.currentTarget.value)}
+											/>
+										</label>
+										<label className="detail-item detail-field">
+											<div className="detail-label">Username</div>
+											<input
+												className="detail-input"
+												data-registration-field="username"
+												name="username"
+												type="text"
+												autoComplete="username"
+												autoCapitalize="none"
+												spellCheck={false}
+												value={registrationForm.username}
+												disabled={registrationDisabled}
+												onChange={event => setRegistrationField('username', event.currentTarget.value)}
+											/>
+										</label>
+										<label className="detail-item detail-field">
+											<div className="detail-label">Email</div>
+											<input
+												className="detail-input"
+												data-registration-field="email"
+												name="email"
+												type="email"
+												autoComplete="email"
+												value={registrationForm.email}
+												disabled={registrationDisabled}
+												onChange={event => setRegistrationField('email', event.currentTarget.value)}
+											/>
+										</label>
+										<label className="detail-item detail-field">
+											<div className="detail-label">Password</div>
+											<input
+												className="detail-input"
+												data-registration-field="password"
+												name="password"
+												type="password"
+												autoComplete="new-password"
+												value={registrationForm.password}
+												disabled={registrationDisabled}
+												onChange={event => setRegistrationField('password', event.currentTarget.value)}
+											/>
+										</label>
+										<label className="detail-item detail-field">
+											<div className="detail-label">Confirm Password</div>
+											<input
+												className="detail-input"
+												data-registration-field="confirmPassword"
+												name="confirmPassword"
+												type="password"
+												autoComplete="new-password"
+												value={registrationForm.confirmPassword}
+												disabled={registrationDisabled}
+												onChange={event => setRegistrationField('confirmPassword', event.currentTarget.value)}
+											/>
+										</label>
+										<div className="detail-item detail-item-full detail-field">
+											<button className="composer-submit" type="submit" disabled={registrationDisabled}>
+												{registrationSubmitting ? 'Creating account…' : !isOnline ? 'Offline' : 'Create Account'}
+											</button>
+										</div>
+									</form>
+								)}
 								<button className="auth-text-link" type="button" onClick={() => setAuthSubscreen('login')}>
 									Back to sign in
 								</button>
@@ -363,11 +449,16 @@ export default function AuthScreen() {
 						{authSubscreen === 'forgot-password' ? (
 							<>
 								<div className="detail-label">Reset Password</div>
+								{localPasswordEnabled === false ? (
+									<div className="status-card warning">
+										This Vikunja server does not allow password reset because local password auth is disabled.
+									</div>
+								) : null}
 								{forgotPasswordSent ? (
 									<div className="status-card success">
 										If an account with that email exists, a reset link has been sent.
 									</div>
-								) : (
+								) : localPasswordEnabled === false ? null : (
 									<form className="detail-grid settings-form" data-form="forgot-password" onSubmit={handleForgotPasswordSubmit}>
 										<label className="detail-item detail-item-full detail-field">
 											<div className="detail-label">Email</div>
@@ -404,4 +495,36 @@ export default function AuthScreen() {
 			</div>
 		</div>
 	)
+}
+
+function getRegistrationEnabled(info: VikunjaInfo | null) {
+	if (!info) {
+		return true
+	}
+
+	if (typeof info.registration_enabled === 'boolean') {
+		return info.registration_enabled
+	}
+
+	if (typeof info.auth?.local?.registration_enabled === 'boolean') {
+		return info.auth.local.registration_enabled
+	}
+
+	return true
+}
+
+function getLocalPasswordEnabled(info: VikunjaInfo | null) {
+	if (!info) {
+		return true
+	}
+
+	if (typeof info.auth?.local?.enabled === 'boolean') {
+		return info.auth.local.enabled
+	}
+
+	return true
+}
+
+function getOidcProviders(info: VikunjaInfo | null) {
+	return info?.auth?.openid?.providers || info?.auth?.openid_connect?.providers || []
 }
