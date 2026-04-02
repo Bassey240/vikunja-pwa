@@ -9,9 +9,12 @@ import type {
 	ServerConfig,
 	Task,
 } from '@/types'
-import {loadJson, saveJson} from '@/utils/storage'
+import {idbDelete, idbGet, idbPut} from './offline-db'
 
 const OFFLINE_SNAPSHOT_VERSION = 1
+const SNAPSHOT_KEY = 'current'
+const SNAPSHOT_STORE = 'snapshot'
+const LEGACY_STORAGE_KEY = storageKeys.offlineSnapshot
 
 export interface OfflineSnapshot {
 	version: number
@@ -71,14 +74,32 @@ const emptyOfflineSnapshot: OfflineSnapshot = {
 	notifications: [],
 }
 
-export function loadOfflineSnapshot() {
-	const snapshot = loadJson<OfflineSnapshot | null>(storageKeys.offlineSnapshot, null)
+function buildEmptySnapshot(): OfflineSnapshot {
+	return {
+		...emptyOfflineSnapshot,
+		projects: [],
+		savedFilters: [],
+		tasks: [],
+		tasksByProjectId: {},
+		projectPreviewTasksById: {},
+		todayTasks: [],
+		inboxTasks: [],
+		upcomingTasks: [],
+		savedFilterTasks: [],
+		projectFilterTasks: [],
+		projectViewsById: {},
+		projectBucketsByViewId: {},
+		notifications: [],
+	}
+}
+
+function validateSnapshot(snapshot: OfflineSnapshot | null | undefined): OfflineSnapshot | null {
 	if (!snapshot || snapshot.version !== OFFLINE_SNAPSHOT_VERSION) {
 		return null
 	}
 
 	return {
-		...emptyOfflineSnapshot,
+		...buildEmptySnapshot(),
 		...snapshot,
 		projects: Array.isArray(snapshot.projects) ? snapshot.projects : [],
 		savedFilters: Array.isArray(snapshot.savedFilters) ? snapshot.savedFilters : [],
@@ -129,16 +150,68 @@ export function loadOfflineSnapshot() {
 	}
 }
 
-export function mergeOfflineSnapshot(patch: Partial<OfflineSnapshot>) {
-	const current = loadOfflineSnapshot() || emptyOfflineSnapshot
-	saveJson(storageKeys.offlineSnapshot, {
-		...current,
+export async function loadOfflineSnapshot(): Promise<OfflineSnapshot | null> {
+	try {
+		const idbSnapshot = await idbGet<{key: string; data: OfflineSnapshot}>(SNAPSHOT_STORE, SNAPSHOT_KEY)
+		if (idbSnapshot?.data) {
+			return validateSnapshot(idbSnapshot.data)
+		}
+	} catch {
+		// IndexedDB unavailable, fall through to localStorage.
+	}
+
+	if (typeof localStorage === 'undefined') {
+		return null
+	}
+
+	try {
+		const raw = localStorage.getItem(LEGACY_STORAGE_KEY)
+		if (!raw) {
+			return null
+		}
+
+		const parsed = JSON.parse(raw) as OfflineSnapshot
+		const validated = validateSnapshot(parsed)
+		if (validated) {
+			try {
+				await idbPut(SNAPSHOT_STORE, {key: SNAPSHOT_KEY, data: validated})
+				localStorage.removeItem(LEGACY_STORAGE_KEY)
+			} catch {
+				// Keep the legacy snapshot when IDB migration fails.
+			}
+		}
+		return validated
+	} catch {
+		return null
+	}
+}
+
+export async function mergeOfflineSnapshot(patch: Partial<OfflineSnapshot>): Promise<void> {
+	const current = await loadOfflineSnapshot()
+	const merged: OfflineSnapshot = {
+		...(current || buildEmptySnapshot()),
 		...patch,
 		version: OFFLINE_SNAPSHOT_VERSION,
 		savedAt: new Date().toISOString(),
-	})
+	}
+
+	try {
+		await idbPut(SNAPSHOT_STORE, {key: SNAPSHOT_KEY, data: merged})
+	} catch {
+		if (typeof localStorage !== 'undefined') {
+			localStorage.setItem(LEGACY_STORAGE_KEY, JSON.stringify(merged))
+		}
+	}
 }
 
-export function clearOfflineSnapshot() {
-	saveJson(storageKeys.offlineSnapshot, null)
+export async function clearOfflineSnapshot(): Promise<void> {
+	try {
+		await idbDelete(SNAPSHOT_STORE, SNAPSHOT_KEY)
+	} catch {
+		// Ignore IndexedDB clear failures and still clear legacy storage.
+	}
+
+	if (typeof localStorage !== 'undefined') {
+		localStorage.removeItem(LEGACY_STORAGE_KEY)
+	}
 }

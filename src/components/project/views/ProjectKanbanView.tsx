@@ -27,6 +27,7 @@ export default function ProjectKanbanView({
 	const screen = useAppStore(state => state.screen)
 	const storedBuckets = useAppStore(state => state.projectBucketsByViewId[viewId])
 	const buckets = storedBuckets ?? EMPTY_BUCKETS
+	console.log('[KanbanView] render', {viewId, bucketCount: buckets.length, bucketSummary: buckets.map(b => ({id: b.id, title: b.title, taskCount: b.tasks?.length}))})
 	const loadingBuckets = useAppStore(state => Boolean(state.loadingProjectBuckets[viewId]))
 	const openMenu = useAppStore(state => state.openMenu)
 	const setOpenMenu = useAppStore(state => state.setOpenMenu)
@@ -74,7 +75,7 @@ export default function ProjectKanbanView({
 			return
 		}
 
-		void loadProjectBuckets(projectId, viewId)
+		void loadProjectBuckets(projectId, viewId, {force: true})
 	}, [loadProjectBuckets, projectId, viewId])
 
 	useEffect(() => {
@@ -121,15 +122,37 @@ export default function ProjectKanbanView({
 		await loadProjectBuckets(projectId, viewId, {force: true})
 	}
 
-	async function handleMoveToBucket(taskId: number, bucketId: number) {
+	async function handleMoveToBucket(taskId: number, targetBucketId: number) {
+		console.log('[KanbanView:handleMoveToBucket]', {taskId, targetBucketId, projectId, viewId})
 		setBucketPicker(null)
 		setOpenMenu(null)
-		await moveTask({
+
+		// Find the task's current bucket
+		const sourceBucketId = buckets.find(b => b.tasks.some(t => t.id === taskId))?.id || 0
+		const doneBucketId = Number(currentView?.doneBucketId ?? currentView?.done_bucket_id ?? 0) || 0
+
+		const result = await moveTask({
 			taskId,
 			targetProjectId: projectId,
 			viewId,
-			bucketId,
+			bucketId: targetBucketId,
 		})
+		console.log('[KanbanView:handleMoveToBucket] result', result)
+
+		// Toggle done status when moving between done/non-done buckets
+		if (result && doneBucketId && sourceBucketId !== targetBucketId) {
+			const task = buckets.flatMap(b => b.tasks).find(t => t.id === taskId)
+			const movedFromDone = sourceBucketId === doneBucketId && targetBucketId !== doneBucketId
+			const movedToDone = sourceBucketId !== doneBucketId && targetBucketId === doneBucketId
+			if ((movedFromDone && task?.done) || (movedToDone && !task?.done)) {
+				console.log('[KanbanView:handleMoveToBucket] toggling done', {movedFromDone, movedToDone})
+				void toggleTaskDone(taskId, {
+					kanbanViewId: viewId,
+					sourceBucketId: targetBucketId,
+					targetBucketId,
+				})
+			}
+		}
 	}
 
 	async function handleToggleTaskDone(task: Task, bucketId: number) {
@@ -417,6 +440,8 @@ export default function ProjectKanbanView({
 									</div>
 								)
 							})}
+						</div>
+						<div className="kanban-bucket-footer">
 							{composerBucketId === bucket.id ? (
 								<form
 									className="kanban-inline-task-composer"

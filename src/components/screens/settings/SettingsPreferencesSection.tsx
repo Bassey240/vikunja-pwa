@@ -10,6 +10,7 @@ export default function SettingsPreferencesSection({
 	timezoneOptionsLoading,
 	currentTimezone,
 	timezoneSubmitting,
+	timezoneNotice,
 	timezoneOptions,
 	onTimezoneChange,
 }: {
@@ -21,6 +22,7 @@ export default function SettingsPreferencesSection({
 	timezoneOptionsLoading: boolean
 	currentTimezone: string
 	timezoneSubmitting: boolean
+	timezoneNotice: string | null
 	timezoneOptions: string[]
 	onTimezoneChange: (timezone: string) => void
 }) {
@@ -53,6 +55,11 @@ export default function SettingsPreferencesSection({
 				{accountAuthMode === 'password' ? (
 					<div className="detail-core-card settings-subsection">
 						<div className="panel-label">Timezone</div>
+						{timezoneNotice ? (
+							<div className="status-card success" data-timezone-notice>
+								{timezoneNotice}
+							</div>
+						) : null}
 						{timezoneOptionsLoading ? <div className="empty-state compact">Loading timezones…</div> : null}
 						{!timezoneOptionsLoading ? (
 							<label className="detail-item detail-item-full detail-field">

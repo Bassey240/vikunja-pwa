@@ -2,7 +2,10 @@
 set -euo pipefail
 
 PORT="${PORT:-4300}"
-HOST="${HOST:-0.0.0.0}"
+# macOS shells often export HOST with the machine hostname, which breaks the
+# container listener by binding Node to a non-container interface. Use a
+# dedicated override knob and otherwise force 0.0.0.0 for Docker.
+HOST="${APP_HOST:-0.0.0.0}"
 LAN_IFACE="${LAN_IFACE:-$(route get default 2>/dev/null | awk '/interface:/{print $2; exit}')}"
 
 detect_ip() {

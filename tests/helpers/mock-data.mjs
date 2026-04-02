@@ -63,6 +63,51 @@ export function createMockFixture(referenceDate = new Date()) {
 		projectUserShares: [],
 		projectTeamShares: [],
 		linkShares: [],
+		reactions: {
+			tasks: {},
+			comments: {},
+			projects: {},
+		},
+		pendingEmailChange: null,
+		dataExport: {
+			status: null,
+			createdAt: null,
+			filename: 'vikunja-export.zip',
+			contentBase64: Buffer.from('mock-vikunja-export-zip', 'utf8').toString('base64'),
+		},
+		accountDeletion: {
+			pending: false,
+			token: null,
+			requestedAt: null,
+			deleted: false,
+		},
+		totp: {
+			enabled: false,
+			secret: null,
+			totp_url: null,
+		},
+		caldavTokens: [],
+		apiTokens: [],
+		apiRoutes: {
+			other: {
+				users: {path: '/api/v1/users', method: 'GET'},
+				users_put: {path: '/api/v1/users', method: 'PUT'},
+				users_delete: {path: '/api/v1/users/:user', method: 'DELETE'},
+			},
+			projects: {
+				read_all: {path: '/api/v1/projects', method: 'GET'},
+				create: {path: '/api/v1/projects', method: 'PUT'},
+				update: {path: '/api/v1/projects/{project}', method: 'POST'},
+				delete: {path: '/api/v1/projects/{project}', method: 'DELETE'},
+			},
+			tasks: {
+				read_all: {path: '/api/v1/tasks', method: 'GET'},
+				read_one: {path: '/api/v1/tasks/{task}', method: 'GET'},
+				create: {path: '/api/v1/tasks', method: 'PUT'},
+				update: {path: '/api/v1/tasks/{task}', method: 'POST'},
+				delete: {path: '/api/v1/tasks/{task}', method: 'DELETE'},
+			},
+		},
 		labels: [
 			{id: 1, title: 'Urgent', hex_color: '#1973ff'},
 			{id: 2, title: 'Personal', hex_color: '#6aa84f'},
@@ -244,6 +289,7 @@ export function createMockFixture(referenceDate = new Date()) {
 				{id: 12, project_id: 2, title: 'List', view_kind: 'list'},
 				{id: 16, project_id: 2, title: 'Alt List', view_kind: 'list'},
 				{id: 15, project_id: 2, title: 'Board', view_kind: 'kanban', default_bucket_id: 151, done_bucket_id: 152},
+				{id: 17, project_id: 2, title: 'Gantt', view_kind: 'gantt'},
 			],
 			3: [{id: 13, project_id: 3, title: 'List', view_kind: 'list'}],
 			'-1': [{id: 14, project_id: -1, title: 'List', view_kind: 'list'}],
@@ -396,6 +442,9 @@ export function createMockFixture(referenceDate = new Date()) {
 				read_at: null,
 				subscription: {subscribed: true},
 				labelIds: [1],
+				relatedTasks: {
+					precedes: [202],
+				},
 				parentTaskId: null,
 			},
 			{

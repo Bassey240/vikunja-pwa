@@ -1,6 +1,8 @@
 import {api, uploadApi} from '@/api'
 import type {
 	AdminMailDiagnosticsResult,
+	AdminMigration,
+	AdminRepairResult,
 	AdminRuntimeHealth,
 	AdminUser,
 	AvatarProvider,
@@ -47,6 +49,14 @@ export interface UsersSlice {
 	adminUserSubmitting: boolean
 	adminRuntimeHealth: AdminRuntimeHealth | null
 	adminRuntimeHealthLoading: boolean
+	adminMigrations: AdminMigration[]
+	adminMigrationsLoading: boolean
+	adminMigrationsLoaded: boolean
+	adminMigrateSubmitting: boolean
+	adminDumpSubmitting: boolean
+	adminRestoreSubmitting: boolean
+	adminRepairSubmitting: boolean
+	adminRepairResults: Record<string, AdminRepairResult>
 	mailDiagnosticsSubmitting: boolean
 	mailDiagnosticsResult: AdminMailDiagnosticsResult | null
 	mailerConfig: MailerConfig | null
@@ -64,6 +74,12 @@ export interface UsersSlice {
 	avatarCacheBuster: number
 	loadAdminUsers: () => Promise<void>
 	loadAdminRuntimeHealth: () => Promise<void>
+	loadMigrations: () => Promise<void>
+	runMigrate: () => Promise<boolean>
+	rollbackMigration: (name: string) => Promise<boolean>
+	createDump: () => Promise<boolean>
+	runRestore: (file: File) => Promise<boolean>
+	runRepair: (command: string) => Promise<boolean>
 	sendTestmail: (email: string) => Promise<boolean>
 	loadMailerConfig: () => Promise<void>
 	saveMailerConfig: (settings: MailerConfigInput) => Promise<boolean>
@@ -88,6 +104,14 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 	adminUserSubmitting: false,
 	adminRuntimeHealth: null,
 	adminRuntimeHealthLoading: false,
+	adminMigrations: [],
+	adminMigrationsLoading: false,
+	adminMigrationsLoaded: false,
+	adminMigrateSubmitting: false,
+	adminDumpSubmitting: false,
+	adminRestoreSubmitting: false,
+	adminRepairSubmitting: false,
+	adminRepairResults: {},
 	mailDiagnosticsSubmitting: false,
 	mailDiagnosticsResult: null,
 	mailerConfig: null,
@@ -158,6 +182,174 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 			set({error: formatError(error as Error)})
 		} finally {
 			set({adminRuntimeHealthLoading: false})
+		}
+	},
+
+	async loadMigrations() {
+		if (!canManageUsers(get())) {
+			set({
+				adminMigrations: [],
+				adminMigrationsLoading: false,
+				adminMigrationsLoaded: false,
+			})
+			return
+		}
+
+		set({adminMigrationsLoading: true, error: null})
+
+		try {
+			const result = await api<{migrations: AdminMigration[]}>('/api/admin/migrate/list')
+			set({
+				adminMigrations: result.migrations || [],
+				adminMigrationsLoaded: true,
+			})
+		} catch (error) {
+			set({error: formatError(error as Error)})
+		} finally {
+			set({adminMigrationsLoading: false})
+		}
+	},
+
+	async runMigrate() {
+		if (!canManageUsers(get()) || get().adminMigrateSubmitting) {
+			return false
+		}
+
+		set({adminMigrateSubmitting: true, error: null, settingsNotice: null})
+
+		try {
+			await api('/api/admin/migrate', {
+				method: 'POST',
+			})
+			await get().loadMigrations()
+			set({settingsNotice: 'Migrations completed successfully.'})
+			return true
+		} catch (error) {
+			set({error: formatError(error as Error)})
+			return false
+		} finally {
+			set({adminMigrateSubmitting: false})
+		}
+	},
+
+	async rollbackMigration(name) {
+		if (!canManageUsers(get()) || get().adminMigrateSubmitting) {
+			return false
+		}
+
+		set({adminMigrateSubmitting: true, error: null})
+
+		try {
+			await api('/api/admin/migrate/rollback', {
+				method: 'POST',
+				body: {name},
+			})
+			await get().loadMigrations()
+			return true
+		} catch (error) {
+			set({error: formatError(error as Error)})
+			return false
+		} finally {
+			set({adminMigrateSubmitting: false})
+		}
+	},
+
+	async createDump() {
+		if (!canManageUsers(get()) || get().adminDumpSubmitting) {
+			return false
+		}
+
+		set({adminDumpSubmitting: true, error: null, settingsNotice: null})
+
+		try {
+			const response = await fetch('/api/admin/dump', {
+				method: 'POST',
+				credentials: 'same-origin',
+			})
+			if (!response.ok) {
+				const payload = await response.json().catch(() => ({}))
+				throw new Error((payload as {error?: string}).error || 'Dump failed.')
+			}
+
+			const blob = await response.blob()
+			const disposition = response.headers.get('content-disposition') || ''
+			const filenameMatch = disposition.match(/filename="([^"]+)"/)
+			const filename = filenameMatch?.[1] || 'vikunja-dump.zip'
+			const objectUrl = URL.createObjectURL(blob)
+			const anchor = document.createElement('a')
+			anchor.href = objectUrl
+			anchor.download = filename
+			document.body.appendChild(anchor)
+			anchor.click()
+			document.body.removeChild(anchor)
+			URL.revokeObjectURL(objectUrl)
+			return true
+		} catch (error) {
+			set({error: formatError(error as Error)})
+			return false
+		} finally {
+			set({adminDumpSubmitting: false})
+		}
+	},
+
+	async runRestore(file) {
+		if (!canManageUsers(get()) || get().adminRestoreSubmitting) {
+			return false
+		}
+		if (!file) {
+			set({error: 'A backup file is required.'})
+			return false
+		}
+
+		set({adminRestoreSubmitting: true, error: null, settingsNotice: null})
+
+		try {
+			const response = await fetch('/api/admin/restore', {
+				method: 'POST',
+				credentials: 'same-origin',
+				headers: {
+					'Content-Type': 'application/octet-stream',
+				},
+				body: file,
+			})
+			if (!response.ok) {
+				const payload = await response.json().catch(() => ({}))
+				throw new Error((payload as {error?: string}).error || 'Restore failed.')
+			}
+
+			set({settingsNotice: 'Restore completed. Restart Vikunja if needed.'})
+			return true
+		} catch (error) {
+			set({error: formatError(error as Error)})
+			return false
+		} finally {
+			set({adminRestoreSubmitting: false})
+		}
+	},
+
+	async runRepair(command) {
+		if (!canManageUsers(get()) || get().adminRepairSubmitting) {
+			return false
+		}
+
+		set({adminRepairSubmitting: true, error: null})
+
+		try {
+			const result = await api<AdminRepairResult>(`/api/admin/repair/${encodeURIComponent(command)}`, {
+				method: 'POST',
+			})
+			set(state => ({
+				adminRepairResults: {
+					...state.adminRepairResults,
+					[command]: result,
+				},
+			}))
+			return result.success
+		} catch (error) {
+			set({error: formatError(error as Error)})
+			return false
+		} finally {
+			set({adminRepairSubmitting: false})
 		}
 	},
 
@@ -631,6 +823,14 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 			adminUserSubmitting: false,
 			adminRuntimeHealth: null,
 			adminRuntimeHealthLoading: false,
+			adminMigrations: [],
+			adminMigrationsLoading: false,
+			adminMigrationsLoaded: false,
+			adminMigrateSubmitting: false,
+			adminDumpSubmitting: false,
+			adminRestoreSubmitting: false,
+			adminRepairSubmitting: false,
+			adminRepairResults: {},
 			mailDiagnosticsSubmitting: false,
 			mailDiagnosticsResult: null,
 			mailerConfig: null,

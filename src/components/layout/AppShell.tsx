@@ -17,7 +17,7 @@ import useWideLayout, {useCompactWideLayout} from '@/hooks/useWideLayout'
 import {shouldSuppressDragClicks, useSortableBridge} from '@/hooks/useDragAndDrop'
 import {getProjectDescendantIds} from '@/store/project-helpers'
 import {memo, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction, useEffect, useLayoutEffect, useRef, useState} from 'react'
-import {useLocation} from 'react-router-dom'
+import {useLocation, useNavigate} from 'react-router-dom'
 import {useAppStore} from '@/store'
 import type {Screen} from '@/types'
 import BottomNav from './BottomNav'
@@ -64,6 +64,7 @@ const DEFAULT_COMPACT_WIDE_INSPECTOR_WIDTH = 360
 
 export default function AppShell() {
 	useSortableBridge()
+	const navigate = useNavigate()
 	const init = useAppStore(state => state.init)
 	const initialized = useAppStore(state => state.initialized)
 	const initializing = useAppStore(state => state.initializing)
@@ -94,10 +95,18 @@ export default function AppShell() {
 	const loadTodayTasks = useAppStore(state => state.loadTodayTasks)
 	const loadInboxTasks = useAppStore(state => state.loadInboxTasks)
 	const loadUpcomingTasks = useAppStore(state => state.loadUpcomingTasks)
+	const refreshRuntimeState = useAppStore(state => state.refreshRuntimeState)
 	const refreshAppData = useAppStore(state => state.refreshAppData)
+	const refreshOfflineQueueCounts = useAppStore(state => state.refreshOfflineQueueCounts)
+	const setOfflineSyncConflicts = useAppStore(state => state.setOfflineSyncConflicts)
+	const setOfflineSyncInProgress = useAppStore(state => state.setOfflineSyncInProgress)
+	const setError = useAppStore(state => state.setError)
+	const confirmAccountDeletion = useAppStore(state => state.confirmAccountDeletion)
 	const location = useLocation()
 	const didInitRef = useRef(false)
 	const didWarmCoreRef = useRef(false)
+	const pendingAccountDeletionConfirmRef = useRef('')
+	const accountDeletionConfirmRunningRef = useRef(false)
 	const shellRef = useRef<HTMLDivElement | null>(null)
 	const isWideLayout = useWideLayout()
 	const isCompactWideLayout = useCompactWideLayout()
@@ -170,6 +179,43 @@ export default function AppShell() {
 	}, [location.pathname, setScreen])
 
 	useEffect(() => {
+		const searchParams = new URLSearchParams(location.search)
+		const token = `${searchParams.get('accountDeletionConfirm') || ''}`.trim()
+		if (!token) {
+			return
+		}
+
+		pendingAccountDeletionConfirmRef.current = token
+		searchParams.delete('accountDeletionConfirm')
+		const nextSearch = searchParams.toString()
+		navigate(
+			{
+				pathname: location.pathname,
+				search: nextSearch ? `?${nextSearch}` : '',
+			},
+			{replace: true},
+		)
+	}, [location.pathname, location.search, navigate])
+
+	useEffect(() => {
+		const pendingToken = pendingAccountDeletionConfirmRef.current
+		if (!initialized || !connected || !pendingToken || accountDeletionConfirmRunningRef.current) {
+			return
+		}
+
+		accountDeletionConfirmRunningRef.current = true
+		void (async () => {
+			const success = await confirmAccountDeletion(pendingToken)
+			pendingAccountDeletionConfirmRef.current = ''
+			accountDeletionConfirmRunningRef.current = false
+			navigate('/settings', {replace: true})
+			if (!success) {
+				return
+			}
+		})()
+	}, [confirmAccountDeletion, connected, initialized, navigate])
+
+	useEffect(() => {
 		if (!focusedTaskStack.length || !focusedTaskSourceScreen) {
 			return
 		}
@@ -184,7 +230,7 @@ export default function AppShell() {
 			focusedTaskProjectId &&
 			currentProjectRouteId &&
 			focusedTaskProjectId !== currentProjectRouteId &&
-			!getProjectDescendantIds(currentProjectRouteId, projects).includes(focusedTaskProjectId)
+			!getProjectDescendantIds(currentProjectRouteId, projects).has(focusedTaskProjectId)
 		) {
 			closeFocusedTask()
 		}
@@ -242,10 +288,11 @@ export default function AppShell() {
 	}, [connected, initialized, isOnline, linkShareAuth, loadInboxTasks, loadProjects, loadTodayTasks, loadUpcomingTasks, offlineReadOnlyMode])
 
 	useLayoutEffect(() => {
-		const shell = shellRef.current
-		if (!shell) {
+		const shellElement = shellRef.current
+		if (!shellElement) {
 			return
 		}
+		const shell = shellElement
 
 		function resetMobileGeometry() {
 			shell.style.removeProperty('--mobile-sheet-scroll-reserve')
@@ -310,8 +357,76 @@ export default function AppShell() {
 			return
 		}
 
-		void refreshAppData()
-	}, [connected, initialized, isOnline, offlineReadOnlyMode, refreshAppData])
+		let cancelled = false
+		void (async () => {
+			setOfflineSyncInProgress(true)
+			try {
+				const {replayOfflineQueue} = await import('@/store/offline-sync')
+				const syncResult = await replayOfflineQueue()
+				if (cancelled) {
+					return
+				}
+
+				setOfflineSyncConflicts(syncResult.conflicts)
+				useAppStore.setState({
+					offlineQueueCount: 0,
+					offlineQueueFailedCount: syncResult.failed,
+				})
+				await refreshAppData()
+				if (cancelled) {
+					return
+				}
+
+				await refreshOfflineQueueCounts()
+				if (!cancelled) {
+					useAppStore.setState({offlineReadOnlyMode: false})
+				}
+			} catch (error) {
+				if (!cancelled) {
+					setError((error as Error).message || 'Offline sync failed.')
+				}
+			} finally {
+				if (!cancelled) {
+					setOfflineSyncInProgress(false)
+				}
+			}
+		})()
+
+		return () => {
+			cancelled = true
+		}
+	}, [
+		connected,
+		initialized,
+		isOnline,
+		offlineReadOnlyMode,
+		refreshAppData,
+		refreshOfflineQueueCounts,
+		setError,
+		setOfflineSyncConflicts,
+		setOfflineSyncInProgress,
+	])
+
+	useEffect(() => {
+		if (!initialized || !connected || !offlineReadOnlyMode || isOnline) {
+			return
+		}
+
+		let cancelled = false
+		const refreshIfNeeded = () => {
+			if (cancelled) {
+				return
+			}
+			void refreshRuntimeState()
+		}
+
+		refreshIfNeeded()
+		const intervalId = window.setInterval(refreshIfNeeded, 3000)
+		return () => {
+			cancelled = true
+			window.clearInterval(intervalId)
+		}
+	}, [connected, initialized, isOnline, offlineReadOnlyMode, refreshRuntimeState])
 
 	useEffect(() => {
 		document.documentElement.dataset.theme = theme

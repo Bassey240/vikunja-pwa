@@ -1,5 +1,6 @@
 import {expect, test} from '@playwright/test'
 import {startTestStack} from '../helpers/app-under-test.mjs'
+import {getOfflineSnapshot} from '../helpers/offline-storage.mjs'
 
 let stack
 const ONE_PIXEL_PNG = Buffer.from(
@@ -10,7 +11,12 @@ const ONE_PIXEL_PNG = Buffer.from(
 test.describe.configure({mode: 'serial'})
 
 test.beforeAll(async () => {
-	stack = await startTestStack({legacyConfigured: false})
+	stack = await startTestStack({
+		legacyConfigured: false,
+		envOverrides: {
+			SESSION_MUTATION_RATE_LIMIT_MAX: '50',
+		},
+	})
 })
 
 test.afterAll(async () => {
@@ -23,7 +29,7 @@ test.beforeEach(async ({page}) => {
 	stack.reset()
 	await page.setViewportSize({width: 900, height: 900})
 	await page.goto(stack.appUrl)
-	await expect(page.getByRole('heading', {name: 'Connect to your Vikunja server'})).toBeVisible()
+	await expect(page.getByRole('heading', {name: 'Connect to your Vikunja server'})).toBeVisible({timeout: 15_000})
 })
 
 async function loginWithPassword(page, targetStack = stack) {
@@ -34,10 +40,22 @@ async function loginWithPassword(page, targetStack = stack) {
 	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
 }
 
+async function openSettings(page) {
+	await page.getByRole('navigation', {name: 'Primary'}).getByRole('button', {name: 'Menu'}).click()
+	await page.locator('[data-menu-root="true"] [data-action="go-settings"]').click()
+	await expect(page.getByRole('heading', {name: 'Settings'})).toBeVisible()
+}
+
 async function expandSettingsSection(page, sectionId) {
 	const section = page.locator(`.settings-section[data-settings-section="${sectionId}"]`)
 	await section.locator(`[data-settings-section-toggle="${sectionId}"]`).first().click()
 	return section
+}
+
+async function expandSecuritySubsection(securitySection, subsectionId) {
+	const subsection = securitySection.locator(`[data-settings-subsection="${subsectionId}"]`)
+	await subsection.locator(`[data-settings-subsection-toggle="${subsectionId}"]`).click()
+	return subsection
 }
 
 test('password login loads the auth shell, sessions, and disconnect flow', async ({page}) => {
@@ -52,7 +70,7 @@ test('password login loads the auth shell, sessions, and disconnect flow', async
 	await page.getByRole('navigation', {name: 'Primary'}).getByRole('button', {name: 'Menu'}).click()
 	await page.locator('[data-action="go-settings"]').click()
 	await expect(page.getByRole('heading', {name: 'Settings'})).toBeVisible()
-	await expect(page.getByText('Account & Security')).toBeVisible()
+	await expect(page.getByText('Account')).toBeVisible()
 	const accountSection = await expandSettingsSection(page, 'account')
 	await expect(accountSection.getByText('Session login')).toBeVisible()
 	await expect(accountSection.locator('.detail-core-card').first().locator('.detail-value').filter({hasText: 'Smoke User'})).toBeVisible()
@@ -64,7 +82,8 @@ test('password login loads the auth shell, sessions, and disconnect flow', async
 	await expandSettingsSection(page, 'preferences')
 	await expect(page.locator('[data-setting-field="timezone"]')).toHaveValue('Europe/Amsterdam')
 	await page.locator('[data-setting-field="timezone"]').selectOption('UTC')
-	await expect(page.getByText('Timezone updated.')).toBeVisible()
+	await expect(page.locator('[data-timezone-notice]')).toContainText('Timezone updated.')
+	await expect(page.locator('.settings-notice')).toHaveCount(0)
 
 	await expandSettingsSection(page, 'account')
 	await page.locator('[data-password-field="oldPassword"]').fill('smoke-password')
@@ -115,6 +134,159 @@ test('avatar settings switch providers and upload a custom avatar', async ({page
 	await expect(page.getByText('Avatar uploaded.')).toBeVisible()
 	await expect(accountSection.locator('[data-avatar-provider-option="upload"]')).toHaveAttribute('aria-pressed', 'true')
 	await expect(accountSection.locator('.settings-avatar-row img.user-avatar')).toHaveCount(1)
+})
+
+test('account settings cover email change, export, and deletion flows', async ({page}) => {
+	await loginWithPassword(page)
+	await openSettings(page)
+
+	const accountSection = await expandSettingsSection(page, 'account')
+	await accountSection.locator('[data-email-field="password"]').fill('smoke-password')
+	await accountSection.locator('[data-email-field="newEmail"]').fill('updated-smoke@example.test')
+	await accountSection.locator('[data-form="change-email"]').getByRole('button', {name: 'Update email'}).click()
+	await expect(accountSection.locator('[data-change-email-notice]')).toContainText(
+		'Email update requested. Check your inbox for a confirmation link.',
+	)
+	await expect(page.locator('.settings-notice')).toHaveCount(0)
+
+	await accountSection.locator('[data-form="request-export"] input[type="password"]').fill('smoke-password')
+	await accountSection.locator('[data-form="request-export"]').getByRole('button', {name: 'Request export'}).click()
+	await expect(accountSection.locator('[data-data-export-notice]')).toContainText(
+		'Export requested. Vikunja will email you when it is ready to download.',
+	)
+	await expect(accountSection.getByText('Your export is ready to download.')).toBeVisible()
+
+	await accountSection.locator('[data-form="request-deletion"] input[type="text"]').fill('DELETE')
+	await accountSection.locator('[data-form="request-deletion"] input[type="password"]').fill('smoke-password')
+	await accountSection.locator('[data-form="request-deletion"]').getByRole('button', {name: 'Send deletion confirmation email'}).click()
+	await expect(accountSection.locator('[data-account-deletion-notice]')).toContainText(
+		'Deletion requested. Check your email for the confirmation link.',
+	)
+	await expect(page.locator('.settings-notice')).toHaveCount(0)
+	await expect(accountSection.locator('[data-form="request-deletion"]')).toBeVisible()
+
+	await page.goto(`${stack.appUrl}/?accountDeletionConfirm=delete-token-1`)
+	await expect(page).toHaveURL(/\/settings$/)
+	const reopenedAccountSection = await expandSettingsSection(page, 'account')
+	await expect(reopenedAccountSection.locator('[data-account-deletion-notice]')).toContainText(
+		'Deletion confirmed. Vikunja will delete your account in three days unless you cancel it first.',
+	)
+	await expect(reopenedAccountSection.getByText(/scheduled this account for deletion on/i)).toBeVisible()
+	await reopenedAccountSection.locator('[data-form="cancel-deletion"] input[type="password"]').fill('smoke-password')
+	await reopenedAccountSection.getByRole('button', {name: 'Cancel scheduled deletion'}).click()
+	await expect(reopenedAccountSection.locator('[data-account-deletion-notice]')).toContainText('Account deletion cancelled.')
+	await expect(page.getByText(/scheduled for deletion/i)).toHaveCount(0)
+	await expect(reopenedAccountSection.getByText(/scheduled this account for deletion on/i)).toHaveCount(0)
+	await expect(reopenedAccountSection.locator('[data-form="request-deletion"]')).toBeVisible()
+
+	await page.reload()
+	await expect(page.getByText(/scheduled for deletion/i)).toHaveCount(0)
+	const reloadedAccountSection = await expandSettingsSection(page, 'account')
+	await expect(reloadedAccountSection.getByText(/scheduled this account for deletion on/i)).toHaveCount(0)
+	await expect(reloadedAccountSection.locator('[data-form="request-deletion"]')).toBeVisible()
+})
+
+test('security settings cover totp, caldav tokens, and api tokens', async ({page}) => {
+	test.setTimeout(60_000)
+	await loginWithPassword(page)
+	await openSettings(page)
+
+	const securitySection = await expandSettingsSection(page, 'security')
+	const caldavSection = await expandSecuritySubsection(securitySection, 'caldav')
+	await expect(caldavSection.locator('[data-security-output="caldav-base-url"]')).toHaveValue(`${stack.mock.origin}/dav/`)
+	await expect(caldavSection.locator('[data-security-output="caldav-discovery-url"]')).toHaveValue(
+		`${stack.mock.origin}/dav/principals/smoke-user/`,
+	)
+	await expect(caldavSection.locator('[data-security-output="caldav-username"]')).toHaveValue('smoke-user')
+	await expect(caldavSection.getByText('Generated CalDAV tokens are shown once. Copy and save them before clearing this panel.')).toBeVisible()
+	await expect(caldavSection.locator('[data-copy-field="caldav-base-url"]')).toBeVisible()
+	await expect(caldavSection.locator('[data-copy-field="caldav-discovery-url"]')).toBeVisible()
+	await expect(caldavSection.locator('[data-copy-field="caldav-username"]')).toBeVisible()
+	const totpSection = await expandSecuritySubsection(securitySection, 'totp')
+	await expect(securitySection.locator('[data-settings-subsection="caldav"] [data-security-output="caldav-base-url"]')).toHaveCount(0)
+	await totpSection.locator('[data-action="enroll-totp"]').click()
+	await expect(totpSection.locator('[data-form="enable-totp"]')).toBeVisible()
+	await expect(totpSection.locator('[data-security-output="totp-secret"]')).toHaveValue('SMOKE-TOTP-SECRET')
+	await expect(totpSection.locator('[data-security-output="totp-url"]')).toHaveValue(
+		'otpauth://totp/Vikunja:smoke-user?secret=SMOKE-TOTP-SECRET&issuer=Vikunja',
+	)
+	await expect(totpSection.locator('[data-copy-field="totp-secret"]')).toBeVisible()
+	await expect(totpSection.locator('[data-copy-field="totp-url"]')).toBeVisible()
+
+	await page.reload()
+	await expect(page.getByRole('heading', {name: 'Settings'})).toBeVisible()
+	const reloadedSecuritySection = await expandSettingsSection(page, 'security')
+	const reloadedTotpSection = await expandSecuritySubsection(reloadedSecuritySection, 'totp')
+	await expect(reloadedTotpSection.locator('[data-form="enable-totp"]')).toBeVisible()
+	await expect(reloadedTotpSection.locator('[data-action="enroll-totp"]')).toHaveCount(0)
+	await expect(reloadedTotpSection.locator('[data-security-output="totp-secret"]')).toHaveValue('SMOKE-TOTP-SECRET')
+	await expect(reloadedTotpSection.locator('[data-security-output="totp-url"]')).toHaveValue(
+		'otpauth://totp/Vikunja:smoke-user?secret=SMOKE-TOTP-SECRET&issuer=Vikunja',
+	)
+	await reloadedTotpSection.locator('[data-totp-field="cancel-password"]').fill('smoke-password')
+	await reloadedTotpSection.locator('[data-form="cancel-totp-enrollment"]').getByRole('button', {name: 'Cancel setup'}).click()
+	await expect(reloadedTotpSection.locator('[data-action="enroll-totp"]')).toBeVisible()
+	await expect(reloadedTotpSection.locator('[data-form="enable-totp"]')).toHaveCount(0)
+
+	await reloadedTotpSection.locator('[data-action="enroll-totp"]').click()
+	await expect(reloadedTotpSection.locator('[data-form="enable-totp"]')).toBeVisible()
+	await reloadedTotpSection.locator('[data-totp-field="passcode"]').fill('123456')
+	await reloadedTotpSection.locator('[data-form="enable-totp"]').getByRole('button', {name: 'Activate 2FA'}).click()
+	await expect(reloadedTotpSection.getByText('2FA is active for this Vikunja account.')).toBeVisible()
+	await reloadedTotpSection.locator('[data-totp-field="password"]').fill('smoke-password')
+	await reloadedTotpSection.locator('[data-form="disable-totp"]').getByRole('button', {name: 'Disable 2FA'}).click()
+	await expect(reloadedTotpSection.locator('[data-action="enroll-totp"]')).toBeVisible()
+
+	const reloadedCaldavSection = await expandSecuritySubsection(reloadedSecuritySection, 'caldav')
+	await expect(reloadedSecuritySection.locator('[data-settings-subsection="totp"] [data-action="enroll-totp"]')).toHaveCount(0)
+	await reloadedCaldavSection.locator('[data-action="create-caldav-token"]').click()
+	await expect(reloadedCaldavSection.locator('[data-security-output="new-caldav-token"]')).toHaveValue('caldav-token-1')
+	await expect(reloadedCaldavSection.locator('[data-copy-field="new-caldav-token"]')).toBeVisible()
+	await reloadedCaldavSection.locator('[data-action="clear-caldav-token"]').click()
+	await expect(reloadedCaldavSection.getByText('Token #1')).toBeVisible()
+	await reloadedCaldavSection.locator('[data-action="delete-caldav-token"][data-token-id="1"]').click()
+	await expect(reloadedCaldavSection.getByText('No CalDAV tokens yet.')).toBeVisible()
+
+	const reloadedApiSection = await expandSecuritySubsection(reloadedSecuritySection, 'apiTokens')
+	await expect(reloadedSecuritySection.locator('[data-settings-subsection="caldav"] [data-action="create-caldav-token"]')).toHaveCount(0)
+	await expect(reloadedApiSection.locator('[data-form="create-api-token-sheet"]')).toHaveCount(0)
+	await reloadedApiSection.locator('[data-action="open-api-token-dialog"]').click()
+	const apiTokenSheet = page.locator('[data-form="create-api-token-sheet"]')
+	await expect(apiTokenSheet).toBeVisible()
+	await expect(apiTokenSheet.getByRole('button', {name: 'Create API token'})).toBeDisabled()
+	await apiTokenSheet.locator('[data-api-token-field="title"]').fill('Settings smoke token')
+	await expect(apiTokenSheet.getByRole('button', {name: 'Create API token'})).toBeDisabled()
+	await apiTokenSheet.getByRole('button', {name: 'Cancel'}).click()
+	await expect(apiTokenSheet).toHaveCount(0)
+	await reloadedApiSection.locator('[data-action="open-api-token-dialog"]').click()
+	await expect(apiTokenSheet).toBeVisible()
+	await apiTokenSheet.locator('[data-action="select-all-api-token-permissions"]').click()
+	await expect(apiTokenSheet.getByRole('button', {name: 'Create API token'})).toBeDisabled()
+	await apiTokenSheet.locator('[data-api-token-field="title"]').fill('Settings smoke token')
+	await expect(apiTokenSheet.locator('[data-api-token-permission="projects:read_all"]')).toBeChecked()
+	await expect(apiTokenSheet.getByRole('button', {name: 'Create API token'})).toBeDisabled()
+	await apiTokenSheet.locator('[data-api-token-field="expiry"]').fill('30/04/2026')
+	await apiTokenSheet.locator('[data-api-token-field="expiry"]').press('Tab')
+	await expect(apiTokenSheet.getByRole('button', {name: 'Create API token'})).toBeEnabled()
+	await apiTokenSheet.getByRole('button', {name: 'Create API token'}).click()
+	await expect(apiTokenSheet).toHaveCount(0)
+	await expect(reloadedApiSection.locator('[data-security-output="new-api-token"]')).toHaveValue('api-token-1')
+	await expect(reloadedApiSection.locator('[data-copy-field="new-api-token"]')).toBeVisible()
+	await reloadedApiSection.locator('[data-action="clear-api-token"]').click()
+	await expect(reloadedApiSection.getByText('Settings smoke token')).toBeVisible()
+	await reloadedApiSection.locator('[data-action="delete-api-token"][data-token-id="1"]').click()
+	await expect(reloadedApiSection.getByText('No API tokens yet.')).toBeVisible()
+})
+
+test('app data settings surface version, motd, and auth provider state', async ({page}) => {
+	await loginWithPassword(page)
+	await openSettings(page)
+
+	const appDataSection = await expandSettingsSection(page, 'appData')
+	await expect(appDataSection.getByText('Vikunja version: test')).toBeVisible()
+	await expect(appDataSection.getByText('MOTD: Smoke suite MOTD')).toBeVisible()
+	await expect(appDataSection.getByText('Background providers: unsplash')).toBeVisible()
+	await expect(appDataSection.getByText('Auth methods: Local enabled · OIDC disabled')).toBeVisible()
 })
 
 test('api token login works and bottom navigation routes between placeholder screens', async ({page}) => {
@@ -402,7 +574,7 @@ test('sign-in form keeps the server and username after reload and session loss',
 	await expect(page.locator('[data-account-field="password"]')).toHaveValue('')
 })
 
-test('offline reload restores the last signed-in shell in read-only mode', async ({page}) => {
+test('offline reload restores the last signed-in shell from the cached snapshot', async ({page}) => {
 	await loginWithPassword(page)
 	await page.evaluate(async () => {
 		if ('serviceWorker' in navigator) {
@@ -410,16 +582,14 @@ test('offline reload restores the last signed-in shell in read-only mode', async
 		}
 	})
 	await expect
-		.poll(() =>
-			page.evaluate(() => window.localStorage.getItem('vikunja-mobile-poc:offline-snapshot') !== null),
-		)
+		.poll(async () => Boolean(await getOfflineSnapshot(page)))
 		.toBe(true)
 
 	await page.context().setOffline(true)
-	await page.reload()
+	await page.reload({waitUntil: 'domcontentloaded'})
 
-	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
-	await expect(page.getByText('read-only mode')).toBeVisible()
+	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible({timeout: 15_000})
+	await expect(page.locator('.topbar-runtime-status-banner').first()).toContainText('saved locally and will sync')
 })
 
 test('offline and browser notification runtime status renders in Settings', async ({page}) => {
@@ -433,6 +603,10 @@ test('offline and browser notification runtime status renders in Settings', asyn
 	await expect(offlineSection.locator('.detail-label').filter({hasText: 'Connection'})).toBeVisible()
 	await expect(offlineSection.locator('.detail-label').filter({hasText: 'Offline shell'})).toBeVisible()
 	await expect(offlineSection.locator('.detail-label').filter({hasText: 'Cache updates'})).toBeVisible()
+	await expect(offlineSection.locator('.detail-label').filter({hasText: 'Queued changes'})).toBeVisible()
+	await expect(offlineSection.locator('.detail-label').filter({hasText: 'Failed syncs'})).toBeVisible()
+	await expect(offlineSection.getByText('Pending offline changes')).toBeVisible()
+	await expect(offlineSection.getByText('No pending changes.')).toBeVisible()
 
 	await expect
 		.poll(async () => offlineSection.locator('.detail-item.detail-field', {hasText: 'Offline shell'}).textContent())

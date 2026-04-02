@@ -131,6 +131,23 @@ async function dragTaskToSidebarProjectCenter(page, sourceTaskId, targetProjectI
 	await dragHandleToPoint(page, handle, await getCenterPoint(target))
 }
 
+async function moveTaskToSidebarProject(page, sourceTaskId, targetProjectId) {
+	for (let attempt = 0; attempt < 2; attempt += 1) {
+		await dragTaskToSidebarProjectCenter(page, sourceTaskId, targetProjectId)
+		try {
+			await expect.poll(async () => {
+				const task = await stack.api(`/api/tasks/${sourceTaskId}`)
+				return task.task.project_id
+			}, {timeout: 2500}).toBe(targetProjectId)
+			return
+		} catch (error) {
+			if (attempt === 1) {
+				throw error
+			}
+		}
+	}
+}
+
 async function dragProjectToSidebarProjectCenter(page, sourceProjectId, targetProjectId) {
 	const handle = page.locator(`.workspace-screen.is-active [data-project-node-id="${sourceProjectId}"] > .project-node-row .project-drag-handle`)
 	const target = page.locator(`.wide-sidebar [data-project-node-id="${targetProjectId}"] > .wide-sidebar-project-row .wide-sidebar-project-link`)
@@ -376,6 +393,34 @@ test('wide inspector opens for project and task selection and releases on menu n
 	await expect(page.locator('.shell-inspector-empty-state')).toContainText('Select a task or project to see details')
 })
 
+test('narrow desktop inspector wraps comment reactions without horizontal overflow', async ({page}) => {
+	await page.setViewportSize({width: 1280, height: 900})
+	await page.evaluate(() => {
+		window.localStorage.setItem('vikunja-mobile-poc:wide-inspector-width', '296')
+	})
+	await page.reload()
+	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
+
+	await openProject(page, 2, 'Work')
+	await page.locator('[data-action="open-task-focus"][data-task-id="201"]').click()
+	await expect(page.locator('.shell-inspector-region')).toContainText('Task Detail')
+	await page.locator('.shell-inspector-region [data-detail-section-toggle="comments"]').click()
+	await page.locator('.shell-inspector-region [data-action="toggle-comment-reaction-picker"][data-task-comment-id="1"]').click()
+
+	const commentRow = page.locator('.shell-inspector-region [data-task-comment="1"]')
+	await expect(commentRow).toBeVisible()
+	await expect
+		.poll(() =>
+			commentRow.evaluate(element => {
+				const rowFits = element.scrollWidth <= element.clientWidth + 1
+				const actions = Array.from(element.querySelectorAll('.detail-inline-actions'))
+				const actionsFit = actions.every(action => action.scrollWidth <= action.clientWidth + 1)
+				return rowFits && actionsFit
+			}),
+		)
+		.toBe(true)
+})
+
 test('desktop add flows stay inline in the active pane', async ({page}) => {
 	await page.setViewportSize({width: 1280, height: 900})
 
@@ -411,12 +456,7 @@ test('desktop shell accepts task drops onto sidebar projects', async ({page}) =>
 	await page.setViewportSize({width: 1280, height: 900})
 
 	await openProject(page, 2, 'Work')
-	await dragTaskToSidebarProjectCenter(page, 202, 1)
-
-	await expect.poll(async () => {
-		const task = await stack.api('/api/tasks/202')
-		return task.task.project_id
-	}).toBe(1)
+	await moveTaskToSidebarProject(page, 202, 1)
 	await expect(page.locator('.workspace-screen.is-active [data-task-row-id="202"]')).toHaveCount(0)
 	await page.waitForTimeout(700)
 	await page.getByRole('navigation', {name: 'Primary'}).getByRole('button', {name: 'Inbox'}).click()

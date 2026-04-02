@@ -4,15 +4,18 @@ import {formatError} from '@/utils/formatting'
 import {parseQuickAddMagic} from '@/utils/quickAddMagic'
 import type {StateCreator} from 'zustand'
 import type {AppStore} from '../index'
-import {blockOfflineReadOnlyAction} from '../offline-readonly'
+import {enqueueMutation, getNextTempId} from '../offline-queue'
+import {blockNonQueueableOfflineAction, shouldQueueOffline} from '../offline-readonly'
 import {findTaskInAnyContext} from '../selectors'
 import {
 	applyQuickAddAssignees,
 	applyQuickAddLabels,
+	buildTaskRelationRef,
 	getCurrentComposeParentTaskId,
 	getCurrentComposeProjectId,
 	getTaskCollections,
 	getTodayDueDateIso,
+	insertOptimisticTask,
 	resolveQuickAddProjectId,
 	shouldDefaultComposeToToday,
 } from '../task-helpers'
@@ -51,14 +54,6 @@ export const createTaskComposersSlice: StateCreator<AppStore, [], [], TaskCompos
 	subtaskSubmittingParentId: null,
 
 	openRootComposer({parentTaskId = null, projectId = null, placement = 'sheet', defaultDueToday = false} = {}) {
-		if (!get().isOnline && get().offlineReadOnlyMode) {
-			set({
-				error: null,
-				offlineActionNotice: 'Offline mode is read-only. Reconnect to create tasks.',
-			})
-			return
-		}
-
 		const composerProjectId = projectId || getCurrentComposeProjectId(get())
 		const nextParentTaskId = parentTaskId ?? getCurrentComposeParentTaskId(get())
 		const composerDueDate =
@@ -118,14 +113,6 @@ export const createTaskComposersSlice: StateCreator<AppStore, [], [], TaskCompos
 			return false
 		}
 
-		if (!get().isOnline && get().offlineReadOnlyMode) {
-			set({
-				error: null,
-				offlineActionNotice: 'Offline mode is read-only. Reconnect to create tasks.',
-			})
-			return false
-		}
-
 		const parsed = parseQuickAddMagic(trimmedTitle)
 		const resolvedProjectId = resolveQuickAddProjectId(get(), parsed.project) || composerProjectId
 		const finalTitle = parsed.title.trim()
@@ -144,6 +131,47 @@ export const createTaskComposersSlice: StateCreator<AppStore, [], [], TaskCompos
 		})
 
 		try {
+			if (shouldQueueOffline(get, 'submitRootTask')) {
+				const tempId = getNextTempId()
+				const parentTask = finalParentTaskId
+					? findTaskInAnyContext(finalParentTaskId, getTaskCollections(get()))
+					: null
+				const optimisticTask = buildOptimisticCreatedTask(get(), {
+					id: tempId,
+					projectId: resolvedProjectId,
+					title: finalTitle,
+					dueDate,
+					parentTask,
+					priority: parsed.priority,
+					repeatAfter: parsed.repeatAfter,
+				})
+				set(state => ({
+					...insertOptimisticTask(state, optimisticTask, {parentTaskId: finalParentTaskId}),
+					error: null,
+				}))
+				await enqueueMutation({
+					type: 'task-create',
+					endpoint: `/api/projects/${resolvedProjectId}/tasks`,
+					method: 'POST',
+					body: {
+						title: finalTitle,
+						due_date: dueDate,
+						parentTaskId: finalParentTaskId,
+						priority: parsed.priority,
+						repeat_after: parsed.repeatAfter,
+						repeat_from_current_date: false,
+					},
+					metadata: {
+						entityType: 'task',
+						entityId: tempId,
+						parentEntityId: resolvedProjectId,
+						description: `Create "${finalTitle}"`,
+					},
+				})
+				await get().refreshOfflineQueueCounts()
+				return true
+			}
+
 			const result = await api<{task: Task}, {
 				title: string
 				parentTaskId: number | null
@@ -242,7 +270,7 @@ export const createTaskComposersSlice: StateCreator<AppStore, [], [], TaskCompos
 			return false
 		}
 
-		if (blockOfflineReadOnlyAction(get, set, 'create tasks')) {
+		if (blockNonQueueableOfflineAction(get, set, 'submitSubtask')) {
 			return false
 		}
 
@@ -259,6 +287,51 @@ export const createTaskComposersSlice: StateCreator<AppStore, [], [], TaskCompos
 		})
 
 		try {
+			if (shouldQueueOffline(get, 'submitSubtask')) {
+				const tempId = getNextTempId()
+				const optimisticTask = buildOptimisticCreatedTask(get(), {
+					id: tempId,
+					projectId: parentTask.project_id,
+					title: finalTitle,
+					dueDate,
+					parentTask,
+					priority: parsed.priority,
+					repeatAfter: parsed.repeatAfter,
+				})
+				set(state => {
+					const expandedTaskIds = new Set(state.expandedTaskIds)
+					if (state.activeSubtaskSource === 'list') {
+						expandedTaskIds.add(parentTaskId)
+					}
+					return {
+						...insertOptimisticTask(state, optimisticTask, {parentTaskId}),
+						expandedTaskIds,
+						error: null,
+					}
+				})
+				await enqueueMutation({
+					type: 'task-create',
+					endpoint: `/api/projects/${parentTask.project_id}/tasks`,
+					method: 'POST',
+					body: {
+						title: finalTitle,
+						parentTaskId,
+						due_date: dueDate,
+						priority: parsed.priority,
+						repeat_after: parsed.repeatAfter,
+						repeat_from_current_date: false,
+					},
+					metadata: {
+						entityType: 'task',
+						entityId: tempId,
+						parentEntityId: parentTask.project_id,
+						description: `Create "${finalTitle}"`,
+					},
+				})
+				await get().refreshOfflineQueueCounts()
+				return true
+			}
+
 			const result = await api<
 				{task: Task},
 				{
@@ -314,3 +387,65 @@ export const createTaskComposersSlice: StateCreator<AppStore, [], [], TaskCompos
 		}
 	},
 })
+
+function buildOptimisticCreatedTask(
+	state: AppStore,
+	options: {
+		id: number
+		projectId: number
+		title: string
+		dueDate: string | null
+		parentTask?: Task | null
+		priority: number | null
+		repeatAfter: number | null
+	},
+): Task {
+	const now = new Date().toISOString()
+	const nextPosition = Math.max(
+		0,
+		...state.tasks
+			.filter(task => task.project_id === options.projectId)
+			.map(task => Number(task.position || 0)),
+		...(state.projectPreviewTasksById[options.projectId] || []).map(task => Number(task.position || 0)),
+	) + 1024
+	const createdBy = state.account?.user
+
+	return {
+		id: options.id,
+		project_id: options.projectId,
+		title: options.title,
+		description: '',
+		done: false,
+		due_date: options.dueDate,
+		start_date: null,
+		end_date: null,
+		done_at: null,
+		created: now,
+		updated: now,
+		position: nextPosition,
+		priority: options.priority ?? 0,
+		percent_done: 0,
+		repeat_after: options.repeatAfter,
+		repeat_from_current_date: false,
+		created_by: createdBy
+			? {
+				id: createdBy.id,
+				name: createdBy.name || '',
+				username: createdBy.username || '',
+				email: createdBy.email || '',
+			}
+			: null,
+		assignees: [],
+		comments: [],
+		comment_count: 0,
+		attachments: [],
+		labels: [],
+		related_tasks: options.parentTask
+			? {
+				parenttask: [
+					buildTaskRelationRef(options.parentTask),
+				],
+			}
+			: {},
+	}
+}

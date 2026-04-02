@@ -32,9 +32,11 @@ Use GitHub as the public release mirror.
 
 1. Work on local branches or directly on Forgejo-tracked branches.
 2. Run the required checks, typically `npm run ci`.
-3. Commit verified work normally.
-4. Push verified history to Forgejo.
-5. Keep GitHub untouched until you are ready to publish a clean public snapshot.
+3. If the work changes public behavior, deployment, docs, or release messaging,
+   add a factual note to `docs/next-release-notes.md`.
+4. Commit verified work normally.
+5. Push verified history to Forgejo.
+6. Keep GitHub untouched until you are ready to publish a clean public snapshot.
 
 ## Public release workflow
 
@@ -48,9 +50,12 @@ When preparing a public release for GitHub:
    - private data
    - runtime-only files
    - local `.env` values
-   - internal-only notes you do not want in the public mirror
-6. Create one new release commit in that clean GitHub worktree.
-7. Push that single release commit to `github/main`.
+   - internal-only plans, prompts, handoff notes, or refactor scratch docs you do not want in the public mirror
+6. Draft the public release summary from `docs/next-release-notes.md` instead of
+   reconstructing the release from commit history.
+7. Create one new release commit in that clean GitHub worktree.
+8. Push that single release commit to `github/main`.
+9. Reset `docs/next-release-notes.md` for the following release cycle.
 
 Result:
 
@@ -101,9 +106,11 @@ Before pushing a public GitHub snapshot:
 
 - `forgejo/main` contains the verified release candidate
 - `npm run ci` passes on the exact release state
+- `docs/next-release-notes.md` reflects the release accurately
 - README and env docs match the release behavior
 - version numbers and build identifiers are updated
 - tracked files do not contain private data or local runtime secrets
+- internal-only planning or handoff docs are excluded from the public snapshot
 - the release snapshot was assembled from a clean GitHub baseline
 - GitHub will receive one intentional new release commit
 

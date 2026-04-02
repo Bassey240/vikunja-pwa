@@ -13,14 +13,16 @@ import {formatError} from '@/utils/formatting'
 import {loadNumber, saveNumber} from '@/utils/storage'
 import type {StateCreator} from 'zustand'
 import type {AppStore} from '../index'
+import {enqueueMutation, getNextTempId} from '../offline-queue'
 import {
 	getOfflineCachedProjectTasks,
 	persistOfflineBrowseSnapshot,
 	resolveOfflineProjectViewId,
 } from '../offline-browse-cache'
-import {blockOfflineReadOnlyAction, isOfflineReadOnly} from '../offline-readonly'
+import {blockNonQueueableOfflineAction, blockOfflineReadOnlyAction, isOfflineReadOnly, shouldQueueOffline} from '../offline-readonly'
 import {loadOfflineSnapshot, mergeOfflineSnapshot} from '../offline-snapshot'
 import {
+	compareByPositionThenId,
 	findDefaultProjectId,
 	getAvailableParentProjects,
 	getDefaultComposeProjectId,
@@ -184,7 +186,7 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 				currentInboxViewId: inboxProjectId ? get().currentInboxViewId : null,
 				currentSavedFilterViewId: selectedSavedFilterProjectId ? get().currentSavedFilterViewId : null,
 			})
-			mergeOfflineSnapshot({
+			await mergeOfflineSnapshot({
 				projects: activeProjects,
 				savedFilters,
 				selectedProjectId,
@@ -343,14 +345,6 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 	},
 
 	openProjectComposer(parentProjectId, {placement = 'sheet'} = {}) {
-		if (!get().isOnline && get().offlineReadOnlyMode) {
-			set({
-				error: null,
-				offlineActionNotice: 'Offline mode is read-only. Reconnect to create projects.',
-			})
-			return
-		}
-
 		set({
 			projectComposerOpen: true,
 			projectComposerParentId:
@@ -388,20 +382,38 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 			return false
 		}
 
-		if (!get().isOnline && get().offlineReadOnlyMode) {
-			set({
-				error: null,
-				offlineActionNotice: 'Offline mode is read-only. Reconnect to create projects.',
-			})
-			return false
-		}
-
 		set({
 			projectSubmitting: true,
 			error: null,
 		})
 
 		try {
+			if (shouldQueueOffline(get, 'submitProject')) {
+				const tempId = getNextTempId()
+				const optimisticProject = buildOptimisticProject(tempId, trimmedTitle, get().projectComposerParentId || null)
+				set(state => ({
+					...insertOptimisticProject(state, optimisticProject),
+					error: null,
+				}))
+				await enqueueMutation({
+					type: 'project-create',
+					endpoint: '/api/projects',
+					method: 'POST',
+					body: {
+						title: trimmedTitle,
+						parentProjectId: get().projectComposerParentId || null,
+					},
+					metadata: {
+						entityType: 'project',
+						entityId: tempId,
+						parentEntityId: get().projectComposerParentId || undefined,
+						description: `Create project "${trimmedTitle}"`,
+					},
+				})
+				await get().refreshOfflineQueueCounts()
+				return true
+			}
+
 			await api<{project: Project}, {title: string; parentProjectId: number | null}>('/api/projects', {
 				method: 'POST',
 				body: {
@@ -438,7 +450,7 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 			taskDetail: null,
 			...(!offlineReadOnly && comingFromDifferentScreen ? {tasks: [], currentTasksProjectId: null, currentProjectViewId: null} : {}),
 		})
-		mergeOfflineSnapshot({selectedProjectId: projectId})
+		await mergeOfflineSnapshot({selectedProjectId: projectId})
 
 		if (get().account?.linkShareAuth && !get().projects.some(project => project.id === projectId)) {
 			try {
@@ -459,7 +471,7 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 		}
 
 		if (offlineReadOnly) {
-			const snapshot = loadOfflineSnapshot()
+			const snapshot = await loadOfflineSnapshot()
 			const cachedProjectTasks = getOfflineCachedProjectTasks({
 				projectId,
 				tasksByProjectId: {
@@ -509,7 +521,7 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 		}
 
 		if (!get().isOnline && get().offlineReadOnlyMode) {
-			const snapshot = loadOfflineSnapshot()
+			const snapshot = await loadOfflineSnapshot()
 			const cachedPreviewTasks = getOfflineCachedProjectTasks({
 				projectId,
 				tasksByProjectId: snapshot?.tasksByProjectId,
@@ -612,7 +624,7 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 	},
 
 	async moveProjectToParent(projectId, parentProjectId, options = {}) {
-		if (blockOfflineReadOnlyAction(get, set, 'reorganize projects')) {
+		if (blockNonQueueableOfflineAction(get, set, 'moveProjectToParent')) {
 			return false
 		}
 
@@ -642,6 +654,28 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 				position: hasPositionUpdate ? nextPosition : project.position,
 			}))
 			markProjectDropTrace(options.traceToken || null, 'optimistic-set-end')
+
+			if (shouldQueueOffline(get, 'moveProjectToParent')) {
+				await enqueueMutation({
+					type: 'project-move',
+					endpoint: `/api/projects/${projectId}`,
+					method: 'POST',
+					body: {
+						...project,
+						parent_project_id: nextParentProjectId,
+						position: hasPositionUpdate ? nextPosition : project.position,
+					},
+					metadata: {
+						entityType: 'project',
+						entityId: projectId,
+						parentEntityId: nextParentProjectId || undefined,
+						description: `Move project "${project.title}"`,
+					},
+				})
+				await get().refreshOfflineQueueCounts()
+				return true
+			}
+
 			markProjectDropTrace(options.traceToken || null, 'api-project-update-start', {
 				parentProjectId: nextParentProjectId,
 				position: hasPositionUpdate ? nextPosition : Number(project.position || 0),
@@ -695,7 +729,7 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 	},
 
 	async deleteProject(projectId) {
-		if (blockOfflineReadOnlyAction(get, set, 'delete projects')) {
+		if (blockNonQueueableOfflineAction(get, set, 'deleteProject')) {
 			return false
 		}
 
@@ -714,6 +748,25 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 			openMenu: null,
 			error: null,
 		}))
+
+		if (shouldQueueOffline(get, 'deleteProject')) {
+			if (get().selectedProjectId === null) {
+				saveNumber(storageKeys.selectedProjectId, null)
+			}
+			await enqueueMutation({
+				type: 'project-delete',
+				endpoint: `/api/projects/${projectId}`,
+				method: 'DELETE',
+				body: null,
+				metadata: {
+					entityType: 'project',
+					entityId: projectId,
+					description: `Delete project "${project.title}"`,
+				},
+			})
+			await get().refreshOfflineQueueCounts()
+			return true
+		}
 
 		const started = await get().startUndoableMutation({
 			notice: {
@@ -751,7 +804,7 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 	},
 
 	async saveProjectDetailPatch(patch) {
-		if (blockOfflineReadOnlyAction(get, set, 'edit projects')) {
+		if (blockNonQueueableOfflineAction(get, set, 'saveProjectDetailPatch')) {
 			return false
 		}
 
@@ -761,16 +814,34 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 		}
 		const projectPayload = {...currentProject}
 		delete projectPayload.subscription
+		const queuedBody = {
+			...projectPayload,
+			...patch,
+		}
+		set(state => applyProjectPatchOptimisticUpdate(state, currentProject.id, patch))
+
+		if (shouldQueueOffline(get, 'saveProjectDetailPatch')) {
+			await enqueueMutation({
+				type: 'project-update',
+				endpoint: `/api/projects/${currentProject.id}`,
+				method: 'POST',
+				body: queuedBody,
+				metadata: {
+					entityType: 'project',
+					entityId: currentProject.id,
+					description: `Edit project "${currentProject.title}"`,
+				},
+			})
+			await get().refreshOfflineQueueCounts()
+			return true
+		}
 
 		try {
 			const result = await api<{project: Project}, Partial<Project>>(
 				`/api/projects/${currentProject.id}`,
 				{
 					method: 'POST',
-					body: {
-						...projectPayload,
-						...patch,
-					},
+					body: queuedBody,
 				},
 			)
 			set({projectDetail: result.project})
@@ -779,6 +850,7 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 			await get().openProjectDetail(result.project.id)
 			return true
 		} catch (error) {
+			set(state => applyProjectPatchOptimisticUpdate(state, currentProject.id, currentProject))
 			set({error: formatError(error as Error)})
 			return false
 		}
@@ -1023,6 +1095,40 @@ function applyProjectDeletionOptimisticUpdate(state: AppStore, projectId: number
 		focusedTaskId: nextFocusedEntry?.taskId || null,
 		focusedTaskProjectId: nextFocusedEntry?.projectId || null,
 		focusedTaskSourceScreen: nextFocusedEntry?.sourceScreen || null,
+	}
+}
+
+function applyProjectPatchOptimisticUpdate(state: AppStore, projectId: number, patch: Partial<Project>) {
+	return {
+		projects: state.projects.map(project => (project.id === projectId ? {...project, ...patch} : project)),
+		projectDetail:
+			state.projectDetail?.id === projectId
+				? {
+					...state.projectDetail,
+					...patch,
+				}
+				: state.projectDetail,
+	}
+}
+
+function buildOptimisticProject(projectId: number, title: string, parentProjectId: number | null): Project {
+	const now = new Date().toISOString()
+	return {
+		id: projectId,
+		title,
+		parent_project_id: parentProjectId || 0,
+		position: Date.now(),
+		description: '',
+		created: now,
+		updated: now,
+	}
+}
+
+function insertOptimisticProject(state: AppStore, project: Project) {
+	return {
+		projects: dedupeProjects([...state.projects, project])
+			.map(cloneProjectSnapshot)
+			.sort(compareByPositionThenId),
 	}
 }
 

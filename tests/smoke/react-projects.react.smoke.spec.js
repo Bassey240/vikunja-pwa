@@ -1,5 +1,6 @@
 import {expect, test} from '@playwright/test'
 import {startTestStack} from '../helpers/app-under-test.mjs'
+import {getOfflineMutations, getOfflineSnapshot} from '../helpers/offline-storage.mjs'
 
 let stack
 
@@ -24,7 +25,7 @@ test.beforeEach(async ({page}) => {
 	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
 })
 
-async function createMockLinkShare(projectId, {name = 'Smoke link', password = '', permission = 1} = {}) {
+async function createMockLinkShare(projectId, {name = 'Smoke link', password = '', permission = 1, ...rest} = {}) {
 	return stack.mockApi(`projects/${projectId}/shares`, {
 		method: 'PUT',
 		headers: {
@@ -34,6 +35,7 @@ async function createMockLinkShare(projectId, {name = 'Smoke link', password = '
 			name,
 			password,
 			permission,
+			...rest,
 		}),
 	})
 }
@@ -184,9 +186,8 @@ test('project detail manages direct shares team shares and link shares', async (
 		return project.subscription?.subscribed ?? null
 	}).toBe(true)
 	await page.locator('[data-detail-section-toggle="sharedUsers"]').click()
-	await page.locator('[data-detail-section-toggle="sharedTeams"]').click()
-	await page.locator('[data-detail-section-toggle="linkShares"]').click()
-
+	await expect(page.locator('[data-detail-section-toggle="sharedUsers"]')).toHaveAttribute('aria-expanded', 'true')
+	await expect(page.locator('[data-detail-section-toggle="project"]')).toHaveAttribute('aria-expanded', 'false')
 	await page.locator('input[placeholder="Search users"]').fill('jamie')
 	const jamieResult = page.locator('.detail-assignee-search-result').filter({hasText: 'Jamie Rivers'})
 	await expect(jamieResult).toBeVisible()
@@ -199,6 +200,9 @@ test('project detail manages direct shares team shares and link shares', async (
 		return shares.some(user => user.username === 'jamie')
 	}).toBe(true)
 
+	await page.locator('[data-detail-section-toggle="sharedTeams"]').click()
+	await expect(page.locator('[data-detail-section-toggle="sharedTeams"]')).toHaveAttribute('aria-expanded', 'true')
+	await expect(page.locator('[data-detail-section-toggle="sharedUsers"]')).toHaveAttribute('aria-expanded', 'false')
 	await page.locator('input[placeholder="Search teams"]').fill('Home')
 	const homeTeamResult = page.locator('.detail-assignee-search-result').filter({hasText: 'Home Team'})
 	await expect(homeTeamResult).toBeVisible()
@@ -209,13 +213,109 @@ test('project detail manages direct shares team shares and link shares', async (
 		return shares.some(team => team.id === 1)
 	}).toBe(true)
 
+	await page.locator('[data-detail-section-toggle="linkShares"]').click()
+	await expect(page.locator('[data-detail-section-toggle="linkShares"]')).toHaveAttribute('aria-expanded', 'true')
+	await expect(page.locator('[data-detail-section-toggle="sharedTeams"]')).toHaveAttribute('aria-expanded', 'false')
 	await page.locator('[data-project-link-share-name]').fill('Groceries link')
 	await page.locator('[data-action="create-project-link-share"]').click()
-	await expect(page.locator('.project-link-share-row').filter({hasText: 'Groceries link'})).toBeVisible()
+	const createdShareRow = page.locator('[data-project-link-share-row]').filter({hasText: 'Groceries link'})
+	await expect(createdShareRow).toBeVisible()
+	await expect(createdShareRow.locator('[data-action="copy-project-link-share-summary"]')).toBeVisible()
 	await expect.poll(async () => {
 		const shares = await stack.mockApi('projects/2/shares')
 		return shares.some(share => share.name === 'Groceries link')
 	}).toBe(true)
+	await createdShareRow.locator('[data-action="toggle-project-link-share"]').click()
+	await expect(createdShareRow.locator('[data-project-link-share-detail]')).toContainText('Groceries link')
+	await expect(page.getByText('The project share does not exist.')).toHaveCount(0)
+})
+
+test('project link share inline details show password protection and expiry metadata', async ({page}) => {
+	await createMockLinkShare(2, {
+		name: 'Protected detail link',
+		password: 'secret123',
+		expires: '2026-06-01T12:00:00Z',
+	})
+
+	await openProjects(page)
+	const workNode = page.locator('[data-project-node-id="2"]')
+	await workNode.locator('[data-action="toggle-project-menu"]').click()
+	await page.locator('[data-menu-root="true"] [data-action="share-project"][data-project-id="2"]').click()
+	await page.locator('[data-detail-section-toggle="linkShares"]').click()
+
+	const shareRow = page.locator('[data-project-link-share-row]').filter({hasText: 'Protected detail link'})
+	await expect(shareRow).toBeVisible()
+	await shareRow.locator('[data-action="toggle-project-link-share"]').click()
+
+	const detailSheet = shareRow.locator('[data-project-link-share-detail]')
+	await expect(detailSheet).toBeVisible()
+	await expect(detailSheet).toContainText('Password protected')
+	await expect(detailSheet).toContainText('Yes')
+	await expect(detailSheet).not.toContainText('Never')
+	await expect(detailSheet).toContainText('Hash')
+
+	await page.locator('[data-detail-section-toggle="linkShares"]').click()
+	await expect(page.locator('[data-project-link-share-detail]')).toHaveCount(0)
+	await page.locator('[data-detail-section-toggle="linkShares"]').click()
+	await expect(page.locator('[data-project-link-share-detail]')).toHaveCount(0)
+})
+
+test('gantt renders dependency arrows and drag release does not open task focus', async ({page}) => {
+	await page.setViewportSize({width: 1440, height: 900})
+	await openProjects(page)
+
+	const workNode = page.locator('[data-project-node-id="2"]')
+	await workNode.locator('[data-action="select-project"][data-project-id="2"]').click()
+	await expect(page.getByRole('heading', {name: 'Work'})).toBeVisible()
+
+	await page.locator('[data-action="toggle-project-view-menu"]').click()
+	await page.locator('[data-action="select-project-view"][data-view-id="17"]').click()
+
+	const ganttBar = page.locator('[data-gantt-task-id="201"]').first()
+	await expect(ganttBar).toBeVisible()
+	await expect(page.locator('.project-gantt-dependency-path')).toHaveCount(1)
+	await expect(ganttBar.locator('.gantt-bar-label-chip')).toHaveCount(1)
+	await expect(ganttBar.locator('.gantt-bar-avatars .user-avatar')).toHaveCount(1)
+
+	await ganttBar.click({position: {x: 32, y: 16}})
+	await expect(page.locator('[data-detail-title]')).toBeVisible()
+	await expect(page.locator('.task-focus-shell')).toHaveCount(0)
+
+	await ganttBar.locator('[data-action="toggle-gantt-task-menu"]').click()
+	await page.locator('[data-action="open-gantt-task-focus"][data-task-id="201"]').click()
+	await expect(page.locator('.task-focus-summary-title').filter({hasText: 'Smoke suite rollout'})).toBeVisible()
+	await page.locator('[data-action="close-focused-task"]').click()
+	await expect(page.locator('.task-focus-summary-title').filter({hasText: 'Smoke suite rollout'})).toHaveCount(0)
+
+	const barBox = await ganttBar.boundingBox()
+	expect(barBox).not.toBeNull()
+	await page.mouse.move((barBox?.x || 0) + (barBox?.width || 0) - 6, (barBox?.y || 0) + (barBox?.height || 0) / 2)
+	await page.mouse.down()
+	await page.mouse.move((barBox?.x || 0) + (barBox?.width || 0) + 50, (barBox?.y || 0) + (barBox?.height || 0) / 2, {steps: 8})
+	await page.mouse.up()
+
+	await expect(page.locator('.task-focus-shell')).toHaveCount(0)
+	await expect(page.locator('[data-gantt-task-id="201"]')).toBeVisible()
+})
+
+test('switching projects closes out-of-scope focused tasks without crashing the app shell', async ({page}) => {
+	const pageErrors = []
+	page.on('pageerror', error => {
+		pageErrors.push(error.message)
+	})
+
+	await openProjects(page)
+	const workNode = page.locator('[data-project-node-id="2"]')
+	await workNode.locator('[data-action="select-project"][data-project-id="2"]').click()
+	await expect(page.getByRole('heading', {name: 'Work'})).toBeVisible()
+
+	await page.locator('.task-row').filter({hasText: 'Smoke suite rollout'}).locator('[data-action="open-task-focus"]').click()
+	await expect(page.locator('.task-focus-summary-title').filter({hasText: 'Smoke suite rollout'})).toBeVisible()
+
+	await page.goto(`${stack.appUrl}/projects/3`)
+	await expect(page.getByRole('heading', {name: 'Travel'})).toBeVisible()
+	await expect(page.locator('.task-focus-summary-title').filter({hasText: 'Smoke suite rollout'})).toHaveCount(0)
+	expect(pageErrors).toEqual([])
 })
 
 test('search project results expose the share menu entry point', async ({page}) => {
@@ -244,7 +344,7 @@ test('offline project navigation reuses cached project tasks without surfacing g
 	await page.context().setOffline(true)
 	await page.getByRole('button', {name: 'Today'}).click()
 	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
-	await expect(page.locator('.topbar-runtime-status-banner').first()).toContainText('read-only mode')
+	await expect(page.locator('.topbar-runtime-status-banner').first()).toContainText('saved locally and will sync')
 
 	await openProjects(page)
 	await expect(workNode).toBeVisible()
@@ -258,16 +358,7 @@ test('offline project navigation can open an unvisited project from the global c
 	await openProjects(page)
 	await expect(page.locator('.workspace-screen.is-active .screen-body')).toBeVisible()
 	await expect
-		.poll(async () =>
-			page.evaluate(() => {
-				const raw = window.localStorage.getItem('vikunja-mobile-poc:offline-snapshot')
-				if (!raw) {
-					return false
-				}
-				const snapshot = JSON.parse(raw)
-				return snapshot?.projectFilterTasksLoaded === true
-			}),
-		)
+		.poll(async () => Boolean((await getOfflineSnapshot(page))?.projectFilterTasksLoaded))
 		.toBe(true)
 
 	await page.context().setOffline(true)
@@ -309,7 +400,7 @@ test('project focus keeps completed preview subtasks visible after optimistic co
 	await expect(focusChildTaskRow.locator('[data-action="toggle-done"]')).toHaveAttribute('aria-checked', 'false')
 })
 
-test('offline task completion shows a read-only message instead of a generic failure', async ({page}) => {
+test('offline task completion queues locally and replays after reconnect', async ({page}) => {
 	await openProjects(page)
 	const workNode = page.locator('[data-project-node-id="2"]')
 	await workNode.locator('[data-action="select-project"][data-project-id="2"]').click()
@@ -319,7 +410,27 @@ test('offline task completion shows a read-only message instead of a generic fai
 
 	await page.context().setOffline(true)
 	await taskRow.locator('[data-action="toggle-done"]').click()
-	await expect(page.locator('.offline-action-toast').filter({hasText: "You're offline. Reconnect to complete tasks."})).toBeVisible()
+	await expect(taskRow).toHaveCount(0)
+	await expect(page.locator('.topbar .offline-queue-badge').first()).toHaveText('1')
+	await expect
+		.poll(async () => {
+			const mutations = await getOfflineMutations(page)
+			return mutations.length === 1 ? mutations[0]?.metadata?.description || '' : ''
+		})
+		.toBe('Complete "Smoke suite rollout"')
+
+	await page.context().setOffline(false)
+	await page.evaluate(() => {
+		window.dispatchEvent(new Event('online'))
+	})
+	await expect(page.locator('.topbar .offline-queue-badge')).toHaveCount(0, {timeout: 10_000})
+	await expect.poll(async () => (await getOfflineMutations(page)).length).toBe(0)
+	await expect
+		.poll(async () => {
+			const task = await stack.mockApi('tasks/201')
+			return Boolean(task.done || task.done_at)
+		})
+		.toBe(true)
 	await expect(page.getByText('Load failed')).toHaveCount(0)
 })
 
@@ -451,5 +562,63 @@ test('kanban completion and reactivation do not surface bucket ownership errors'
 
 	await page.waitForTimeout(4500)
 	await expect(errorCard).toHaveCount(0)
+	expect(pageErrors).toEqual([])
+})
+
+test('kanban tasks can move to a non-done bucket by drag and bucket menu', async ({page}) => {
+	const pageErrors = []
+	page.on('pageerror', error => {
+		pageErrors.push(error.message)
+	})
+
+	await openProjects(page)
+
+	const workNode = page.locator('[data-project-node-id="2"]')
+	await workNode.locator('[data-action="select-project"][data-project-id="2"]').click()
+	await expect(page.getByRole('heading', {name: 'Work'})).toBeVisible()
+
+	await page.locator('[data-action="toggle-project-view-menu"]').click()
+	await page.locator('[data-action="select-project-view"][data-project-id="2"][data-view-id="15"]').click()
+	await expect(page.locator('.kanban-lane-head').first()).toBeVisible()
+
+	await page.getByRole('button', {name: 'Create bucket'}).click()
+	await page.locator('.kanban-create-bucket .detail-input').fill('Doing')
+	await page.locator('.kanban-create-bucket').getByRole('button', {name: 'Add bucket'}).click()
+	const doingLane = page.locator('.kanban-lane').filter({has: page.locator('.kanban-lane-title', {hasText: 'Doing'})})
+	await expect(doingLane).toBeVisible()
+
+	const todoLaneTask = page.locator('[data-kanban-lane-id="151"] [data-task-row-id="201"]')
+	const dragHandle = todoLaneTask.locator('.kanban-drag-handle')
+	const targetDropZone = doingLane.locator('.kanban-bucket-tasks')
+	const targetFooter = doingLane.locator('.kanban-bucket-footer')
+	const sourceBox = await dragHandle.boundingBox()
+	const targetBox = await targetDropZone.boundingBox()
+	if (!sourceBox || !targetBox) {
+		throw new Error('Kanban drag geometry could not be measured.')
+	}
+
+	await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2)
+	await page.mouse.down()
+	await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + 18, {steps: 12})
+	await page.mouse.up()
+
+	const movedTask = doingLane.locator('[data-task-row-id="201"]')
+	await expect(movedTask).toHaveCount(1)
+	await expect(todoLaneTask).toHaveCount(0)
+
+	const movedTaskBox = await movedTask.boundingBox()
+	const targetFooterBox = await targetFooter.boundingBox()
+	if (!movedTaskBox || !targetFooterBox) {
+		throw new Error('Kanban post-drop geometry could not be measured.')
+	}
+	expect(movedTaskBox.y).toBeLessThan(targetFooterBox.y)
+
+	await page.waitForTimeout(700)
+	await movedTask.locator('[data-action="toggle-task-menu"]').click()
+	await page.locator('[data-menu-root="true"] [data-action="move-to-bucket"]').click()
+	await page.locator('[data-menu-root="true"] .menu-item').filter({hasText: 'To Do'}).click()
+
+	await expect(page.locator('[data-kanban-lane-id="151"] [data-task-row-id="201"]')).toHaveCount(1)
+	await expect(movedTask).toHaveCount(0)
 	expect(pageErrors).toEqual([])
 })

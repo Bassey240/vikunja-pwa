@@ -1,7 +1,7 @@
-import type {ChangeEvent, FormEvent} from 'react'
+import {type ChangeEvent, type FormEvent, useState} from 'react'
 import UserAvatar from '@/components/common/UserAvatar'
 import type {Account, AccountForm, AvatarProvider, Session} from '@/types'
-import {formatSessionTimestamp} from '@/utils/formatting'
+import {formatSessionTimestamp, normalizeVikunjaDateValue} from '@/utils/formatting'
 import type {SettingsSectionId} from '@/utils/settings-helpers'
 import SettingsSection from './SettingsSection'
 
@@ -27,6 +27,18 @@ export default function SettingsAccountSection({
 	accountSessions,
 	changePasswordForm,
 	passwordChangeSubmitting,
+	changeEmailForm,
+	changeEmailSubmitting,
+	changeEmailNotice,
+	dataExportStatus,
+	dataExportStatusLoading,
+	dataExportRequesting,
+	dataExportDownloading,
+	dataExportNotice,
+	accountDeletionForm,
+	accountDeletionNotice,
+	accountDeletionRequesting,
+	accountDeletionCancelling,
 	currentTimezone,
 	showPasswordForm,
 	canChangePassword,
@@ -45,6 +57,13 @@ export default function SettingsAccountSection({
 	onRevokeAccountSession,
 	onSetChangePasswordField,
 	onPasswordChange,
+	onSetChangeEmailField,
+	onChangeEmail,
+	onRequestExport,
+	onDownloadExport,
+	onSetAccountDeletionField,
+	onRequestDeletion,
+	onCancelDeletion,
 	onReloadAvatarProvider,
 	onUpdateAvatarProvider,
 	onUploadAvatar,
@@ -62,6 +81,27 @@ export default function SettingsAccountSection({
 		confirmPassword: string
 	}
 	passwordChangeSubmitting: boolean
+	changeEmailForm: {
+		password: string
+		newEmail: string
+	}
+	changeEmailSubmitting: boolean
+	changeEmailNotice: string | null
+	dataExportStatus: {
+		status: 'pending' | 'ready' | null
+		createdAt: string | null
+	} | null
+	dataExportStatusLoading: boolean
+	dataExportRequesting: boolean
+	dataExportDownloading: boolean
+	dataExportNotice: string | null
+	accountDeletionForm: {
+		password: string
+		confirmText: string
+	}
+	accountDeletionNotice: string | null
+	accountDeletionRequesting: boolean
+	accountDeletionCancelling: boolean
 	currentTimezone: string
 	showPasswordForm: boolean
 	canChangePassword: boolean
@@ -80,6 +120,13 @@ export default function SettingsAccountSection({
 	onRevokeAccountSession: (sessionId: string) => void
 	onSetChangePasswordField: (field: 'oldPassword' | 'newPassword' | 'confirmPassword', value: string) => void
 	onPasswordChange: (event: FormEvent<HTMLFormElement>) => void
+	onSetChangeEmailField: (field: 'password' | 'newEmail', value: string) => void
+	onChangeEmail: () => void
+	onRequestExport: (password: string) => void
+	onDownloadExport: (password: string) => void
+	onSetAccountDeletionField: (field: 'password' | 'confirmText', value: string) => void
+	onRequestDeletion: () => void
+	onCancelDeletion: () => void
 	onReloadAvatarProvider: () => void
 	onUpdateAvatarProvider: (provider: AvatarProvider) => void
 	onUploadAvatar: (file: File) => void
@@ -87,6 +134,10 @@ export default function SettingsAccountSection({
 	const sessionCount = accountSessions.length
 	const avatarBusy = avatarProviderSubmitting || avatarUploadSubmitting
 	const currentAvatarLabel = getAvatarProviderLabel(avatarProvider)
+	const [exportRequestPassword, setExportRequestPassword] = useState('')
+	const [exportDownloadPassword, setExportDownloadPassword] = useState('')
+	const deletionScheduledAt = normalizeDeletionScheduledAt(account?.user?.deletionScheduledAt)
+	const accountDeletionRequiresPassword = account?.user?.isLocalUser !== false
 
 	function handleAvatarUploadChange(event: ChangeEvent<HTMLInputElement>) {
 		const [file] = Array.from(event.currentTarget.files || [])
@@ -98,7 +149,7 @@ export default function SettingsAccountSection({
 
 	return (
 		<SettingsSection
-			title="Account & Security"
+			title="Account"
 			section="account"
 			open={open}
 			onToggle={onToggle}
@@ -399,6 +450,220 @@ export default function SettingsAccountSection({
 						</form>
 					</div>
 				) : null}
+				{canChangePassword ? (
+					<div className="detail-core-card settings-subsection">
+						<div className="panel-label">Change email address</div>
+						<div className="empty-state compact">Vikunja will send a confirmation email to the new address.</div>
+						{changeEmailNotice ? (
+							<div className="status-card success" data-change-email-notice>
+								{changeEmailNotice}
+							</div>
+						) : null}
+						<form
+							className="detail-grid settings-form"
+							data-form="change-email"
+							onSubmit={event => {
+								event.preventDefault()
+								onChangeEmail()
+							}}
+						>
+							<label className="detail-item detail-field">
+								<div className="detail-label">Current password</div>
+								<input
+									className="detail-input"
+									data-email-field="password"
+									type="password"
+									value={changeEmailForm.password}
+									disabled={changeEmailSubmitting}
+									onChange={event => onSetChangeEmailField('password', event.currentTarget.value)}
+								/>
+							</label>
+							<label className="detail-item detail-field">
+								<div className="detail-label">New email</div>
+								<input
+									className="detail-input"
+									data-email-field="newEmail"
+									type="email"
+									autoComplete="email"
+									value={changeEmailForm.newEmail}
+									disabled={changeEmailSubmitting}
+									onChange={event => onSetChangeEmailField('newEmail', event.currentTarget.value)}
+								/>
+							</label>
+							<div className="detail-item detail-item-full detail-field">
+								<button className="composer-submit" type="submit" disabled={changeEmailSubmitting}>
+									{changeEmailSubmitting ? 'Updating…' : 'Update email'}
+								</button>
+							</div>
+						</form>
+					</div>
+				) : null}
+				{canChangePassword ? (
+					<div className="detail-core-card settings-subsection">
+						<div className="panel-label">Export my data</div>
+						<div className="empty-state compact">Generates a ZIP of all your tasks, projects, and comments.</div>
+						{dataExportNotice ? (
+							<div className="status-card success" data-data-export-notice>
+								{dataExportNotice}
+							</div>
+						) : null}
+						{dataExportStatusLoading ? <div className="empty-state compact">Checking export status…</div> : null}
+						{dataExportStatus?.status === 'ready' ? (
+							<>
+								<div className="status-card success">Your export is ready to download.</div>
+								<form
+									className="detail-grid settings-form"
+									data-form="download-export"
+									onSubmit={event => {
+										event.preventDefault()
+										onDownloadExport(exportDownloadPassword)
+										setExportDownloadPassword('')
+									}}
+								>
+									<label className="detail-item detail-item-full detail-field">
+										<div className="detail-label">Password (to authorise download)</div>
+										<input
+											className="detail-input"
+											type="password"
+											value={exportDownloadPassword}
+											disabled={dataExportDownloading}
+											onChange={event => setExportDownloadPassword(event.currentTarget.value)}
+										/>
+									</label>
+									<div className="detail-item detail-item-full detail-field">
+										<button className="composer-submit" type="submit" disabled={dataExportDownloading}>
+											{dataExportDownloading ? 'Downloading…' : 'Download ZIP'}
+										</button>
+									</div>
+								</form>
+							</>
+						) : (
+							<form
+								className="detail-grid settings-form"
+								data-form="request-export"
+								onSubmit={event => {
+									event.preventDefault()
+									onRequestExport(exportRequestPassword)
+									setExportRequestPassword('')
+								}}
+							>
+								<label className="detail-item detail-item-full detail-field">
+									<div className="detail-label">Password</div>
+									<input
+										className="detail-input"
+										type="password"
+										value={exportRequestPassword}
+										disabled={dataExportRequesting}
+										onChange={event => setExportRequestPassword(event.currentTarget.value)}
+									/>
+								</label>
+								<div className="detail-item detail-item-full detail-field">
+									<button className="composer-submit" type="submit" disabled={dataExportRequesting}>
+										{dataExportRequesting ? 'Requesting…' : 'Request export'}
+									</button>
+								</div>
+							</form>
+						)}
+					</div>
+				) : null}
+				{canChangePassword ? (
+					<div className="detail-core-card settings-subsection settings-danger-zone">
+						<div className="panel-label">Delete account</div>
+						<div className="status-card warning">
+							This permanently deletes your account and all data. Vikunja first emails a confirmation link. Only after that link is opened does the three-day deletion countdown begin.
+						</div>
+						{accountDeletionNotice ? (
+							<div className="status-card success" data-account-deletion-notice>
+								{accountDeletionNotice}
+							</div>
+						) : null}
+						{deletionScheduledAt ? (
+							<>
+								<div className="empty-state compact">
+									Vikunja has scheduled this account for deletion on {formatDeletionSchedule(deletionScheduledAt)}.
+								</div>
+								<form
+									className="detail-grid settings-form"
+									data-form="cancel-deletion"
+									onSubmit={event => {
+										event.preventDefault()
+										onCancelDeletion()
+									}}
+								>
+									{accountDeletionRequiresPassword ? (
+										<label className="detail-item detail-item-full detail-field">
+											<div className="detail-label">Password</div>
+											<input
+												className="detail-input"
+												type="password"
+												value={accountDeletionForm.password}
+												disabled={accountDeletionCancelling}
+												onChange={event => onSetAccountDeletionField('password', event.currentTarget.value)}
+											/>
+										</label>
+									) : (
+										<div className="detail-item detail-item-full detail-field">
+											<div className="detail-helper-text">
+												This account signs in through an external provider, so Vikunja only needs a cancel action here.
+											</div>
+										</div>
+									)}
+									<div className="detail-item detail-item-full detail-field">
+										<button className="composer-submit danger" type="submit" disabled={accountDeletionCancelling}>
+											{accountDeletionCancelling ? 'Cancelling…' : 'Cancel scheduled deletion'}
+										</button>
+									</div>
+								</form>
+							</>
+						) : (
+							<form
+								className="detail-grid settings-form"
+								data-form="request-deletion"
+								onSubmit={event => {
+									event.preventDefault()
+									onRequestDeletion()
+								}}
+							>
+								<label className="detail-item detail-item-full detail-field">
+									<div className="detail-label">Type DELETE to confirm</div>
+									<input
+										className="detail-input"
+										type="text"
+										autoCapitalize="none"
+										value={accountDeletionForm.confirmText}
+										onChange={event => onSetAccountDeletionField('confirmText', event.currentTarget.value)}
+									/>
+								</label>
+								{accountDeletionRequiresPassword ? (
+									<label className="detail-item detail-item-full detail-field">
+										<div className="detail-label">Password</div>
+										<input
+											className="detail-input"
+											type="password"
+											value={accountDeletionForm.password}
+											onChange={event => onSetAccountDeletionField('password', event.currentTarget.value)}
+										/>
+									</label>
+								) : (
+									<div className="detail-item detail-item-full detail-field">
+										<div className="detail-helper-text">
+											Vikunja will send a confirmation link by email. Because this account uses an external provider, no password is required for the request step.
+										</div>
+									</div>
+								)}
+								<div className="detail-item detail-item-full detail-field">
+									<button
+										className="composer-submit danger"
+										type="submit"
+										disabled={accountDeletionRequesting || accountDeletionForm.confirmText !== 'DELETE'}
+									>
+										{accountDeletionRequesting ? 'Requesting…' : 'Send deletion confirmation email'}
+									</button>
+								</div>
+							</form>
+						)}
+					</div>
+				) : null}
 			</div>
 		</SettingsSection>
 	)
@@ -423,4 +688,20 @@ function getAvatarProviderLabel(provider: AvatarProvider | null) {
 		default:
 			return 'Unknown'
 	}
+}
+
+function normalizeDeletionScheduledAt(value: string | null | undefined) {
+	return normalizeVikunjaDateValue(value) || null
+}
+
+function formatDeletionSchedule(value: string) {
+	const date = new Date(value)
+	if (Number.isNaN(date.getTime())) {
+		return value
+	}
+
+	return new Intl.DateTimeFormat(undefined, {
+		dateStyle: 'medium',
+		timeStyle: 'short',
+	}).format(date)
 }

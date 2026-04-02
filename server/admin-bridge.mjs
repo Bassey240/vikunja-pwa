@@ -1,5 +1,7 @@
 import {spawn} from 'node:child_process'
 
+const REPAIR_ALLOWLIST = ['file-mime-types', 'orphan-positions', 'projects', 'task-positions']
+
 export function createAdminBridge({
 	bridgeMode = '',
 	vikunjaContainerName,
@@ -124,6 +126,112 @@ export function createAdminBridge({
 			})
 			return {
 				exitCode: result.exitCode,
+				stdout: `${result.stdout || ''}`.trim() || null,
+				stderr: `${result.stderr || ''}`.trim() || null,
+			}
+		},
+
+		async runDump() {
+			assertAdminBridgeEnabled(enabled)
+
+			const result = await runVikunjaCli(['dump'], bridgeTimeoutMs, {allowFailure: false})
+			const match = `${result.stdout || ''}`.match(/Dump file saved at (.+\.zip)/i)
+			if (!match) {
+				throw createBridgeError('Could not find dump file path in CLI output.', result)
+			}
+
+			const dumpPath = match[1].trim()
+			const catResult = await runDockerCommand(['exec', vikunjaContainerName, 'cat', dumpPath], {
+				timeoutMs: 60000,
+				binary: true,
+			})
+			if (catResult.exitCode !== 0) {
+				throw createBridgeError(`Could not read dump file "${dumpPath}" from container.`, catResult)
+			}
+
+			void runDockerCommand(['exec', vikunjaContainerName, 'rm', '-f', dumpPath], {
+				timeoutMs: bridgeTimeoutMs,
+			}).catch(() => {})
+
+			return {
+				buffer: catResult.stdoutBuffer,
+				filename: dumpPath.split('/').pop() || 'vikunja-dump.zip',
+			}
+		},
+
+		async runRestore(zipBuffer) {
+			assertAdminBridgeEnabled(enabled)
+
+			const tempPath = `/tmp/vikunja-restore-${Date.now()}.zip`
+			const writeResult = await runDockerCommandWithStdin(
+				['exec', '-i', vikunjaContainerName, 'sh', '-c', `cat > ${tempPath}`],
+				zipBuffer,
+				{timeoutMs: 60000},
+			)
+			if (writeResult.exitCode !== 0) {
+				throw createBridgeError('Failed to upload restore file to container.', writeResult)
+			}
+
+			try {
+				const restoreResult = await runVikunjaCli(['restore', tempPath], bridgeTimeoutMs * 3, {
+					allowFailure: false,
+				})
+				return {
+					stdout: `${restoreResult.stdout || ''}`.trim() || null,
+					stderr: `${restoreResult.stderr || ''}`.trim() || null,
+				}
+			} finally {
+				void runDockerCommand(['exec', vikunjaContainerName, 'rm', '-f', tempPath], {
+					timeoutMs: bridgeTimeoutMs,
+				}).catch(() => {})
+			}
+		},
+
+		async listMigrations() {
+			assertAdminBridgeEnabled(enabled)
+			const result = await runVikunjaCli(['migrate', 'list'], bridgeTimeoutMs, {allowFailure: false})
+			return parseMigrationListOutput(result.stdout)
+		},
+
+		async runMigrate() {
+			assertAdminBridgeEnabled(enabled)
+			const result = await runVikunjaCli(['migrate'], bridgeTimeoutMs * 2, {allowFailure: false})
+			return {
+				stdout: `${result.stdout || ''}`.trim() || null,
+				stderr: `${result.stderr || ''}`.trim() || null,
+			}
+		},
+
+		async rollbackMigration(name) {
+			assertAdminBridgeEnabled(enabled)
+			assertRequired(`${name || ''}`.trim(), 'Migration name is required.')
+			const result = await runVikunjaCli(
+				['migrate', 'rollback', '--name', String(name)],
+				bridgeTimeoutMs,
+				{allowFailure: false},
+			)
+			return {
+				stdout: `${result.stdout || ''}`.trim() || null,
+				stderr: `${result.stderr || ''}`.trim() || null,
+			}
+		},
+
+		async runRepair(command) {
+			assertAdminBridgeEnabled(enabled)
+			const repairCommand = `${command || ''}`.trim()
+			if (!REPAIR_ALLOWLIST.includes(repairCommand)) {
+				const error = new Error(
+					`Unknown repair command "${repairCommand}". Allowed: ${REPAIR_ALLOWLIST.join(', ')}.`,
+				)
+				error.statusCode = 400
+				throw error
+			}
+
+			const result = await runVikunjaCli(['repair', repairCommand], bridgeTimeoutMs * 2, {
+				allowFailure: true,
+			})
+			return {
+				success: result.exitCode === 0,
 				stdout: `${result.stdout || ''}`.trim() || null,
 				stderr: `${result.stderr || ''}`.trim() || null,
 			}
@@ -280,6 +388,31 @@ export function createAdminBridge({
 		sshArgs.push(buildShellCommand(remoteArgs))
 		return runCommand('ssh', sshArgs, {timeoutMs})
 	}
+
+	function runSshCommandWithStdin(remoteArgs, stdin, {timeoutMs = 10000} = {}) {
+		const sshArgs = []
+		if (Number.isFinite(Number(vikunjaSshPort)) && Number(vikunjaSshPort) > 0) {
+			sshArgs.push('-p', String(Number(vikunjaSshPort)))
+		}
+		if (`${vikunjaSshKeyPath || ''}`.trim()) {
+			sshArgs.push('-i', `${vikunjaSshKeyPath}`.trim())
+		}
+		sshArgs.push(`${vikunjaSshDestination}`.trim())
+		sshArgs.push(buildShellCommand(remoteArgs))
+		return runCommandWithStdin('ssh', sshArgs, stdin, {timeoutMs})
+	}
+
+	function runDockerCommand(args, {timeoutMs = 10000, binary = false} = {}) {
+		return mode === 'ssh-docker-exec'
+			? runSshCommand(['docker', ...args], {timeoutMs, binary})
+			: runCommand('docker', args, {timeoutMs, binary})
+	}
+
+	function runDockerCommandWithStdin(args, stdin, {timeoutMs = 10000} = {}) {
+		return mode === 'ssh-docker-exec'
+			? runSshCommandWithStdin(['docker', ...args], stdin, {timeoutMs})
+			: runCommandWithStdin('docker', args, stdin, {timeoutMs})
+	}
 }
 
 function didTestmailSucceed(exitCode, stdout, stderr) {
@@ -356,6 +489,34 @@ function parseUserListOutput(stdout) {
 		.filter(Boolean)
 }
 
+function parseMigrationListOutput(stdout) {
+	const rows = `${stdout || ''}`
+		.split(/\r?\n/)
+		.map(line => parseTableRow(line))
+		.filter(Boolean)
+
+	if (rows.length < 2) {
+		return []
+	}
+
+	const [header, ...dataRows] = rows
+	const normalizedHeader = header.map(value => value.toLowerCase())
+	const idIndex = normalizedHeader.indexOf('id')
+	const nameIndex = normalizedHeader.indexOf('name')
+	const appliedIndex = normalizedHeader.indexOf('applied')
+	if (idIndex === -1 || nameIndex === -1 || appliedIndex === -1) {
+		return []
+	}
+
+	return dataRows
+		.map(row => ({
+			id: `${row[idIndex] || ''}`.trim(),
+			name: `${row[nameIndex] || ''}`.trim(),
+			applied: `${row[appliedIndex] || ''}`.trim().toLowerCase() === 'true',
+		}))
+		.filter(migration => migration.name)
+}
+
 function parseTableRow(line) {
 	const normalized = `${line || ''}`.trimEnd()
 	if (!normalized || !/[│|]/.test(normalized)) {
@@ -401,10 +562,72 @@ function buildUserFromTableRow(header, row) {
 	}
 }
 
-function runCommand(command, args, {timeoutMs = 10000} = {}) {
+function runCommand(command, args, {timeoutMs = 10000, binary = false} = {}) {
 	return new Promise((resolve, reject) => {
 		const child = spawn(command, args, {
 			stdio: ['ignore', 'pipe', 'pipe'],
+		})
+		const stdoutChunks = []
+		let stderr = ''
+		let finished = false
+		const timer = setTimeout(() => {
+			if (finished) {
+				return
+			}
+
+			finished = true
+			child.kill('SIGKILL')
+			const error = new Error(`Command timed out after ${timeoutMs}ms.`)
+			error.statusCode = 504
+			reject(error)
+		}, timeoutMs)
+
+		child.stdout.on('data', chunk => {
+			stdoutChunks.push(Buffer.from(chunk))
+		})
+		child.stderr.on('data', chunk => {
+			stderr += chunk.toString('utf8')
+		})
+		child.on('error', error => {
+			if (finished) {
+				return
+			}
+
+			finished = true
+			clearTimeout(timer)
+			const nextError = new Error(error.message || 'Command execution failed.')
+			nextError.statusCode = 503
+			nextError.details = {
+				command,
+				args,
+			}
+			reject(nextError)
+		})
+		child.on('close', (exitCode, signal) => {
+			if (finished) {
+				return
+			}
+
+			finished = true
+			clearTimeout(timer)
+			const stdoutBuffer = stdoutChunks.length > 0 ? Buffer.concat(stdoutChunks) : Buffer.alloc(0)
+			resolve({
+				stdout: binary ? stdoutBuffer.toString('utf8') : stdoutBuffer.toString('utf8'),
+				stdoutBuffer,
+				stderr,
+				exitCode: Number(exitCode || 0),
+				signal: signal || null,
+				command,
+				args,
+			})
+		})
+	})
+}
+
+function runCommandWithStdin(command, args, stdin, {timeoutMs = 10000} = {}) {
+	return new Promise((resolve, reject) => {
+		const child = spawn(command, args, {
+			stdio: ['pipe', 'pipe', 'pipe'],
 		})
 		let stdout = ''
 		let stderr = ''
@@ -426,6 +649,24 @@ function runCommand(command, args, {timeoutMs = 10000} = {}) {
 		})
 		child.stderr.on('data', chunk => {
 			stderr += chunk.toString('utf8')
+		})
+		child.stdin.on('error', error => {
+			if (finished) {
+				return
+			}
+
+			finished = true
+			clearTimeout(timer)
+			const nextError = new Error(error.message || 'Command execution failed.')
+			nextError.statusCode = 503
+			nextError.details = {
+				command,
+				args,
+			}
+			reject(nextError)
+		})
+		child.on('spawn', () => {
+			child.stdin.end(stdin ?? '')
 		})
 		child.on('error', error => {
 			if (finished) {
@@ -471,6 +712,16 @@ function createBridgeError(message, result) {
 		stderr: `${result.stderr || ''}`.trim() || null,
 	}
 	return error
+}
+
+function assertAdminBridgeEnabled(enabled) {
+	if (enabled) {
+		return
+	}
+
+	const error = new Error('The Vikunja admin bridge is not configured.')
+	error.statusCode = 503
+	throw error
 }
 
 function assertRequired(value, message) {

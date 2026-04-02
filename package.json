@@ -1,6 +1,6 @@
 {
   "name": "vikunja-pwa",
-  "version": "0.2.1",
+  "version": "0.3.0-alpha",
   "private": true,
   "description": "Unofficial mobile-first Vikunja PWA client with a Node gateway, offline-ready shell, and self-hosted collaboration tools.",
   "license": "AGPL-3.0-only",
@@ -24,6 +24,7 @@
     "build:react": "vite build",
     "preview": "vite preview",
     "seed:demo": "node scripts/seed-demo-data.mjs",
+    "seed:gantt": "node scripts/seed-gantt-demo.mjs",
     "lint": "npm run lint:eslint && npm run lint:syntax",
     "lint:eslint": "eslint .",
     "lint:syntax": "node scripts/check-syntax.mjs",

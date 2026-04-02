@@ -20,6 +20,9 @@ developer, so these guidelines help keep things manageable.
 4. **Test your changes.** Run `npm run ci` before submitting. If you add new
    functionality, add or update the relevant smoke tests.
 5. **Write a clear PR description.** Explain what you changed and why.
+6. **Mention release-note-worthy changes.** If your PR changes user-visible
+   behavior, deployment, or contributor workflow, call that out clearly so it
+   can be added to `docs/next-release-notes.md`.
 
 Maintainer note: this project keeps full day-to-day development history on
 Forgejo and uses GitHub as a curated public release mirror. That means accepted

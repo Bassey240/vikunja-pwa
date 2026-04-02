@@ -14,7 +14,7 @@ admin tooling.
 
 ## Why This Client
 
-- drag-and-drop friendly task handling across supported project views
+- interactive Gantt planning and drag-and-drop friendly task handling across supported project views
 - real project and task tree browsing instead of flattening everything into a single list
 - mobile-first interaction model that still scales up to tablet and desktop layouts
 - installable PWA shell with offline reopen support and browser notification setup
@@ -22,23 +22,58 @@ admin tooling.
 
 ## Current product state
 
-The current public release is `0.2.1`. It is a small hotfix release on top of
-the `0.2.0-alpha` prototype snapshot: feature-rich enough to use and evaluate,
-but not yet presented as a production-ready client.
+The current public release target is `0.3.0-alpha`. It builds on `0.2.1` with
+a much stronger planning surface: the Gantt view is now genuinely interactive,
+supported task and project edits work offline with queued replay, and Kanban
+drag-and-drop now behaves consistently across all major move paths.
 
-- Today-first shell with Inbox, Upcoming, Projects, Search, Labels, and Settings
+- Today-first shell with Inbox, Upcoming, Projects, Search, Filters, Labels, and Settings
 - nested sub-project browsing with inline parent/child task trees and continuous add flows
-- list, Kanban, Table, and Gantt project views backed by the real Vikunja API
+- list, Kanban, Table, and enhanced Gantt project views backed by the real Vikunja API
 - responsive desktop and tablet shell with sidebar and inspector behavior
 - collaboration flows for users, teams, project sharing, link shares, and shared-project access
-- backend-managed account sessions, onboarding flows, avatar management, and notification preferences
-- installable PWA runtime with offline reopen support, service-worker shell caching, and notification setup
+- expanded account/security coverage: avatar control, session management, password/email changes, data export, deletion scheduling, 2FA, CalDAV tokens, and API tokens
+- full offline editing for supported task and project mutations with IndexedDB persistence and reconnect replay
+- backend-managed account sessions, onboarding flows, instance-aware auth capability checks, and notification preferences
+- installable PWA runtime with offline reopen support, service-worker shell caching, offline queue restore, and notification setup
 - optional admin control-plane features for user management, SMTP diagnostics, and deployment-aware apply/restart
 
-Recent work has focused on stability and release readiness rather than flashy
-scope growth: structural cleanup, security hardening, open-source packaging,
-Docker/deploy polish, avatar parity, onboarding/auth flows, and the first pass
-of the admin control plane are all included in this alpha.
+Recent work has shifted from baseline parity to coherence: planning, offline
+resilience, Kanban interaction polish, and deeper account/security settings are
+now part of the same alpha rather than scattered prototypes.
+
+## 0.3 alpha scope
+
+This release is still intentionally honest about its limits, but it is the
+first public snapshot that feels like a complete planning client instead of a
+feature bundle. The goal for `0.3.0-alpha` is to make day-to-day planning,
+offline work, and project movement strong enough for real evaluation on phone,
+tablet, and desktop.
+
+## What's New In 0.3.0-alpha
+
+- The Gantt view was rebuilt into an interactive planner with zoom presets, richer task bars, priority and progress cues, assignee and label chips, dependency arrows, hover tooltips, and drag/resize scheduling.
+- Supported task and project edits now work offline: the app stores snapshots and mutation queues in IndexedDB, applies optimistic local changes, and replays them automatically when connectivity returns.
+- Kanban drag-and-drop was finished end-to-end: sort within bucket, move across buckets, drop onto a card to create a subtask, use "Move to bucket" from the task menu, and reopen or complete tasks by moving them in or out of the done bucket.
+- Account/auth/security coverage expanded with instance-aware registration and password-reset gating, 2FA sign-in and management, CalDAV tokens, scoped API tokens, session inspection and revocation, password/email changes, data export, and account-deletion scheduling.
+- Release readiness improved with broader smoke coverage for Gantt, offline, Kanban, and security flows plus a cleaner curated-GitHub release workflow.
+
+Included in `0.3.0-alpha`:
+
+- everything from `0.2.x`
+- enhanced Gantt planning with zoom, dependencies, tooltip details, and direct schedule manipulation
+- offline queueing and reconnect replay for supported task/project mutations
+- Kanban drag-and-drop parity across sort, bucket move, subtask drop, menu move, and done toggle
+- expanded account/security settings for sessions, avatars, 2FA, CalDAV, API tokens, export, email/password changes, and deletion controls
+- instance-aware auth UX that hides unsupported registration/password paths instead of presenting dead ends
+- broader regression coverage around Gantt, offline sync, Kanban DnD, and settings/security flows
+
+Explicitly not in `0.3.0-alpha`:
+
+- offline support for attachments, sharing changes, admin settings, or security-admin flows
+- push-based realtime sync or background conflict resolution beyond reconnect replay
+- saved-filter authoring/builder UI
+- richer post-v1 platform work like OIDC-first multi-account UX, share target flows, or app-store packaging
 
 ## What's New In 0.2.1
 
@@ -82,26 +117,29 @@ Explicitly not in `0.2.0-alpha`:
 - saved-filter authoring/builder UI
 - richer post-v1 platform features like OIDC, share target, app-store packaging, or multi-account switching UX
 
-## Changes Since The GitHub v0.1.0-alpha Snapshot
+## Changes Since 0.2.1
 
-The last public GitHub snapshot is `v0.1.0-alpha` on `github/main`. Since that
-release, this repo has gained:
+Since `0.2.1`, this repo has gained:
 
-- Full avatar management was added, including avatar-provider switching, uploaded avatars, live avatar-route compatibility, and regression coverage for that surface.
-- Registration, forgot-password, reset-password, and reset-link handoff were added so the app now covers the first pass of user onboarding instead of sign-in only.
-- Email delivery administration was added to the admin settings flow, including SMTP config inspection, save, apply/restart, and testmail diagnostics.
-- Admin bridge authorization no longer assumes a built-in Vikunja admin role and now uses an explicit operator email allowlist on the PWA side.
-- Writable admin config handling now supports real deployment sources instead of writing into the running container filesystem, and the email settings UI reflects writable versus read-only capability.
-- Mail diagnostics were corrected so SMTP/email delivery failures are surfaced even when the Vikunja CLI prints an error but still exits `0`.
-- The Docker/runtime path was updated to Node 22, the container now includes Compose support for apply/restart, and the build no longer emits the earlier engine warnings.
-- Task-move and completion-refresh stability improved after `v0.1.0-alpha`, with follow-up fixes for cross-project moves, list completion, Kanban completion, and Today due-date preservation.
-- The smoke suite broadened substantially after `v0.1.0-alpha`, adding coverage for avatars, onboarding/auth, drag-and-drop, project/task detail flows, email admin config, operator auth, compose apply, and mail diagnostics.
+- A substantially richer Gantt view with zoom presets, dependency arrows, progress-aware task bars, assignee and label rendering, hover tooltips, and direct drag/resize scheduling.
+- Full offline editing for supported task and project flows, backed by IndexedDB snapshots, a reconnect replay queue, and visible pending/failed sync state in the UI.
+- A fully reworked Kanban drag-and-drop model that now correctly handles sorting, cross-bucket moves, subtask drops, menu-triggered bucket moves, done-bucket completion toggles, and stale-view refreshes.
+- Expanded account and security surfaces, including 2FA login and management, CalDAV tokens, scoped API tokens, active-session management, password/email changes, export/download flow, and account-deletion scheduling.
+- Server-aware auth gating so registration and password-reset affordances are only shown when the connected Vikunja instance actually supports them.
+- Broader regression coverage and release tooling, including stronger Gantt/offline/Kanban smoke coverage, local Docker LAN startup polish, and a cleaner curated-GitHub release workflow.
 
 ## Screenshots
 
 ### Demo
 
 [![Watch the demo on YouTube](https://img.youtube.com/vi/NCnS1X4c3dg/maxresdefault.jpg)](https://youtu.be/NCnS1X4c3dg)
+
+### Enhanced Gantt
+
+![Enhanced Gantt view](docs/media/gantt-view.png)
+
+The `0.3.0-alpha` Gantt view adds zoom presets, dependency arrows, richer task
+bars, and direct drag/resize planning.
 
 ### Mobile
 
@@ -464,8 +502,13 @@ Not supported:
 - label detail editing
 - global task query support for cross-project search and upcoming filters
 - saved filter browsing and task loading through Vikunja pseudo-projects
+- enhanced Gantt planning with zoom presets, dependency arrows, richer task bars, and direct drag/resize scheduling
+- Kanban drag-and-drop across sort, bucket move, subtask drop, menu move, and done-bucket toggle flows
+- offline snapshot restore plus queued supported task/project edits with reconnect replay and visible sync status
 - backend-managed account sessions with `HttpOnly` app cookies and encrypted file-backed persistence
 - remote Vikunja session listing/revocation for password-based connections
+- account/security settings for avatars, active sessions, password/email changes, 2FA, CalDAV tokens, API tokens, export, and deletion scheduling
+- instance-aware auth gating for registration and password-reset flows
 - project-view-aware task loading through Vikunja list views
 - task position endpoint wiring and in-app reorder prototype
 - first-pass bulk task editing across list/tree task surfaces
@@ -484,7 +527,7 @@ Not supported:
 - Saved filters are intentionally browse/open only in the client right now.
 - Bridge/admin routes depend on an explicit operator email allowlist configured in the deployment environment.
 - The smoke suite now covers collaboration, shared-link, notification-preference, and bulk-edit flows. Continue maintaining selectors as the shell evolves.
-- Offline support now covers read-only cached browsing after one successful online load: the app shell, last signed-in state, and cached project/task views can reopen without a live connection, but edits remain disabled offline.
+- Offline support now includes cached reopen plus queued replay for supported task and project mutations, but attachments, sharing changes, admin config, and security-admin actions still require a live connection.
 - Browser notification setup and test alerts now work on supported desktop browsers and installed HTTPS iPhone web apps. Notification-center preferences are also shipped, but event-driven push delivery is still not built yet.
 - The server now exposes `/health`, request/error logs, trusted-origin checks, and rate limiting on auth/session routes.
 - All app responses now carry baseline security headers, JSON request bodies are capped at 1 MB, and `X-Forwarded-For` is only trusted when `APP_TRUST_PROXY=true`.
@@ -531,4 +574,4 @@ CI is wired for both GitHub Actions and Forgejo Actions in:
 ## Next recommended passes
 
 1. Decide whether saved filters should stay browse-only or get a structured builder UI instead of raw CRUD.
-2. Decide how far post-v1 offline work should go beyond the current read-only cache milestone.
+2. Decide how far post-v1 offline work should go beyond the current queued task/project editing milestone.
