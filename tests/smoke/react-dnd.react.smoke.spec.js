@@ -36,6 +36,15 @@ async function openProject(page, projectId, projectTitle) {
 	await expect(page.getByRole('heading', {name: projectTitle})).toBeVisible()
 }
 
+async function applyTaskSort(page, sortBy, sortOrder = 'asc') {
+	await page.locator('.workspace-screen.is-active .topbar [data-action="toggle-task-filters"]').click()
+	await page.locator('[data-task-filter-field="sortBy"]').selectOption(sortBy)
+	if (sortBy !== 'position') {
+		await page.locator('[data-task-filter-field="sortOrder"]').selectOption(sortOrder)
+	}
+	await page.locator('[data-action="apply-task-filters"]').click()
+}
+
 async function getCenterPoint(locator) {
 	const box = await locator.boundingBox()
 	if (!box) {
@@ -71,6 +80,25 @@ async function dragHandleToPoint(page, handleLocator, point) {
 	await page.mouse.move(point.x, point.y, {steps: 18})
 	await page.waitForTimeout(220)
 	await page.mouse.move(point.x + 1, point.y + 1, {steps: 3})
+	await page.waitForTimeout(180)
+	await page.mouse.up()
+	await page.waitForTimeout(700)
+}
+
+async function beginDragHandle(page, handleLocator) {
+	const start = await getCenterPoint(handleLocator)
+	await page.mouse.move(start.x, start.y)
+	await page.mouse.down()
+	await page.waitForTimeout(260)
+	await page.mouse.move(start.x + 18, start.y + 10, {steps: 8})
+	await page.waitForTimeout(180)
+}
+
+async function switchScreenDuringActiveDrag(page, pathname) {
+	await page.evaluate(targetPath => {
+		window.history.pushState({}, '', targetPath)
+		window.dispatchEvent(new PopStateEvent('popstate'))
+	}, pathname)
 	await page.waitForTimeout(180)
 	await page.mouse.up()
 	await page.waitForTimeout(700)
@@ -277,6 +305,111 @@ test('inbox drag position persists after background refresh', async ({page}) => 
 		const other = tasks.find(task => task.id === 101)
 		return Number(moved.position) < Number(other.position)
 	}).toBe(true)
+})
+
+test('inbox drag survives a stale positive-position background refresh', async ({page}) => {
+	await page.getByRole('button', {name: 'Inbox'}).click()
+	await expect(page.getByRole('heading', {name: 'Inbox'})).toBeVisible()
+	await expect.poll(() => rootTaskIds(page)).toEqual([101, 102])
+
+	let refreshRequestCount = 0
+	await page.route('**/api/projects/1/views/11/tasks**', async route => {
+		refreshRequestCount += 1
+		if (refreshRequestCount === 1) {
+			await route.continue()
+			return
+		}
+
+		const tasks = await stack.mockApi('projects/1/tasks')
+		const stalePayload = tasks
+			.filter(task => !task.done)
+			.map(task => task.id === 102 ? {...task, position: 200} : task.id === 101 ? {...task, position: 100} : task)
+			.sort((left, right) => Number(left.position || 0) - Number(right.position || 0) || left.id - right.id)
+		await route.fulfill({
+			status: 200,
+			contentType: 'application/json',
+			body: JSON.stringify(stalePayload),
+		})
+	})
+
+	await page.route('**/api/tasks/102/position', async route => {
+		await route.fulfill({
+			status: 200,
+			contentType: 'application/json',
+			body: JSON.stringify({
+				taskPosition: {
+					task_id: 102,
+					project_view_id: 11,
+					position: 50,
+				},
+			}),
+		})
+	})
+
+	await dragTaskToTaskEdge(page, 102, 101, 'top')
+
+	await expect.poll(() => refreshRequestCount).toBeGreaterThan(1)
+	await expect.poll(() => rootTaskIds(page)).toEqual([102, 101])
+})
+
+test('inbox same-list drag is blocked when Inbox is not on manual sort', async ({page}) => {
+	await openProject(page, 2, 'Work')
+	await applyTaskSort(page, 'title')
+
+	await page.getByRole('button', {name: 'Inbox'}).click()
+	await expect(page.getByRole('heading', {name: 'Inbox'})).toBeVisible()
+	await expect.poll(() => rootTaskIds(page)).toEqual([101, 102])
+
+	let positionUpdateCount = 0
+	await page.route('**/api/tasks/102/position', async route => {
+		positionUpdateCount += 1
+		await route.continue()
+	})
+
+	await dragTaskToTaskEdge(page, 102, 101, 'top')
+
+	await expect.poll(() => rootTaskIds(page)).toEqual([101, 102])
+	await expect.poll(() => positionUpdateCount).toBe(0)
+})
+
+test('inbox drag cleanup keeps Today draggable after switching screens mid-drag', async ({page}) => {
+	await page.getByRole('button', {name: 'Inbox'}).click()
+	await expect(page.getByRole('heading', {name: 'Inbox'})).toBeVisible()
+	await expect.poll(() => rootTaskIds(page)).toEqual([101, 102])
+
+	const handle = page.locator('.workspace-screen.is-active [data-task-branch-id="102"] > .task-row .drag-handle')
+	await beginDragHandle(page, handle)
+	await switchScreenDuringActiveDrag(page, '/')
+
+	await expect.poll(() => page.evaluate(() => window.location.pathname)).toBe('/')
+	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
+	await dragTaskToTaskEdge(page, 102, 101, 'top')
+
+	await expect.poll(() => rootTaskIds(page)).toEqual([102, 101])
+})
+
+test('successful inbox drag keeps Today draggable after switching views', async ({page}) => {
+	await page.getByRole('button', {name: 'Inbox'}).click()
+	await expect(page.getByRole('heading', {name: 'Inbox'})).toBeVisible()
+	await expect.poll(() => rootTaskIds(page)).toEqual([101, 102])
+
+	await dragTaskToTaskEdge(page, 102, 101, 'top')
+	await expect.poll(() => rootTaskIds(page)).toEqual([102, 101])
+
+	let positionUpdateCount = 0
+	await page.route('**/api/tasks/101/position', async route => {
+		positionUpdateCount += 1
+		await route.continue()
+	})
+
+	await page.getByRole('button', {name: 'Today'}).click()
+	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
+	await expect.poll(() => rootTaskIds(page)).toEqual([102, 101])
+
+	await dragTaskToTaskEdge(page, 101, 102, 'top')
+
+	await expect.poll(() => positionUpdateCount).toBeGreaterThan(0)
+	await expect.poll(() => rootTaskIds(page)).toEqual([101, 102])
 })
 
 test('drag after switching projects uses the correct project view id', async ({page}) => {

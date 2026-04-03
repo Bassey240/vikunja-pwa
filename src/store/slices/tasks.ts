@@ -7,7 +7,7 @@ import {
 	type TaskFilters,
 } from '@/hooks/useFilters'
 import type {MenuAnchor, Screen, Task} from '@/types'
-import {markTaskDropTrace} from '@/utils/dragPerf'
+import {debugDragLog, markTaskDropTrace} from '@/utils/dragPerf'
 import {formatError} from '@/utils/formatting'
 import {calculateTaskPosition} from '@/utils/taskPosition'
 import type {StateCreator} from 'zustand'
@@ -209,6 +209,7 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 				orderBy,
 				useViewTasks: viewKind === 'list',
 				previousTasks: get().tasks,
+				pinnedTaskIds: get().movingTaskIds,
 			})
 			set({
 				tasks,
@@ -266,6 +267,7 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 					normalizedFreshTasks,
 					normalizedCompletedTodayTasks,
 					previousTodayTasks,
+					get().movingTaskIds,
 				)
 				: mergeTaskListsPreservingPrimaryOrder(
 					normalizedFreshTasks,
@@ -276,7 +278,7 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 				prev.done && recentlyCompleted.has(prev.id) && !mergedTodayTasks.some(task => task.id === prev.id),
 			)
 			const todayTasks = isManualTaskSort(get().taskFilters.sortBy)
-				? mergeTaskListsWithStablePositions(mergedTodayTasks, keptDoneTasks, previousTodayTasks)
+				? mergeTaskListsWithStablePositions(mergedTodayTasks, keptDoneTasks, previousTodayTasks, get().movingTaskIds)
 				: mergeTaskListsPreservingPrimaryOrder(mergedTodayTasks, keptDoneTasks)
 			set({todayTasks})
 			persistOfflineTaskCollections(get())
@@ -318,6 +320,7 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 				orderBy,
 				useViewTasks: viewKind === 'list',
 				previousTasks: get().inboxTasks,
+				pinnedTaskIds: get().movingTaskIds,
 			})
 			// Preserve recently-completed tasks that have not reached the server yet
 			// so completion animations remain visible until the undo window closes.
@@ -429,6 +432,7 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 				orderBy,
 				useViewTasks: viewKind === 'list',
 				previousTasks: get().savedFilterTasks,
+				pinnedTaskIds: get().movingTaskIds,
 			})
 			set({
 				savedFilterTasks,
@@ -871,15 +875,20 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 	},
 
 	async moveTask(intent) {
-		console.log('[moveTask] called', {taskId: intent?.taskId, bucketId: intent?.bucketId, viewId: intent?.viewId, targetProjectId: intent?.targetProjectId})
+		debugDragLog('[moveTask] called', {
+			taskId: intent?.taskId,
+			bucketId: intent?.bucketId,
+			viewId: intent?.viewId,
+			targetProjectId: intent?.targetProjectId,
+		})
 		if (blockNonQueueableOfflineAction(get, set, 'moveTask')) {
-			console.log('[moveTask] BLOCKED by offline action')
+			debugDragLog('[moveTask] blocked by offline action')
 			return false
 		}
 
 		const taskId = Number(intent?.taskId || 0)
 		if (!taskId) {
-			console.log('[moveTask] no taskId')
+			debugDragLog('[moveTask] missing task id')
 			return false
 		}
 
@@ -924,6 +933,7 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 			})
 
 		try {
+			addMovingTaskId(set, taskId)
 			set({openMenu: null})
 			markTaskDropTrace(intent.traceToken || null, 'optimistic-set-start', {
 				targetProjectId,
@@ -949,7 +959,7 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 			const nextBuckets = (partial as Record<string, unknown>).projectBucketsByViewId
 				? ((partial as Record<string, unknown>).projectBucketsByViewId as Record<number, {id: number; tasks: {id: number}[]}[]>)[projectViewId!]
 				: null
-			console.log('[moveTask] pre-set bucket comparison', {
+			debugDragLog('[moveTask] pre-set bucket comparison', {
 				hasBucketsInPartial: 'projectBucketsByViewId' in (partial as Record<string, unknown>),
 				prevRef: prevBuckets,
 				nextRef: nextBuckets,
@@ -959,7 +969,7 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 			})
 			set(partial)
 			const afterBuckets = get().projectBucketsByViewId[projectViewId]
-			console.log('[moveTask] post-set verification', {
+			debugDragLog('[moveTask] post-set verification', {
 				afterTaskIds: afterBuckets?.find((b: {id: number}) => b.id === bucketId)?.tasks?.map((t: {id: number}) => t.id),
 				afterSameAsPrev: afterBuckets === prevBuckets,
 				afterSameAsNext: afterBuckets === nextBuckets,
@@ -996,6 +1006,7 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 						}),
 					}))
 				}
+				removeMovingTaskId(set, taskId)
 				return true
 			}
 
@@ -1030,9 +1041,13 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 				}
 			}
 
-			console.log('[moveTask] bucket check', {bucketId, projectViewId, bucketIdUndefined: bucketId === undefined})
+			debugDragLog('[moveTask] bucket check', {
+				bucketId,
+				projectViewId,
+				bucketIdUndefined: bucketId === undefined,
+			})
 			if (bucketId !== undefined && projectViewId && bucketId) {
-				console.log('[moveTask] → bucket API call', {targetProjectId, projectViewId, bucketId, taskId})
+				debugDragLog('[moveTask] bucket API call', {targetProjectId, projectViewId, bucketId, taskId})
 				markTaskDropTrace(intent.traceToken || null, 'api-bucket-update-start', {projectViewId, bucketId})
 				await api(`/api/projects/${targetProjectId}/views/${projectViewId}/buckets/${bucketId}/tasks`, {
 					method: 'POST',
@@ -1043,7 +1058,7 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 						project_id: targetProjectId,
 					},
 				})
-				console.log('[moveTask] → bucket API done')
+				debugDragLog('[moveTask] bucket API done')
 				markTaskDropTrace(intent.traceToken || null, 'api-bucket-update-end', {projectViewId, bucketId})
 			}
 
@@ -1087,7 +1102,7 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 						currentProjectViewId,
 					})
 				}
-				void refreshBackgroundVisibleTaskCollectionsAfterDrop(get, intent.traceToken || null)
+				void refreshBackgroundVisibleTaskCollectionsAfterDrop(get, set, intent.traceToken || null, taskId)
 				if (get().taskDetailOpen && get().taskDetail?.id === taskId) {
 					void get().openTaskDetail(taskId)
 				}
@@ -1102,6 +1117,7 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 				await get().openTaskDetail(taskId)
 				markTaskDropTrace(intent.traceToken || null, 'task-detail-reload-end')
 			}
+			removeMovingTaskId(set, taskId)
 			return true
 		} catch (error) {
 			markTaskDropTrace(intent.traceToken || null, 'drop-failed', formatError(error as Error))
@@ -1109,6 +1125,7 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 			if (get().taskDetailOpen && get().taskDetail?.id === taskId) {
 				await get().openTaskDetail(taskId)
 			}
+			removeMovingTaskId(set, taskId)
 			set({error: formatError(error as Error)})
 			return false
 		}
@@ -1223,11 +1240,13 @@ async function loadProjectTasks(
 		orderBy = [],
 		useViewTasks = true,
 		previousTasks = [],
+		pinnedTaskIds = new Set<number>(),
 	}: {
 		sortBy?: string[]
 		orderBy?: string[]
 		useViewTasks?: boolean
 		previousTasks?: Task[]
+		pinnedTaskIds?: ReadonlySet<number>
 	} = {},
 ) {
 	if (viewId && useViewTasks) {
@@ -1250,6 +1269,7 @@ async function loadProjectTasks(
 				normalizedViewTasks,
 				normalizedCompletedTasks,
 				previousTasks,
+				pinnedTaskIds,
 			)
 			: mergeTaskListsPreservingPrimaryOrder(
 				normalizedViewTasks,
@@ -1479,7 +1499,9 @@ async function cloneTaskViaCreate(sourceTask: Task) {
 
 async function refreshBackgroundVisibleTaskCollectionsAfterDrop(
 	get: () => AppStore,
+	set: Parameters<StateCreator<AppStore, [], [], TasksSlice>>[0],
 	traceToken: string | null,
+	taskId: number,
 ) {
 	try {
 		markTaskDropTrace(traceToken, 'background-refresh-start')
@@ -1522,9 +1544,41 @@ async function refreshBackgroundVisibleTaskCollectionsAfterDrop(
 		markTaskDropTrace(traceToken, 'background-refresh-end', {count: refreshes.length})
 	} catch (error) {
 		markTaskDropTrace(traceToken, 'background-refresh-failed', formatError(error as Error))
+	} finally {
+		removeMovingTaskId(set, taskId)
 	}
 }
 
 function shouldSkipFullRefreshForVisibleTaskDrop(screen: Screen) {
 	return ['tasks', 'projects', 'today', 'inbox', 'upcoming', 'search'].includes(screen)
+}
+
+function addMovingTaskId(
+	set: Parameters<StateCreator<AppStore, [], [], TasksSlice>>[0],
+	taskId: number,
+) {
+	set(state => {
+		if (state.movingTaskIds.has(taskId)) {
+			return state
+		}
+
+		const movingTaskIds = new Set(state.movingTaskIds)
+		movingTaskIds.add(taskId)
+		return {movingTaskIds}
+	})
+}
+
+function removeMovingTaskId(
+	set: Parameters<StateCreator<AppStore, [], [], TasksSlice>>[0],
+	taskId: number,
+) {
+	set(state => {
+		if (!state.movingTaskIds.has(taskId)) {
+			return state
+		}
+
+		const movingTaskIds = new Set(state.movingTaskIds)
+		movingTaskIds.delete(taskId)
+		return {movingTaskIds}
+	})
 }

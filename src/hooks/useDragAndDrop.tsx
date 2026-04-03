@@ -2,11 +2,12 @@ import {useEffect, type ReactNode} from 'react'
 import {flushSync} from 'react-dom'
 import {useAppStore, type AppStore} from '@/store'
 import {getProjectDescendantIds} from '@/store/project-helpers'
-import {findTaskInAnyContext, getTaskCollectionForTask, isManualTaskSort} from '@/store/selectors'
-import type {Project, Screen, Task} from '@/types'
+import {findTaskInAnyContext, getTaskCollectionForTask, isSameListManualTaskReorderAllowed} from '@/store/selectors'
+import type {Task} from '@/types'
 import {
 	beginProjectDropTrace,
 	beginTaskDropTrace,
+	debugDragLog,
 	markProjectDropTrace,
 	markTaskDropTrace,
 } from '@/utils/dragPerf'
@@ -14,6 +15,7 @@ import {calculateTaskPosition} from '@/utils/taskPosition'
 
 let activeDragContext: DragContext | null = null
 let suppressClicksUntil = 0
+let requestSortableRebind: (() => void) | null = null
 
 interface SortableInstance {
 	destroy: () => void
@@ -93,6 +95,7 @@ export function shouldSuppressDragClicks() {
 
 export function useSortableBridge() {
 	const connected = useAppStore(state => state.connected)
+	const screen = useAppStore(state => state.screen)
 
 	useEffect(() => {
 		if (!connected) {
@@ -292,6 +295,8 @@ export function useSortableBridge() {
 			})
 		}
 
+		requestSortableRebind = scheduleBind
+
 		const observer = new MutationObserver(() => {
 			scheduleBind()
 		})
@@ -299,6 +304,10 @@ export function useSortableBridge() {
 		document.addEventListener('click', blockDragClick, true)
 		document.addEventListener('pointerup', blockDragClick, true)
 		document.addEventListener('touchend', blockDragClick, true)
+		document.addEventListener('pointercancel', handleActiveDragInterruption, true)
+		document.addEventListener('touchcancel', handleActiveDragInterruption, true)
+		document.addEventListener('visibilitychange', handleActiveDragVisibilityChange)
+		window.addEventListener('blur', handleActiveDragInterruption)
 		observer.observe(app, {childList: true, subtree: true})
 
 		scheduleBind()
@@ -311,10 +320,17 @@ export function useSortableBridge() {
 			document.removeEventListener('click', blockDragClick, true)
 			document.removeEventListener('pointerup', blockDragClick, true)
 			document.removeEventListener('touchend', blockDragClick, true)
+			document.removeEventListener('pointercancel', handleActiveDragInterruption, true)
+			document.removeEventListener('touchcancel', handleActiveDragInterruption, true)
+			document.removeEventListener('visibilitychange', handleActiveDragVisibilityChange)
+			window.removeEventListener('blur', handleActiveDragInterruption)
 			destroyInstances()
-			cleanupDragTracking()
+			if (requestSortableRebind === scheduleBind) {
+				requestSortableRebind = null
+			}
+			abortActiveDragSession({scheduleRebind: false})
 		}
-	}, [connected])
+	}, [connected, screen])
 }
 
 export function TaskDragProvider({children}: {children: ReactNode}) {
@@ -333,6 +349,8 @@ function startDragTracking(
 	dragFrom: HTMLElement | null,
 	dragOldIndex: number | null,
 ) {
+	abortActiveDragSession({scheduleRebind: false})
+	handledSidebarDrop = null
 	activeDragContext = {
 		app,
 		type,
@@ -356,31 +374,42 @@ function startDragTracking(
 
 function handleSortableOnMove(event: SortableEvent) {
 	if (!activeDragContext) {
-		console.log('[DnD:onMove] no activeDragContext — allowing')
+		debugDragLog('[DnD:onMove] no active drag context')
 		return
 	}
 
 	if (!isEligibleSortableContainer(activeDragContext.type, event.to)) {
-		console.log('[DnD:onMove] BLOCKED: not eligible container', {type: activeDragContext.type, to: event.to, sortableKind: (event.to as HTMLElement)?.dataset?.sortableKind})
+		debugDragLog('[DnD:onMove] blocked: ineligible container', {
+			type: activeDragContext.type,
+			to: event.to,
+			sortableKind: (event.to as HTMLElement)?.dataset?.sortableKind,
+		})
 		return false
 	}
 
 	if (activeDragContext.dropTargetProjectId || activeDragContext.dropTargetTaskId) {
-		console.log('[DnD:onMove] BLOCKED: drop target active', {projectId: activeDragContext.dropTargetProjectId, taskId: activeDragContext.dropTargetTaskId})
+		debugDragLog('[DnD:onMove] blocked: explicit drop target active', {
+			projectId: activeDragContext.dropTargetProjectId,
+			taskId: activeDragContext.dropTargetTaskId,
+		})
 		return false
 	}
 
 	if (isPointerOverInvalidCrossTypeSurface(activeDragContext)) {
-		console.log('[DnD:onMove] BLOCKED: cross-type surface')
+		debugDragLog('[DnD:onMove] blocked: cross-type surface')
 		return false
 	}
 
-	if (activeDragContext.type === 'task' && !isManualTaskSortActive()) {
-		console.log('[DnD:onMove] BLOCKED: manual sort not active')
+	if (
+		activeDragContext.type === 'task' &&
+		isSameTaskListSortableMove(event) &&
+		!isSameListTaskManualReorderAllowedForActiveScreen()
+	) {
+		debugDragLog('[DnD:onMove] blocked: same-list manual reorder inactive')
 		return false
 	}
 
-	console.log('[DnD:onMove] ALLOWED')
+	debugDragLog('[DnD:onMove] allowed')
 }
 
 function handleDragOverDropTargetDetection(event: MouseEvent | PointerEvent | TouchEvent) {
@@ -546,7 +575,7 @@ function applyDropTarget(
 	}
 }
 
-function cleanupDragTracking() {
+function cleanupDragTracking({scheduleRebind = true}: {scheduleRebind?: boolean} = {}) {
 	document.removeEventListener('pointermove', handleDragOverDropTargetDetection)
 	document.removeEventListener('mousemove', handleDragOverDropTargetDetection)
 	document.removeEventListener('touchmove', handleDragOverDropTargetDetection)
@@ -568,7 +597,32 @@ function cleanupDragTracking() {
 	const context = activeDragContext
 	activeDragContext = null
 	suppressClicksUntil = Date.now() + 600
+	if (scheduleRebind) {
+		requestSortableRebind?.()
+	}
 	return context
+}
+
+function abortActiveDragSession({scheduleRebind = true}: {scheduleRebind?: boolean} = {}) {
+	const context = cleanupDragTracking({scheduleRebind})
+	if (!context) {
+		return null
+	}
+
+	restoreStoredDragDomPosition(context)
+	clearSortableDragState(context.dragItem)
+	handledSidebarDrop = null
+	return context
+}
+
+function handleActiveDragInterruption() {
+	abortActiveDragSession()
+}
+
+function handleActiveDragVisibilityChange() {
+	if (document.visibilityState === 'hidden') {
+		abortActiveDragSession()
+	}
 }
 
 function handleSidebarDropPointerUp(event: PointerEvent) {
@@ -616,7 +670,7 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 	const dragContext = cleanupDragTracking()
 	const movedBranch = event.item
 	if (!(movedBranch instanceof HTMLElement)) {
-		console.log('[DnD:end] no movedBranch HTMLElement')
+		debugDragLog('[DnD:end] missing moved branch element')
 		return
 	}
 
@@ -624,18 +678,18 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 		? movedBranch
 		: movedBranch.querySelector('[data-task-row-id]')
 	if (!(taskRow instanceof HTMLElement)) {
-		console.log('[DnD:end] no taskRow')
+		debugDragLog('[DnD:end] missing task row element')
 		return
 	}
 
 	const taskId = Number(taskRow.dataset.taskRowId || 0)
 	if (!taskId) {
-		console.log('[DnD:end] no taskId')
+		debugDragLog('[DnD:end] missing task id')
 		return
 	}
 
 	if (handledSidebarDrop?.type === 'task' && handledSidebarDrop.id === taskId) {
-		console.log('[DnD:end] handled by sidebar drop')
+		debugDragLog('[DnD:end] task already handled by sidebar drop')
 		clearSortableDragState(event.item instanceof HTMLElement ? event.item : null)
 		handledSidebarDrop = null
 		return
@@ -645,7 +699,7 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 	const collections = getTaskCollections(store)
 	const task = findTaskInAnyContext(taskId, collections)
 	if (!task) {
-		console.log('[DnD:end] task not found in store', {taskId})
+		debugDragLog('[DnD:end] task missing from store', {taskId})
 		restoreSortableDomPosition(event)
 		return
 	}
@@ -670,7 +724,7 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 
 	const kanbanBucketId = Number((event.to instanceof HTMLElement ? event.to.dataset.kanbanBucketId : 0) || 0)
 	const fromBucketId = Number((event.from instanceof HTMLElement ? (event.from as HTMLElement).dataset.kanbanBucketId : 0) || 0)
-	console.log('[DnD:end]', {
+	debugDragLog('[DnD:end] resolved drop context', {
 		taskId,
 		taskTitle: task.title,
 		releaseProjectTarget: releaseProjectTarget?.projectId || null,
@@ -688,7 +742,7 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 	})
 
 	if (releaseProjectTarget?.projectId) {
-		console.log('[DnD:end] → PROJECT DROP', {projectId: releaseProjectTarget.projectId})
+		debugDragLog('[DnD:end] project drop', {projectId: releaseProjectTarget.projectId})
 		const targetProjectId = releaseProjectTarget.projectId
 		const visibleTaskList = getVisibleTaskListForTaskDrop(store, taskId, targetProjectId, collections)
 		const traceToken = beginTaskDropTrace({
@@ -712,7 +766,7 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 	}
 
 	if (releaseTaskTarget?.taskId) {
-		console.log('[DnD:end] → SUBTASK DROP', {targetTaskId: releaseTaskTarget.taskId})
+		debugDragLog('[DnD:end] subtask drop', {targetTaskId: releaseTaskTarget.taskId})
 		const targetTaskId = releaseTaskTarget.taskId
 		const targetParentTask = findTaskInAnyContext(targetTaskId, collections)
 		const traceToken = beginTaskDropTrace({
@@ -734,7 +788,7 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 	}
 
 	if (kanbanBucketId) {
-		console.log('[DnD:end] → KANBAN BUCKET', {kanbanBucketId, fromBucketId})
+		debugDragLog('[DnD:end] kanban bucket drop', {kanbanBucketId, fromBucketId})
 		const siblingIds = getSiblingTaskIdsFromContainer(event.to)
 		const movedIndex = siblingIds.indexOf(taskId)
 		const traceToken = beginTaskDropTrace({
@@ -743,9 +797,16 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 			targetProjectId: task.project_id,
 			targetParentTaskId: null,
 		})
-		console.log('[DnD:end] kanban bucket move details', {siblingIds, movedIndex, currentProjectViewId: store.currentProjectViewId})
+		debugDragLog('[DnD:end] kanban bucket move details', {
+			siblingIds,
+			movedIndex,
+			currentProjectViewId: store.currentProjectViewId,
+		})
 		if (movedIndex === -1 || !store.currentProjectViewId) {
-			console.log('[DnD:end] → KANBAN ABORT: movedIndex or viewId missing', {movedIndex, currentProjectViewId: store.currentProjectViewId})
+			debugDragLog('[DnD:end] kanban drop aborted: missing target index or view id', {
+				movedIndex,
+				currentProjectViewId: store.currentProjectViewId,
+			})
 			restoreSortableDomPosition(event)
 			return
 		}
@@ -774,7 +835,11 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 				const movedFromDone = fromBucketId === doneBucketId && kanbanBucketId !== doneBucketId
 				const movedToDone = fromBucketId !== doneBucketId && kanbanBucketId === doneBucketId
 				if ((movedFromDone && task.done) || (movedToDone && !task.done)) {
-					console.log('[DnD:end] toggling done status after bucket move', {movedFromDone, movedToDone, taskDone: task.done})
+					debugDragLog('[DnD:end] toggling done status after bucket move', {
+						movedFromDone,
+						movedToDone,
+						taskDone: task.done,
+					})
 					void currentStore.toggleTaskDone(taskId, {
 						kanbanViewId: store.currentProjectViewId ?? undefined,
 						sourceBucketId: kanbanBucketId,
@@ -791,7 +856,7 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 		return
 	}
 
-	if (!isManualTaskSortActive()) {
+	if (isSameTaskListSortableMove(event) && !isSameListTaskManualReorderAllowedForActiveScreen()) {
 		restoreSortableDomPosition(event)
 		return
 	}
@@ -943,20 +1008,18 @@ function isEligibleSortableContainer(kind: SortableKind, container: HTMLElement)
 	return container instanceof HTMLElement && container.dataset.sortableKind === kind
 }
 
-function isManualTaskSortActive() {
+function isSameTaskListSortableMove(event: SortableEvent) {
+	return event.from instanceof HTMLElement && event.to instanceof HTMLElement && event.from === event.to
+}
+
+function isSameListTaskManualReorderAllowedForActiveScreen() {
 	const state = useAppStore.getState()
-	const activeProjectViews = state.selectedProjectId ? state.projectViewsById[state.selectedProjectId] || [] : []
-	const activeProjectViewKind = activeProjectViews.find(view => view.id === state.currentProjectViewId)?.view_kind || 'list'
-	if (activeProjectViewKind === 'kanban') {
-		return true
-	}
-	const activeSortBy =
-		state.screen === 'projects'
-			? state.projectFilters.taskSortBy
-			: state.screen === 'tasks'
-				? state.taskFilters.sortBy
-				: 'position'
-	return isManualTaskSort(activeSortBy)
+	return isSameListManualTaskReorderAllowed({
+		screen: state.screen,
+		taskFilters: state.taskFilters,
+		projectFilters: state.projectFilters,
+		activeProjectViewKind: getActiveProjectViewKind(state),
+	})
 }
 
 function isPointerOverInvalidCrossTypeSurface(context: DragContext) {
@@ -1272,6 +1335,15 @@ function getTaskCollections(state: AppStore): TaskCollectionsLookup {
 		savedFilterTasks: state.savedFilterTasks,
 		projectPreviewTasksById: state.projectPreviewTasksById,
 	}
+}
+
+function getActiveProjectViewKind(state: AppStore) {
+	if (!state.selectedProjectId || !state.currentProjectViewId) {
+		return null
+	}
+
+	const activeProjectViews = state.projectViewsById[state.selectedProjectId] || []
+	return activeProjectViews.find(view => view.id === state.currentProjectViewId)?.view_kind || null
 }
 
 function getVisibleTaskListForDrag(

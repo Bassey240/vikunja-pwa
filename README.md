@@ -22,10 +22,10 @@ admin tooling.
 
 ## Current product state
 
-The current public release target is `0.3.0-alpha`. It builds on `0.2.1` with
-a much stronger planning surface: the Gantt view is now genuinely interactive,
-supported task and project edits work offline with queued replay, and Kanban
-drag-and-drop now behaves consistently across all major move paths.
+The current public release target is `0.3.1`. It is a focused hotfix on top of
+`0.3.0-alpha` that stabilizes task drag-and-drop in Inbox and Today, hardens
+drag cleanup across screen changes, and keeps expanded project previews
+list-task-only even when project focus was using Kanban.
 
 - Today-first shell with Inbox, Upcoming, Projects, Search, Filters, Labels, and Settings
 - nested sub-project browsing with inline parent/child task trees and continuous add flows
@@ -40,15 +40,36 @@ drag-and-drop now behaves consistently across all major move paths.
 
 Recent work has shifted from baseline parity to coherence: planning, offline
 resilience, Kanban interaction polish, and deeper account/security settings are
-now part of the same alpha rather than scattered prototypes.
+now part of the same product, and `0.3.1` tightens one of the most visible
+rough edges in daily use.
 
-## 0.3 alpha scope
+## 0.3.1 hotfix scope
 
-This release is still intentionally honest about its limits, but it is the
-first public snapshot that feels like a complete planning client instead of a
-feature bundle. The goal for `0.3.0-alpha` is to make day-to-day planning,
-offline work, and project movement strong enough for real evaluation on phone,
-tablet, and desktop.
+This release is intentionally narrow. The goal for `0.3.1` is to stabilize
+existing task movement behavior without widening scope or introducing a broad
+drag-and-drop redesign.
+
+## What's New In 0.3.1
+
+- Same-list task reorder in Inbox and Today now respects the actual screen sort mode, so non-manual views no longer animate a move and then snap back.
+- The post-drop background refresh path now preserves a freshly moved task instead of letting stale positive positions temporarily restore the old order.
+- Drag lifecycle cleanup now rebinds correctly across screen switches, fixing the case where a successful or interrupted drag on one view could leave the next view temporarily non-draggable.
+- Expanded project previews in the main project tree now stay task-list-only even if the focused project view was set to Kanban.
+- Regression coverage was extended around Inbox/Today DnD, stale-refresh ordering, and project preview isolation.
+
+Included in `0.3.1`:
+
+- everything from `0.3.0-alpha`
+- Inbox/Today reorder gating based on the real screen-aware manual-sort rules
+- drag-session cleanup hardening across screen changes
+- stale-refresh protection for just-moved tasks
+- project preview isolation from focused Kanban view state
+
+Explicitly not in `0.3.1`:
+
+- a full drag-and-drop rewrite
+- realtime external-change polling
+- permission-model cleanup or other broader roadmap items
 
 ## What's New In 0.3.0-alpha
 
@@ -119,7 +140,7 @@ Explicitly not in `0.2.0-alpha`:
 
 ## Changes Since 0.2.1
 
-Since `0.2.1`, this repo has gained:
+Since `0.2.1`, this repo gained:
 
 - A substantially richer Gantt view with zoom presets, dependency arrows, progress-aware task bars, assignee and label rendering, hover tooltips, and direct drag/resize scheduling.
 - Full offline editing for supported task and project flows, backed by IndexedDB snapshots, a reconnect replay queue, and visible pending/failed sync state in the UI.
@@ -138,7 +159,7 @@ Since `0.2.1`, this repo has gained:
 
 ![Enhanced Gantt view](docs/media/gantt-view.png)
 
-The `0.3.0-alpha` Gantt view adds zoom presets, dependency arrows, richer task
+The `0.3.x` Gantt view adds zoom presets, dependency arrows, richer task
 bars, and direct drag/resize planning.
 
 ### Mobile

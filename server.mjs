@@ -73,7 +73,7 @@ const sessionMutationRateLimiter = createRateLimiter({
 	max: sessionMutationRateLimitMax,
 })
 const legacyConfigured = Boolean(vikunjaBaseUrl && vikunjaApiToken)
-const buildId = '2026-04-02-alpha-0.3.0'
+const buildId = '2026-04-03-hotfix-0.3.1'
 const adminBridge = createAdminBridge({
 	bridgeMode: vikunjaBridgeMode,
 	vikunjaContainerName,

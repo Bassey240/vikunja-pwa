@@ -32,6 +32,7 @@ export interface ViewsSlice {
 	) => Promise<ProjectView | null>
 	createTaskInBucket: (projectId: number, viewId: number, bucketId: number, title: string) => Promise<boolean>
 	resolveProjectTaskViewId: (projectId: number) => Promise<number | null>
+	resolveProjectPreviewTaskViewId: (projectId: number) => Promise<number | null>
 	ensureCurrentProjectTaskViewId: () => Promise<number | null>
 	selectProjectView: (
 		projectId: number,
@@ -403,6 +404,15 @@ export const createViewsSlice: StateCreator<AppStore, [], [], ViewsSlice> = (set
 
 		const firstListView = views.find(view => view.view_kind === 'list')
 		return firstListView?.id || views[0]?.id || null
+	},
+
+	async resolveProjectPreviewTaskViewId(projectId) {
+		const views = await get().loadProjectViews(projectId)
+		if (views.length === 0) {
+			return null
+		}
+
+		return views.find(view => view.view_kind === 'list')?.id || null
 	},
 
 	async ensureCurrentProjectTaskViewId() {

@@ -1,5 +1,5 @@
-import type {Task, TaskRelationRef} from '@/types'
-import type {TaskSortBy, TaskSortOrder} from '@/hooks/useFilters'
+import type {Screen, Task, TaskRelationRef} from '@/types'
+import {getTaskSortByForScreen, type ProjectFilters, type TaskFilters, type TaskSortBy, type TaskSortOrder} from '@/hooks/useFilters'
 import {cloneRelatedTasksMap} from '@/utils/taskRelations'
 import {compareByPositionThenId} from './project-helpers'
 
@@ -26,6 +26,28 @@ const defaultTaskMatcher: TaskMatcher = task => !task.done
 
 export function isManualTaskSort(sortBy: TaskSortBy | null | undefined) {
 	return (sortBy || 'position') === 'position'
+}
+
+export function isSameListManualTaskReorderAllowed({
+	screen,
+	taskFilters,
+	projectFilters,
+	activeProjectViewKind = null,
+}: {
+	screen: Screen
+	taskFilters: Pick<TaskFilters, 'sortBy'>
+	projectFilters: Pick<ProjectFilters, 'taskSortBy'>
+	activeProjectViewKind?: string | null
+}) {
+	if (screen === 'tasks' && activeProjectViewKind === 'kanban') {
+		return true
+	}
+
+	const activeSortBy = screen === 'projects'
+		? projectFilters.taskSortBy
+		: getTaskSortByForScreen(screen, taskFilters)
+
+	return isManualTaskSort(activeSortBy)
 }
 
 export function normalizeTaskGraph(taskList: Task[] | null | undefined) {

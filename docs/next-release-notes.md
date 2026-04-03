@@ -1,6 +1,6 @@
 # Next Release Notes
 
-Working notes for the next public release after `0.3.0-alpha`.
+Working notes for the next public release after `0.3.1`.
 
 Use this file as the running source for:
 
