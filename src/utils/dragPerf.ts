@@ -66,6 +66,19 @@ function isEnabled() {
 	}
 }
 
+export function debugDragLog(message: string, detail?: unknown) {
+	if (!isEnabled()) {
+		return
+	}
+
+	if (detail === undefined) {
+		console.debug(message)
+		return
+	}
+
+	console.debug(message, detail)
+}
+
 function getState() {
 	if (typeof window === 'undefined') {
 		return null

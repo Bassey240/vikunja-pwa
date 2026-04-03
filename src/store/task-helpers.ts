@@ -765,6 +765,7 @@ export function mergeTaskListsWithStablePositions(
 	primaryTasks: Task[],
 	secondaryTasks: Task[],
 	previousTasks: Task[] = [],
+	pinnedTaskIds: ReadonlySet<number> = new Set(),
 ) {
 	const previousPositionById = new Map(
 		previousTasks
@@ -785,7 +786,7 @@ export function mergeTaskListsWithStablePositions(
 
 		let position = Number(task.position || 0)
 		const previousPosition = previousPositionById.get(task.id)
-		if (previousPosition && position <= 0) {
+		if (previousPosition && (position <= 0 || pinnedTaskIds.has(task.id))) {
 			position = previousPosition
 		} else if (position <= 0) {
 			nextSyntheticPosition += 1024

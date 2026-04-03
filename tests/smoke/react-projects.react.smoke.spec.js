@@ -48,6 +48,12 @@ async function openProjects(page) {
 	await expect(page.getByRole('heading', {name: 'Projects'})).toBeVisible()
 }
 
+async function previewTaskIds(page, projectId) {
+	return page.locator(`.workspace-screen.is-active [data-project-node-id="${projectId}"] .task-tree > .task-branch > .task-row[data-task-row-id]`).evaluateAll(rows =>
+		rows.map(row => Number(row.dataset.taskRowId || 0)),
+	)
+}
+
 async function openScreenMenu(page) {
 	await page.locator('.topbar [data-action="open-projects-menu"]').click()
 	await expect(page.locator('[data-menu-root="true"]')).toBeVisible()
@@ -398,6 +404,39 @@ test('project focus keeps completed preview subtasks visible after optimistic co
 	await page.waitForTimeout(900)
 	await expect(focusChildTaskRow).toContainText('Verify nested task rendering')
 	await expect(focusChildTaskRow.locator('[data-action="toggle-done"]')).toHaveAttribute('aria-checked', 'false')
+})
+
+test('project preview stays list-task-only when the focused project view is kanban', async ({page}) => {
+	await openProjects(page)
+
+	const workNode = page.locator('[data-project-node-id="2"]')
+	await workNode.locator('[data-action="select-project"][data-project-id="2"]').click()
+	await expect(page.getByRole('heading', {name: 'Work'})).toBeVisible()
+
+	await page.locator('[data-action="toggle-project-view-menu"]').click()
+	await page.locator('[data-action="select-project-view"][data-project-id="2"][data-view-id="15"]').click()
+	await expect(page.locator('.kanban-lane-head').first()).toBeVisible()
+
+	let kanbanPreviewRequestCount = 0
+	await page.route('**/api/projects/2/views/15/tasks**', async route => {
+		kanbanPreviewRequestCount += 1
+		const tasks = await stack.mockApi('projects/2/tasks')
+		const payload = tasks
+			.filter(task => task.id === 201)
+			.map(task => ({...task, title: 'Kanban preview bleed probe'}))
+		await route.fulfill({
+			status: 200,
+			contentType: 'application/json',
+			body: JSON.stringify(payload),
+		})
+	})
+
+	await openProjects(page)
+	await workNode.locator('[data-action="toggle-project"]').click()
+
+	await expect.poll(() => previewTaskIds(page, 2)).toEqual([201, 202, 203])
+	await expect(workNode.locator('.project-preview')).not.toContainText('Kanban preview bleed probe')
+	await expect.poll(() => kanbanPreviewRequestCount).toBe(0)
 })
 
 test('offline task completion queues locally and replays after reconnect', async ({page}) => {

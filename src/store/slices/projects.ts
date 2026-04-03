@@ -560,7 +560,7 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 			const useViewEndpoint = isManualTaskSort(get().projectFilters.taskSortBy)
 			let tasks = get().projectPreviewTasksById[projectId] || []
 			if (useViewEndpoint) {
-				const viewId = await get().resolveProjectTaskViewId(projectId)
+				const viewId = await get().resolveProjectPreviewTaskViewId(projectId)
 				if (viewId) {
 					const normalizedSort = sanitizeProjectPreviewTaskSort(sortBy, orderBy)
 					const [viewTasks, completedTasks] = await Promise.all([
@@ -579,6 +579,7 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 						normalizedViewTasks,
 						normalizedCompletedTasks,
 						tasks,
+						get().movingTaskIds,
 					)
 				} else {
 					const normalizedSort = sanitizeProjectPreviewTaskSort(sortBy, orderBy)
