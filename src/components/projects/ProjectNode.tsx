@@ -1,16 +1,21 @@
 import ProjectMenu from './ProjectMenu'
 import ProjectPreview from './ProjectPreview'
+import SavedFilterProjectMenu from './SavedFilterProjectMenu'
 import InlineProjectComposer from './InlineProjectComposer'
 import useWideLayout from '@/hooks/useWideLayout'
 import InlineRootTaskComposer from '@/components/tasks/InlineRootTaskComposer'
 import TaskTree from '@/components/tasks/TaskTree'
+import {api} from '@/api'
 import type {TaskSortBy} from '@/hooks/useFilters'
 import {type ProjectAggregateCounts, getVisibleChildProjects} from '@/store/project-helpers'
 import {useAppStore} from '@/store'
 import {type TaskMatcher} from '@/store/selectors'
-import type {Project, Task} from '@/types'
+import type {Project, SavedFilter, Task} from '@/types'
+import {formatError} from '@/utils/formatting'
 import {isProjectDropTraceTarget, markProjectDropTrace} from '@/utils/dragPerf'
 import {getMenuAnchor} from '@/utils/menuPosition'
+import {projectHasBackground} from '@/utils/project-background'
+import {isSavedFilterProject} from '@/utils/saved-filters'
 import {type CSSProperties, useLayoutEffect, useRef} from 'react'
 import {useNavigate} from 'react-router-dom'
 
@@ -46,10 +51,15 @@ export default function ProjectNode({
 	const navigate = useNavigate()
 	const isWideLayout = useWideLayout()
 	const projects = useAppStore(state => state.projects)
+	const savedFilters = useAppStore(state => state.savedFilters)
 	const openMenu = useAppStore(state => state.openMenu)
 	const expanded = useAppStore(state => state.expandedProjectIds.has(project.id))
 	const loadingPreview = useAppStore(state => state.loadingProjectPreviewIds.has(project.id))
 	const previewTasks = useAppStore(state => state.projectPreviewTasksById[project.id] || emptyPreviewTasks)
+	const loadSavedFilterTasks = useAppStore(state => state.loadSavedFilterTasks)
+	const loadProjects = useAppStore(state => state.loadProjects)
+	const projectBackgroundUrl = useAppStore(state => state.projectBackgroundUrls[project.id] ?? null)
+	const projectBackgroundPreviewUrl = useAppStore(state => state.projectBackgroundPreviewUrls[project.id] ?? null)
 	const subprojectComposerOpen = useAppStore(state => state.projectComposerOpen && state.projectComposerParentId === project.id)
 	const inlineTaskComposerOpen = useAppStore(
 		state =>
@@ -68,19 +78,28 @@ export default function ProjectNode({
 	const moveProjectToParent = useAppStore(state => state.moveProjectToParent)
 	const duplicateProject = useAppStore(state => state.duplicateProject)
 	const deleteProject = useAppStore(state => state.deleteProject)
+	const setError = useAppStore(state => state.setError)
 	const rowRef = useRef<HTMLDivElement | null>(null)
 
 	const children = getChildren ? getChildren(project.id) : getVisibleChildProjects(project.id, projects)
 	const menuOpen = openMenu?.kind === 'project' && openMenu.id === project.id
+	const savedFilterProject = isSavedFilterProject(project)
+	const savedFilter = savedFilterProject
+		? savedFilters.find(entry => entry.projectId === project.id || entry.id === Number(project.savedFilterId || project.saved_filter_id || 0)) || null
+		: null
 	const counts = countsByProjectId.get(project.id) || {
 		projectCount: 0,
 		taskCount: 0,
 		taskCountLoaded: false,
 	}
-	const summaryParts = [
-		formatCountLabel(counts.projectCount, 'project'),
-		counts.taskCountLoaded ? formatCountLabel(counts.taskCount, 'task') : 'Task count...',
-	]
+	const hasProjectBackground = projectHasBackground(project)
+	const resolvedProjectBackgroundUrl = projectBackgroundUrl || projectBackgroundPreviewUrl
+	const summaryParts = savedFilterProject
+		? ['Saved filter']
+		: [
+			formatCountLabel(counts.projectCount, 'project'),
+			counts.taskCountLoaded ? formatCountLabel(counts.taskCount, 'task') : 'Task count...',
+		]
 
 	useLayoutEffect(() => {
 		const trace = isProjectDropTraceTarget(project.id, parentProjectId)
@@ -125,13 +144,61 @@ export default function ProjectNode({
 		})
 	}
 
+	async function handleOpenSavedFilterProject() {
+		await loadSavedFilterTasks(project.id, {silent: true})
+		navigate(`/projects/${project.id}`)
+	}
+
+	function closeProjectMenu() {
+		if (menuOpen && openMenu?.kind === 'project') {
+			toggleProjectMenu(project.id, openMenu.anchor)
+		}
+	}
+
+	function handleEditSavedFilter(filter: SavedFilter) {
+		closeProjectMenu()
+		navigate(`/filters?edit=${filter.id}`)
+	}
+
+	async function handleDeleteSavedFilter(filter: SavedFilter) {
+		if (!window.confirm(`Delete the "${filter.title}" saved filter?`)) {
+			return
+		}
+
+		try {
+			closeProjectMenu()
+			await api(`/api/filters/${filter.id}`, {
+				method: 'DELETE',
+			})
+			await loadProjects({silent: true})
+		} catch (error) {
+			setError(error instanceof Error ? error.message : formatError(error as Error))
+		}
+	}
+
 	return (
 		<div
 			className={`project-node ${menuOpen ? 'is-menu-open' : ''}`.trim()}
 			style={{'--depth': depth} as CSSProperties}
 			data-project-node-id={project.id}
+			data-saved-filter-project={savedFilterProject ? 'true' : 'false'}
 		>
-			<div ref={rowRef} className="project-node-row">
+			<div
+				ref={rowRef}
+				className={`project-node-row ${hasProjectBackground ? 'has-background' : ''}`.trim()}
+				data-project-background-surface="node"
+				data-has-background={hasProjectBackground ? 'true' : 'false'}
+			>
+				{hasProjectBackground ? (
+					<div className="project-surface-background-media project-node-background-media" aria-hidden="true">
+						{resolvedProjectBackgroundUrl ? (
+							<img src={resolvedProjectBackgroundUrl} alt="" className="project-surface-background-image" />
+						) : (
+							<div className="project-surface-background-placeholder" />
+						)}
+						<div className="project-surface-background-overlay project-node-background-overlay" />
+					</div>
+				) : null}
 				<button
 					className="chevron-button"
 					data-action="toggle-project"
@@ -147,43 +214,60 @@ export default function ProjectNode({
 					data-project-id={project.id}
 					type="button"
 					onClick={() => {
+						if (savedFilterProject) {
+							void handleOpenSavedFilterProject()
+							return
+						}
 						if (isWideLayout) {
 							void openProjectDetail(project.id)
 						}
 						void navigateToProject(project.id)
 						navigate(`/projects/${project.id}`)
 					}}
-				>
-					<span className="card-copy">
-						<span className="card-title project-card-title">{project.title}</span>
-						<span className="card-meta project-card-meta">{summaryParts.join(' · ')}</span>
-					</span>
-				</button>
-				<div
-					className="drag-handle project-drag-handle"
-					aria-hidden="true"
-				>
-					<svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor">
-						<circle cx="2.5" cy="2.5" r="1.5" />
-						<circle cx="7.5" cy="2.5" r="1.5" />
-						<circle cx="2.5" cy="8" r="1.5" />
-						<circle cx="7.5" cy="8" r="1.5" />
-						<circle cx="2.5" cy="13.5" r="1.5" />
-						<circle cx="7.5" cy="13.5" r="1.5" />
-					</svg>
-				</div>
-				<button
-					className="menu-button"
-					data-action="toggle-project-menu"
-					data-project-id={project.id}
-					data-menu-toggle="true"
-					type="button"
-					onClick={event => toggleProjectMenu(project.id, getMenuAnchor(event.currentTarget))}
-				>
-					⋯
-				</button>
+					>
+						<span className="card-copy">
+							<span className="card-title-row">
+								<span className="card-title project-card-title">{project.title}</span>
+							</span>
+							<span className="card-meta project-card-meta">{summaryParts.join(' · ')}</span>
+						</span>
+					</button>
+				<>
+					<div
+						className="drag-handle project-drag-handle"
+						aria-hidden="true"
+					>
+						<svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor">
+							<circle cx="2.5" cy="2.5" r="1.5" />
+							<circle cx="7.5" cy="2.5" r="1.5" />
+							<circle cx="2.5" cy="8" r="1.5" />
+							<circle cx="7.5" cy="8" r="1.5" />
+							<circle cx="2.5" cy="13.5" r="1.5" />
+							<circle cx="7.5" cy="13.5" r="1.5" />
+						</svg>
+					</div>
+					<button
+						className="menu-button"
+						data-action="toggle-project-menu"
+						data-project-id={project.id}
+						data-menu-toggle="true"
+						type="button"
+						onClick={event => toggleProjectMenu(project.id, getMenuAnchor(event.currentTarget))}
+					>
+						⋯
+					</button>
+				</>
 			</div>
-			{menuOpen && openMenu.kind === 'project' ? (
+			{savedFilterProject && savedFilter && menuOpen && openMenu.kind === 'project' ? (
+				<SavedFilterProjectMenu
+					filter={savedFilter}
+					anchor={openMenu.anchor}
+					onOpen={() => void handleOpenSavedFilterProject()}
+					onEdit={() => handleEditSavedFilter(savedFilter)}
+					onDelete={() => void handleDeleteSavedFilter(savedFilter)}
+				/>
+			) : null}
+			{!savedFilterProject && menuOpen && openMenu.kind === 'project' ? (
 				<ProjectMenu
 					project={project}
 					anchor={openMenu.anchor}
@@ -196,7 +280,7 @@ export default function ProjectNode({
 					onDelete={() => void deleteProject(project.id)}
 				/>
 			) : null}
-			{expanded || subprojectComposerOpen || inlineTaskComposerOpen ? (
+			{(expanded || subprojectComposerOpen || inlineTaskComposerOpen) ? (
 				<div className="project-preview">
 					<InlineProjectComposer parentProjectId={project.id} />
 					{loadingPreview ? <div className="empty-state">Loading tasks...</div> : null}
@@ -227,6 +311,7 @@ export default function ProjectNode({
 											matcher={previewTaskMatcher}
 											sortBy={previewTaskSortBy}
 											bulkMode={previewTaskBulkMode}
+											savedFilterProjectId={savedFilterProject ? project.id : null}
 										/>
 									</ProjectPreview>
 					) : null}

@@ -134,9 +134,16 @@ async function dragTaskToTaskEdge(page, sourceTaskId, targetTaskId, edge = 'top'
 	await dragHandleToPoint(page, handle, await getEdgePoint(target, edge))
 }
 
+async function dragFocusedTaskToTaskEdge(page, sourceTaskId, targetTaskId, edge = 'top') {
+	const handle = page.locator(`.task-focus-tree [data-task-branch-id="${sourceTaskId}"] > .task-row .drag-handle`)
+	const target = page.locator(`.task-focus-tree [data-task-row-id="${targetTaskId}"]`)
+	await dragHandleToPoint(page, handle, await getEdgePoint(target, edge))
+}
+
 async function dragTaskToProjectCenter(page, sourceTaskId, targetProjectId) {
 	const handle = page.locator(`.workspace-screen.is-active [data-task-branch-id="${sourceTaskId}"] > .task-row .drag-handle`)
 	const target = page.locator(`.workspace-screen.is-active [data-project-node-id="${targetProjectId}"] > .project-node-row .project-drag-handle`)
+	await expect(target).toBeVisible()
 	await dragHandleToPoint(page, handle, await getCenterPoint(target))
 }
 
@@ -174,6 +181,14 @@ async function createTodayTaskInUi(page, title) {
 
 async function rootProjectIds(page) {
 	return page.locator('.workspace-screen.is-active .screen-body > .project-node[data-project-node-id]').evaluateAll(nodes =>
+		nodes
+			.map(node => Number(node.dataset.projectNodeId || 0))
+			.filter(projectId => projectId > 0),
+	)
+}
+
+async function rootEntryIds(page) {
+	return page.locator('.workspace-screen.is-active .screen-body > .project-node[data-project-node-id]').evaluateAll(nodes =>
 		nodes.map(node => Number(node.dataset.projectNodeId || 0)),
 	)
 }
@@ -186,6 +201,12 @@ async function rootTaskIds(page) {
 
 async function previewTaskIds(page, projectId) {
 	return page.locator(`.workspace-screen.is-active [data-project-node-id="${projectId}"] .task-tree > .task-branch > .task-row[data-task-row-id]`).evaluateAll(rows =>
+		rows.map(row => Number(row.dataset.taskRowId || 0)),
+	)
+}
+
+async function focusedSubtaskIds(page) {
+	return page.locator('.task-focus-tree .task-tree > .task-branch > .task-row[data-task-row-id]').evaluateAll(rows =>
 		rows.map(row => Number(row.dataset.taskRowId || 0)),
 	)
 }
@@ -214,6 +235,71 @@ test('can reorder root projects by drag', async ({page}) => {
 		const inbox = projects.find(project => project.id === 1)
 		return Number(work.position) < Number(inbox.position)
 	}).toBe(true)
+})
+
+test('can reorder saved filter projects among root project rows and keep the order after reopening projects', async ({page}) => {
+	await openProjects(page)
+	await expect.poll(() => rootEntryIds(page)).toEqual([1, 2, -1])
+
+	await dragProjectToProjectEdge(page, -1, 1, 'top')
+
+	await expect.poll(() => rootEntryIds(page)).toEqual([-1, 1, 2])
+	await page.goto(`${stack.appUrl}/today`)
+	await openProjects(page)
+	await expect.poll(() => rootEntryIds(page)).toEqual([-1, 1, 2])
+})
+
+test('can reorder tasks inside a saved filter workspace', async ({page}) => {
+	const savedFilterViews = await stack.mockApi('projects/-1/views')
+	const savedFilterViewId = savedFilterViews.find(view => view.view_kind === 'list')?.id || null
+	expect(savedFilterViewId).toBeTruthy()
+
+	await openProjects(page)
+	await page.locator(`.workspace-screen.is-active [data-action="select-project"][data-project-id="-1"]`).click()
+	await expect(page).toHaveURL(/\/projects\/-1$/)
+	await expect.poll(() => rootTaskIds(page)).toEqual([201, 102])
+
+	let positionUpdateViewId = null
+	await page.route('**/api/tasks/102/position', async route => {
+		const body = JSON.parse(route.request().postData() || '{}')
+		positionUpdateViewId = Number(body?.project_view_id || 0) || null
+		await route.continue()
+	})
+
+	await dragTaskToTaskEdge(page, 102, 201, 'top')
+
+	await expect.poll(() => rootTaskIds(page)).toEqual([102, 201])
+	expect(positionUpdateViewId).toBe(savedFilterViewId)
+	await page.goto(`${stack.appUrl}/today`)
+	await page.goto(`${stack.appUrl}/projects/-1`)
+	await expect.poll(() => rootTaskIds(page)).toEqual([102, 201])
+})
+
+test('can reorder tasks inside an expanded saved filter preview and keep the saved filter view id', async ({page}) => {
+	const savedFilterViews = await stack.mockApi('projects/-1/views')
+	const savedFilterViewId = savedFilterViews.find(view => view.view_kind === 'list')?.id || null
+	expect(savedFilterViewId).toBeTruthy()
+
+	await openProjects(page)
+	await page.locator('[data-action="toggle-project"][data-project-id="-1"]').click()
+	await expect.poll(() => previewTaskIds(page, -1)).toEqual([201, 102])
+
+	let positionUpdateViewId = null
+	await page.route('**/api/tasks/102/position', async route => {
+		const body = JSON.parse(route.request().postData() || '{}')
+		positionUpdateViewId = Number(body?.project_view_id || 0) || null
+		await route.continue()
+	})
+
+	await dragTaskToTaskEdge(page, 102, 201, 'top')
+
+	await expect.poll(() => previewTaskIds(page, -1)).toEqual([102, 201])
+	expect(positionUpdateViewId).toBe(savedFilterViewId)
+	await page.goto(`${stack.appUrl}/today`)
+	await openProjects(page)
+	await expect.poll(async () => (await rootEntryIds(page)).includes(-1)).toBe(true)
+	await page.locator('[data-action="toggle-project"][data-project-id="-1"]').click()
+	await expect.poll(() => previewTaskIds(page, -1)).toEqual([102, 201])
 })
 
 test('project drag writes live perf history entries', async ({page}) => {
@@ -491,6 +577,8 @@ test('drag reorder applies the persisted backend position before the refresh com
 
 test('can move a task into a child project by drag', async ({page}) => {
 	await openProject(page, 2, 'Work')
+	await page.locator('[data-action="toggle-project"][data-project-id="3"]').click()
+	await expect.poll(() => previewTaskIds(page, 3)).toEqual([301])
 	let projectMovePayload = null
 
 	await page.route('**/api/tasks/202', async route => {
@@ -500,14 +588,13 @@ test('can move a task into a child project by drag', async ({page}) => {
 		await route.continue()
 	})
 
-	await dragTaskToProjectCenter(page, 202, 3)
+	await dragTaskToTaskEdge(page, 202, 301, 'top')
 
 	await expect.poll(async () => {
 		const task = await stack.mockApi('tasks/202')
 		return task.project_id
 	}).toBe(3)
 	expect(projectMovePayload?.due_date).toBeTruthy()
-	await expect(page.locator('[data-task-row-id="202"]')).toHaveCount(0)
 })
 
 test('can place a task at a specific edge position in another project task list', async ({page}) => {
@@ -619,6 +706,39 @@ test('can make a task a subtask and promote a subtask back to root by drag', asy
 		return task.related_tasks.parenttask.length
 	}).toBe(0)
 	await expect.poll(async () => (await rootTaskIds(page)).includes(204)).toBe(true)
+})
+
+test('focused task subtask reorder keeps direct subtasks attached to the focused parent', async ({page}) => {
+	await openProject(page, 2, 'Work')
+
+	await dragTaskToTaskCenter(page, 202, 203)
+	await expect.poll(async () => {
+		const task = await stack.mockApi('tasks/202')
+		return task.related_tasks.parenttask.map(entry => entry.id)
+	}).toEqual([203])
+
+	await page.locator('.workspace-screen.is-active [data-task-row-id="203"] .task-main').click()
+	await expect(page.locator('.task-focus-tree')).toBeVisible()
+	await expect.poll(async () => {
+		const ids = await focusedSubtaskIds(page)
+		return ids.slice().sort((left, right) => left - right)
+	}).toEqual([202, 204])
+
+	const initialOrder = await focusedSubtaskIds(page)
+	const sourceTaskId = 202
+	const targetTaskId = 204
+	const edge = initialOrder[0] === sourceTaskId ? 'bottom' : 'top'
+
+	await dragFocusedTaskToTaskEdge(page, sourceTaskId, targetTaskId, edge)
+
+	await expect.poll(async () => {
+		const task = await stack.mockApi('tasks/202')
+		return task.related_tasks.parenttask.map(entry => entry.id)
+	}).toEqual([203])
+	await expect.poll(async () => {
+		const ids = await focusedSubtaskIds(page)
+		return ids
+	}).toEqual(initialOrder[0] === sourceTaskId ? [204, 202] : [202, 204])
 })
 
 test('today branch promotion keeps the root task due date after nested moves', async ({page}) => {

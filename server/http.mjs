@@ -22,9 +22,24 @@ export async function readJsonBody(req) {
 	return JSON.parse(buffer.toString('utf8'))
 }
 
-export async function readRawBody(req) {
+export async function readRawBody(req, {maxBytes} = {}) {
+	if (!Number.isFinite(maxBytes) || maxBytes <= 0) {
+		throw new TypeError('readRawBody(req, {maxBytes}) requires a positive maxBytes value.')
+	}
+
 	const chunks = []
+	let totalBytes = 0
 	for await (const chunk of req) {
+		totalBytes += chunk.byteLength
+		if (totalBytes > maxBytes) {
+			const maxMb = Number.isInteger(maxBytes / (1024 * 1024))
+				? `${maxBytes / (1024 * 1024)} MB`
+				: `${(maxBytes / (1024 * 1024)).toFixed(1)} MB`
+			const error = new Error(`Request body exceeds the ${maxMb} limit.`)
+			error.statusCode = 413
+			throw error
+		}
+
 		chunks.push(chunk)
 	}
 
@@ -32,7 +47,7 @@ export async function readRawBody(req) {
 		return Buffer.alloc(0)
 	}
 
-	return Buffer.concat(chunks)
+	return Buffer.concat(chunks, totalBytes)
 }
 
 export function sendJson(res, statusCode, payload, headers = {}) {

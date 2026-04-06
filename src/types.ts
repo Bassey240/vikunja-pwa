@@ -63,6 +63,7 @@ export interface VikunjaInfo {
 	caldav_enabled?: boolean
 	task_attachments_enabled: boolean
 	enabled_background_providers: string[]
+	available_migrators?: string[]
 	auth: {
 		local: {
 			enabled: boolean
@@ -70,22 +71,20 @@ export interface VikunjaInfo {
 		}
 		openid?: {
 			enabled: boolean
-			providers: Array<{
-				name: string
-				key: string
-				auth_url: string
-			}>
+			providers: OidcProvider[]
 		}
 		openid_connect?: {
 			enabled: boolean
-			providers: Array<{
-				name: string
-				key: string
-				auth_url: string
-			}>
+			providers: OidcProvider[]
 		}
 	}
 	registration_enabled?: boolean
+}
+
+export interface OidcProvider {
+	name: string
+	key: string
+	auth_url: string
 }
 
 export interface UserProfile {
@@ -134,6 +133,8 @@ export interface NotificationSettingsForm {
 
 export interface UserFrontendSettings {
 	notification_preferences?: Partial<Record<NotificationCategory, Partial<NotificationCategoryPreference>>> | null
+	backgroundBrightness?: number | null
+	background_brightness?: number | null
 	[key: string]: unknown
 }
 
@@ -159,7 +160,7 @@ export interface Account {
 	baseUrl: string
 	linkShareAuth?: boolean
 	linkShareProjectId?: number | null
-	isAdmin?: boolean
+	canUseAdminBridge?: boolean
 	instanceFeatures?: InstanceFeatures | null
 	user: UserProfile | null
 	sessionsSupported: boolean
@@ -235,7 +236,7 @@ export type MailerConfigField =
 	| 'fromEmail'
 	| 'forceSsl'
 
-export type MailerCapabilityReasonCode =
+export type AdminConfigCapabilityReasonCode =
 	| 'no_bridge'
 	| 'no_config_path'
 	| 'unsupported_source_mode'
@@ -245,7 +246,7 @@ export interface MailerConfigCapabilities {
 	canInspect: boolean
 	canWrite: boolean
 	canApply: boolean
-	reasonCode: MailerCapabilityReasonCode | null
+	reasonCode: AdminConfigCapabilityReasonCode | null
 }
 
 export interface MailerConfig {
@@ -272,6 +273,61 @@ export interface MailerConfigInput {
 	skipTlsVerify: boolean
 	fromEmail: string
 	forceSsl: boolean
+}
+
+export type MigrationImporterField =
+	| 'enabled'
+	| 'clientId'
+	| 'clientSecret'
+	| 'redirectUrl'
+	| 'key'
+
+export interface MigrationImporterConfigCapabilities {
+	canInspect: boolean
+	canWrite: boolean
+	canApply: boolean
+	reasonCode: AdminConfigCapabilityReasonCode | null
+}
+
+export interface MigrationOauthImporterConfig {
+	enabled: boolean
+	clientId: string
+	clientSecretConfigured: boolean
+	redirectUrl: string
+	envOverrides: MigrationImporterField[]
+}
+
+export interface MigrationTrelloImporterConfig {
+	enabled: boolean
+	key: string
+	redirectUrl: string
+	envOverrides: MigrationImporterField[]
+}
+
+export interface MigrationImporterConfig {
+	todoist: MigrationOauthImporterConfig
+	trello: MigrationTrelloImporterConfig
+	microsoftTodo: MigrationOauthImporterConfig
+	capabilities: MigrationImporterConfigCapabilities
+}
+
+export interface MigrationOauthImporterInput {
+	enabled: boolean
+	clientId: string
+	clientSecret: string
+	redirectUrl: string
+}
+
+export interface MigrationTrelloImporterInput {
+	enabled: boolean
+	key: string
+	redirectUrl: string
+}
+
+export interface MigrationImporterConfigInput {
+	todoist: MigrationOauthImporterInput
+	trello: MigrationTrelloImporterInput
+	microsoftTodo: MigrationOauthImporterInput
 }
 
 export type SharePermission = 0 | 1 | 2
@@ -323,6 +379,38 @@ export interface ProjectLinkShare {
 	password_protected?: boolean | null
 	created?: string | null
 	updated?: string | null
+}
+
+export interface Webhook {
+	id: number
+	target_url: string
+	events: string[]
+	secret?: string | null
+	created?: string | null
+	updated?: string | null
+}
+
+export interface WebhookEventOption {
+	event_name: string
+}
+
+export type MigrationService =
+	| 'todoist'
+	| 'trello'
+	| 'microsoft-todo'
+	| 'ticktick'
+	| 'vikunja-file'
+
+export type MigrationStatusValue =
+	| 'idle'
+	| 'running'
+	| 'done'
+	| 'error'
+
+export interface MigrationStatus {
+	service: MigrationService
+	status: MigrationStatusValue
+	message?: string | null
 }
 
 export interface TotpSettings {
@@ -392,6 +480,18 @@ export interface Project {
 	is_favorite?: boolean
 	is_archived?: boolean
 	is_inbox_project?: boolean
+	has_background?: boolean
+	background_information?: unknown | null
+	backgroundInformation?: unknown | null
+	background_blur_hash?: string | null
+	backgroundBlurHash?: string | null
+	max_permission?: number | null
+	maxPermission?: number | null
+	is_saved_filter?: boolean
+	isSavedFilter?: boolean
+	saved_filter_id?: number | null
+	savedFilterId?: number | null
+	owner?: TaskAssignee | null
 	created?: string | null
 	updated?: string | null
 	subscription?: EntitySubscription | null
@@ -400,11 +500,22 @@ export interface Project {
 export interface SavedFilter {
 	id: number
 	projectId: number
+	position?: number | null
 	title: string
 	description: string
 	isFavorite: boolean
 	created: string | null
 	updated: string | null
+	filters?: SavedFilterQuery | null
+}
+
+export interface SavedFilterQuery {
+	filter: string
+	filterIncludeNulls: boolean
+	filterTimezone: string | null
+	sortBy: string[]
+	orderBy: string[]
+	searchText: string
 }
 
 export interface ProjectView {
@@ -412,10 +523,25 @@ export interface ProjectView {
 	project_id: number
 	title: string
 	view_kind: string
+	filter?: {
+		filter?: string
+		filter_timezone?: string
+	} | null
+	position?: number | null
+	bucket_configuration_mode?: string | null
+	bucket_configuration?: unknown[] | null
 	default_bucket_id?: number | null
 	done_bucket_id?: number | null
 	defaultBucketId?: number | null
 	doneBucketId?: number | null
+}
+
+export interface BackgroundImage {
+	id: string
+	url: string
+	thumb: string
+	blur_hash: string
+	info: Record<string, unknown>
 }
 
 export interface Bucket {

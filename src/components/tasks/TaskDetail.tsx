@@ -59,6 +59,7 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 	const projects = useAppStore(state => state.projects)
 	const labels = useAppStore(state => state.labels)
 	const screen = useAppStore(state => state.screen)
+	const selectedSavedFilterProjectId = useAppStore(state => state.selectedSavedFilterProjectId)
 	const taskFilters = useAppStore(state => state.taskFilters)
 	const projectFilters = useAppStore(state => state.projectFilters)
 	const recentlyCompletedTaskIds = useAppStore(state => state.recentlyCompletedTaskIds)
@@ -688,7 +689,11 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 			closeTaskDetail()
 		}
 
-		openFocusedTask(taskRef.id, taskRef.project_id, screen)
+		const focusProjectId =
+			screen === 'tasks' && selectedSavedFilterProjectId
+				? selectedSavedFilterProjectId
+				: taskRef.project_id
+		openFocusedTask(taskRef.id, focusProjectId, screen)
 	}
 
 	async function handleRemoveTaskRelation(relationKind: TaskRelationKind, otherTaskId: number) {

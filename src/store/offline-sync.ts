@@ -1,5 +1,6 @@
 import {api, type ApiError} from '@/api'
 import type {TaskRelationKind} from '@/types'
+import {isRecord} from '@/utils/type-guards'
 import {
 	getAllMutations,
 	markFailed,
@@ -67,7 +68,7 @@ export async function replayOfflineQueue(): Promise<SyncResult> {
 					entry.endpoint,
 					{
 						method: entry.method,
-						body: isRecordBody(entry.body) ? entry.body : null,
+						body: isRecord(entry.body) ? entry.body : null,
 					},
 				)
 
@@ -124,12 +125,8 @@ function extractIdFromResponse(
 	return null
 }
 
-function isRecordBody(value: unknown): value is Record<string, unknown> {
-	return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
-
 function isTaskMoveReplayPayload(value: unknown): value is TaskMoveReplayPayload {
-	return isRecordBody(value) && value._moveIntent === true
+	return isRecord(value) && value._moveIntent === true
 }
 
 async function replayTaskMove(entry: OfflineMutationEntry): Promise<void> {

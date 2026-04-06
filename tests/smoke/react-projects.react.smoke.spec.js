@@ -7,7 +7,12 @@ let stack
 test.describe.configure({mode: 'serial'})
 
 test.beforeAll(async () => {
-	stack = await startTestStack({legacyConfigured: false})
+	stack = await startTestStack({
+		legacyConfigured: false,
+		envOverrides: {
+			SESSION_MUTATION_RATE_LIMIT_MAX: '100',
+		},
+	})
 })
 
 test.afterAll(async () => {
@@ -17,13 +22,17 @@ test.afterAll(async () => {
 test.beforeEach(async ({page}) => {
 	stack.reset()
 	await page.setViewportSize({width: 900, height: 900})
-	await page.goto(stack.appUrl)
+	await loginWithApiToken(page)
+})
+
+async function loginWithApiToken(page, targetStack = stack) {
+	await page.goto(targetStack.appUrl)
 	await page.locator('[data-action="set-account-auth-mode"][data-auth-mode="apiToken"]').click()
-	await page.locator('[data-account-field="baseUrl"]').fill(`${stack.mock.origin}/api/v1`)
+	await page.locator('[data-account-field="baseUrl"]').fill(`${targetStack.mock.origin}/api/v1`)
 	await page.locator('[data-account-field="apiToken"]').fill('smoke-token')
 	await page.getByRole('button', {name: 'Connect'}).click()
 	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
-})
+}
 
 async function createMockLinkShare(projectId, {name = 'Smoke link', password = '', permission = 1, ...rest} = {}) {
 	return stack.mockApi(`projects/${projectId}/shares`, {
@@ -40,8 +49,24 @@ async function createMockLinkShare(projectId, {name = 'Smoke link', password = '
 	})
 }
 
-async function openProjects(page) {
-	await page.goto(`${stack.appUrl}/projects`)
+async function setMockProjectBackground(projectId, imageId = 'unsplash-1') {
+	return stack.mockApi(`projects/${projectId}/backgrounds/unsplash`, {
+		method: 'POST',
+		headers: {
+			'content-type': 'application/json',
+		},
+		body: JSON.stringify({
+			id: imageId,
+			url: `https://images.example.test/${imageId}/full`,
+			thumb: `https://images.example.test/${imageId}/thumb`,
+			blur_hash: 'L5H2EC=PM+yV0g-mq.wG9c010J}I',
+			info: {},
+		}),
+	})
+}
+
+async function openProjects(page, targetStack = stack) {
+	await page.goto(`${targetStack.appUrl}/projects`)
 	await expect
 		.poll(async () => page.evaluate(() => window.location.pathname))
 		.toBe('/projects')
@@ -175,6 +200,224 @@ test('project delete can be undone before the deferred commit runs', async ({pag
 	await expect(page.locator('.screen-body > .project-node').filter({hasText: 'Undo Project'})).toHaveCount(1)
 })
 
+test('background polling refreshes projects after an external project change', async ({page}) => {
+	await page.addInitScript(() => {
+		window.__VIKUNJA_POLLING__ = {
+			taskIntervalMs: 250,
+			projectIntervalMs: 250,
+			mutationDebounceMs: 0,
+		}
+	})
+
+	await page.reload()
+	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
+	await openProjects(page)
+
+	await stack.mockApi('projects/2', {
+		method: 'POST',
+		headers: {
+			'content-type': 'application/json',
+		},
+		body: JSON.stringify({
+			title: 'Work Synced',
+		}),
+	})
+
+	await expect(page.locator('[data-project-node-id="2"] .project-card-title')).toContainText('Work Synced', {timeout: 5000})
+})
+
+test('project task views can be created from filters and deleted from the view menu', async ({page}) => {
+	await page.goto(`${stack.appUrl}/projects/2`)
+	await expect(page.getByRole('heading', {name: 'Work'})).toBeVisible()
+
+	await page.getByRole('button', {name: 'Filters'}).click()
+	await page.locator('[data-task-filter-field="priority"]').selectOption('5')
+	await page.locator('[data-action="apply-task-filters"]').click()
+	await expect(page.locator('.task-row').filter({hasText: 'Smoke suite rollout'})).toHaveCount(1)
+
+	await page.locator('[data-action="toggle-project-view-menu"]').click()
+	await page.locator('[data-project-view-title="true"]').fill('Critical work')
+	await page.locator('[data-project-view-kind="true"]').selectOption('list')
+	await page.locator('[data-project-view-seed-filter="true"]').check()
+	await page.locator('[data-action="create-project-view"]').click()
+
+	await expect.poll(async () => {
+		const views = await stack.mockApi('projects/2/views')
+		return views.find(view => view.title === 'Critical work')?.filter?.filter || ''
+	}).toContain('priority = 5')
+	const createdView = (await stack.mockApi('projects/2/views')).find(view => view.title === 'Critical work')
+	expect(createdView).toBeTruthy()
+
+	await page.locator('[data-action="toggle-project-view-menu"]').click()
+	await expect(page.locator(`[data-action="select-project-view"][data-view-id="${createdView?.id}"]`)).toHaveClass(/is-active/)
+	page.once('dialog', dialog => dialog.accept())
+	await page.locator(`[data-action="delete-project-view"][data-view-id="${createdView?.id}"]`).click()
+	await expect.poll(async () => {
+		const views = await stack.mockApi('projects/2/views')
+		return views.some(view => view.id === createdView?.id)
+	}).toBe(false)
+	await page.locator('[data-action="toggle-project-view-menu"]').click()
+	await expect(page.locator('[data-action="select-project-view"][data-view-id="12"]')).toHaveClass(/is-active/)
+})
+
+test('single-view projects do not expose a delete action in the view menu', async ({page}) => {
+	await page.goto(`${stack.appUrl}/projects/3`)
+	await expect(page.getByRole('heading', {name: 'Travel'})).toBeVisible()
+
+	await page.locator('[data-action="toggle-project-view-menu"]').click()
+	await expect(page.locator('[data-action="select-project-view"][data-view-id="13"]')).toBeVisible()
+	await expect(page.locator('[data-action="delete-project-view"]')).toHaveCount(0)
+})
+
+test('project detail can upload unsplash and remove project backgrounds', async ({page}) => {
+	await openProjects(page)
+
+	const workNode = page.locator('[data-project-node-id="2"]')
+	await workNode.locator('[data-action="toggle-project-menu"]').click()
+	await page.locator('[data-menu-root="true"] [data-action="edit-project"][data-project-id="2"]').click()
+	await expect(page.locator('[data-project-background-banner="true"]')).toHaveAttribute('data-has-background', 'false')
+
+	await page.locator('[data-action="open-project-background-sheet"]').click()
+	await page.locator('[data-project-background-file="true"]').setInputFiles({
+		name: 'background.png',
+		mimeType: 'image/png',
+		buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO6V1x8AAAAASUVORK5CYII=', 'base64'),
+	})
+	await expect(page.locator('[data-project-background-banner="true"]')).toHaveAttribute('data-has-background', 'true')
+	await expect.poll(async () => Boolean((await stack.mockApi('projects/2')).background_information)).toBe(true)
+
+	page.once('dialog', dialog => dialog.accept())
+	await page.locator('[data-action="remove-project-background"]').click()
+	await expect(page.locator('[data-project-background-banner="true"]')).toHaveAttribute('data-has-background', 'false')
+	await expect.poll(async () => (await stack.mockApi('projects/2')).background_information).toBeNull()
+
+	await page.locator('[data-action="open-project-background-sheet"]').click()
+	await page.locator('[data-background-tab="unsplash"]').click()
+	await page.locator('[data-unsplash-search-input="true"]').fill('mountain')
+	const firstImage = page.locator('.unsplash-grid-item').first()
+	await expect(firstImage).toBeVisible()
+	await firstImage.click()
+	await expect(page.locator('[data-project-background-banner="true"]')).toHaveAttribute('data-has-background', 'true')
+	await expect.poll(async () => Boolean((await stack.mockApi('projects/2')).background_information)).toBe(true)
+})
+
+test('projects screen renders an existing server background in the project tree', async ({page}) => {
+	await setMockProjectBackground(2)
+
+	await openProjects(page)
+
+	const workBackgroundRow = page.locator('[data-project-node-id="2"] [data-project-background-surface="node"]')
+	await expect(workBackgroundRow).toHaveAttribute('data-has-background', 'true')
+	await expect(workBackgroundRow.locator('.project-surface-background-image')).toHaveCount(1)
+})
+
+test('project tasks screen renders an existing server background in the project header', async ({page}) => {
+	await setMockProjectBackground(2)
+
+	await page.goto(`${stack.appUrl}/projects/2`)
+	await expect(page.getByRole('heading', {name: 'Work'})).toBeVisible()
+
+	const shellBackground = page.locator('[data-project-background-surface="shell"]').first()
+	await expect(shellBackground).toHaveAttribute('data-has-background', 'true')
+	await expect(shellBackground.locator('.project-surface-background-image')).toHaveCount(1)
+
+	const projectHeader = page.locator('[data-project-background-surface="screen"]').first()
+	await expect(projectHeader).toHaveAttribute('data-has-background', 'true')
+	await expect(projectHeader.locator('.project-surface-background-image')).toHaveCount(1)
+})
+
+test('project surfaces render a blur-hash preview when the full background image is unavailable', async ({page}) => {
+	await setMockProjectBackground(2)
+	await page.route('**/api/projects/2/background', async route => {
+		await route.fulfill({
+			status: 404,
+			contentType: 'application/json',
+			body: JSON.stringify({error: 'No background set.'}),
+		})
+	})
+
+	await page.goto(`${stack.appUrl}/projects/2`)
+	await expect(page.getByRole('heading', {name: 'Work'})).toBeVisible()
+
+	const shellBackground = page.locator('[data-project-background-surface="shell"]').first()
+	await expect(shellBackground).toHaveAttribute('data-has-background', 'true')
+	await expect(shellBackground.locator('.project-surface-background-image')).toHaveCount(1)
+
+	const projectHeader = page.locator('[data-project-background-surface="screen"]').first()
+	await expect(projectHeader).toHaveAttribute('data-has-background', 'true')
+	await expect(projectHeader.locator('.project-surface-background-image')).toHaveCount(1)
+})
+
+test('project detail loads an existing server background when the project already has one', async ({page}) => {
+	await setMockProjectBackground(2)
+
+	await openProjects(page)
+	const workNode = page.locator('[data-project-node-id="2"]')
+	await workNode.locator('[data-action="toggle-project-menu"]').click()
+	await page.locator('[data-menu-root="true"] [data-action="edit-project"][data-project-id="2"]').click()
+	await expect(page.locator('[data-project-background-banner="true"]')).toHaveAttribute('data-has-background', 'true')
+	await expect(page.locator('.project-background-image')).toHaveCount(1)
+})
+
+test('project detail keeps showing a saved background after reopening the settings sheet', async ({page}) => {
+	await openProjects(page)
+
+	const workNode = page.locator('[data-project-node-id="2"]')
+	await workNode.locator('[data-action="toggle-project-menu"]').click()
+	await page.locator('[data-menu-root="true"] [data-action="edit-project"][data-project-id="2"]').click()
+	await page.locator('[data-action="open-project-background-sheet"]').click()
+	await page.locator('[data-project-background-file="true"]').setInputFiles({
+		name: 'background.png',
+		mimeType: 'image/png',
+		buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO6V1x8AAAAASUVORK5CYII=', 'base64'),
+	})
+	await expect.poll(async () => Boolean((await stack.mockApi('projects/2')).background_information)).toBe(true)
+
+	await page.goto(`${stack.appUrl}/projects`)
+	await expect(page.getByRole('heading', {name: 'Projects'})).toBeVisible()
+	await workNode.locator('[data-action="toggle-project-menu"]').click()
+	await page.locator('[data-menu-root="true"] [data-action="edit-project"][data-project-id="2"]').click()
+	await expect(page.locator('[data-project-background-banner="true"]')).toHaveAttribute('data-has-background', 'true')
+	await expect(page.locator('[data-action="remove-project-background"]')).toHaveCount(1)
+	await expect(page.locator('.project-background-image')).toHaveCount(1)
+})
+
+test('focused project tasks keep the project shell background when task focus opens', async ({page}) => {
+	await setMockProjectBackground(2)
+
+	await page.goto(`${stack.appUrl}/projects/2`)
+	await expect(page.getByRole('heading', {name: 'Work'})).toBeVisible()
+	await page.locator('.task-row').filter({hasText: 'Smoke suite rollout'}).locator('[data-action="open-task-focus"]').click()
+	await expect(page.locator('.task-focus-summary-title').filter({hasText: 'Smoke suite rollout'})).toBeVisible()
+
+	const shellBackground = page.locator('[data-project-background-surface="shell"]').first()
+	await expect(shellBackground).toHaveAttribute('data-has-background', 'true')
+	await expect(shellBackground.locator('.project-surface-background-image')).toHaveCount(1)
+})
+
+test('project background sheet hides the unsplash tab when the provider is unavailable', async ({page}) => {
+	const localStack = await startTestStack({
+		legacyConfigured: false,
+		mockVikunjaOptions: {
+			enabledBackgroundProviders: [],
+		},
+	})
+
+	try {
+		await page.setViewportSize({width: 900, height: 900})
+		await loginWithApiToken(page, localStack)
+		await openProjects(page, localStack)
+		const workNode = page.locator('[data-project-node-id="2"]')
+		await workNode.locator('[data-action="toggle-project-menu"]').click()
+		await page.locator('[data-menu-root="true"] [data-action="edit-project"][data-project-id="2"]').click()
+		await page.locator('[data-action="open-project-background-sheet"]').click()
+		await expect(page.locator('[data-background-tab="upload"]')).toBeVisible()
+		await expect(page.locator('[data-background-tab="unsplash"]')).toHaveCount(0)
+	} finally {
+		await localStack.stop()
+	}
+})
+
 test('project detail manages direct shares team shares and link shares', async ({page}) => {
 	await openProjects(page)
 	await expect(page.locator('.workspace-screen.is-active .screen-body')).toBeVisible()
@@ -234,6 +477,188 @@ test('project detail manages direct shares team shares and link shares', async (
 	await createdShareRow.locator('[data-action="toggle-project-link-share"]').click()
 	await expect(createdShareRow.locator('[data-project-link-share-detail]')).toContainText('Groceries link')
 	await expect(page.getByText('The project share does not exist.')).toHaveCount(0)
+})
+
+test('project detail manages project webhooks from the detail sheet', async ({page}) => {
+	await openProjects(page)
+
+	const workNode = page.locator('[data-project-node-id="2"]')
+	await workNode.locator('[data-action="toggle-project-menu"]').click()
+	await page.locator('[data-menu-root="true"] [data-action="edit-project"][data-project-id="2"]').click()
+
+	await page.locator('[data-detail-section-toggle="webhooks"]').click()
+	const webhooksSection = page.locator('[data-detail-section="webhooks"]')
+	await webhooksSection.locator('[data-webhook-target-url="project"]').fill('https://example.test/project-webhook')
+	await webhooksSection.locator('[data-webhook-event="project-create:task.updated"]').check({force: true})
+	await webhooksSection.locator('[data-action="create-webhook"][data-webhook-scope-action="project"]').click()
+
+	await expect.poll(async () => {
+		const hooks = await stack.mockApi('projects/2/webhooks')
+		return hooks.length
+	}).toBe(1)
+
+	await expect(webhooksSection.locator('[data-webhook-row]').first()).toContainText('https://example.test/project-webhook')
+	await webhooksSection.locator('[data-webhook-event="project-existing-1:project.updated"]').check({force: true})
+	await webhooksSection.locator('[data-action="save-webhook-events"][data-webhook-id="1"]').click()
+
+	await expect.poll(async () => {
+		const hooks = await stack.mockApi('projects/2/webhooks')
+		return hooks[0]?.events || []
+	}).toEqual(['task.updated', 'project.updated'])
+})
+
+test('project detail shows the current session access level before share controls', async ({page}) => {
+	await openProjects(page)
+
+	const workNode = page.locator('[data-project-node-id="2"]')
+	await workNode.locator('[data-action="toggle-project-menu"]').click()
+	await page.locator('[data-menu-root="true"] [data-action="share-project"][data-project-id="2"]').click()
+
+	const projectSection = page.locator('[data-detail-section="project"]')
+	await expect(projectSection.getByText('Your access')).toBeVisible()
+	await expect(projectSection.getByText('Admin')).toBeVisible()
+	await expect(projectSection.getByText('This session can edit the project and manage all project share levels.')).toBeVisible()
+})
+
+test('project detail keeps sharing read-only when project permission is read-only', async ({page}) => {
+	await stack.mockApi('projects/2', {
+		method: 'POST',
+		headers: {
+			'content-type': 'application/json',
+		},
+		body: JSON.stringify({
+			max_permission: 0,
+		}),
+	})
+
+	await page.reload()
+	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
+	await openProjects(page)
+
+	await page.locator('[data-project-node-id="2"] [data-action="toggle-project-menu"]').click()
+	await page.locator('[data-menu-root="true"] [data-action="share-project"][data-project-id="2"]').click()
+
+	await page.locator('[data-detail-section-toggle="sharedUsers"]').click()
+	await expect(page.getByText('Sharing requires Read & Write or Admin permission on this project.')).toBeVisible()
+	await expect(page.locator('.project-share-inline-form input[placeholder="Search users"]')).toBeDisabled()
+	await expect(page.locator('.project-share-inline-form .project-share-permission-select').first()).toBeDisabled()
+
+	await page.locator('[data-detail-section-toggle="linkShares"]').click()
+	await expect(page.locator('[data-action="create-project-link-share"]')).toBeDisabled()
+})
+
+test('project writers can manage non-admin shares without admin share options', async ({page}) => {
+	await stack.mockApi('projects/2', {
+		method: 'POST',
+		headers: {
+			'content-type': 'application/json',
+		},
+		body: JSON.stringify({
+			max_permission: 1,
+		}),
+	})
+
+	await page.reload()
+	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
+	await openProjects(page)
+
+	await page.locator('[data-project-node-id="2"] [data-action="toggle-project-menu"]').click()
+	await page.locator('[data-menu-root="true"] [data-action="share-project"][data-project-id="2"]').click()
+	await expect(page.locator('[data-project-detail-title]')).toBeEnabled()
+
+	await page.locator('[data-detail-section-toggle="sharedUsers"]').click()
+	await expect(page.getByText('Admin shares require Admin permission on this project.')).toBeVisible()
+	const userPermissionSelect = page.locator('.project-share-inline-form .project-share-permission-select').first()
+	await expect(userPermissionSelect).toBeEnabled()
+	await expect(userPermissionSelect.locator('option')).toHaveText(['Read', 'Read & Write'])
+	await page.locator('.project-share-inline-form input[placeholder="Search users"]').fill('jamie')
+	await page.locator('.detail-assignee-search-result').filter({hasText: 'Jamie Rivers'}).click()
+	await expect(page.locator('.project-share-row').filter({hasText: 'Jamie Rivers'})).toBeVisible()
+	await expect.poll(async () => {
+		const shares = await stack.mockApi('projects/2/users')
+		return shares.some(user => user.username === 'jamie' && user.permission === 1)
+	}).toBe(true)
+
+	await page.locator('[data-detail-section-toggle="linkShares"]').click()
+	const linkPermissionSelect = page.locator('.project-link-share-form .project-share-permission-select')
+	await expect(linkPermissionSelect.locator('option')).toHaveText(['Read', 'Read & Write'])
+	await page.locator('[data-project-link-share-name]').fill('Writer link')
+	await page.locator('[data-action="create-project-link-share"]').click()
+	await expect(page.locator('[data-project-link-share-row]').filter({hasText: 'Writer link'})).toBeVisible()
+	await expect.poll(async () => {
+		const shares = await stack.mockApi('projects/2/shares')
+		return shares.some(share => share.name === 'Writer link' && share.permission === 1)
+	}).toBe(true)
+})
+
+test('project writers cannot modify or remove existing admin shares', async ({page}) => {
+	await stack.mockApi('projects/2', {
+		method: 'POST',
+		headers: {
+			'content-type': 'application/json',
+		},
+		body: JSON.stringify({
+			max_permission: 1,
+		}),
+	})
+	await stack.mockApi('projects/2/users', {
+		method: 'PUT',
+		headers: {
+			'content-type': 'application/json',
+		},
+		body: JSON.stringify({
+			username: 'jamie',
+			permission: 2,
+		}),
+	})
+
+	await page.reload()
+	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
+	await openProjects(page)
+
+	await page.locator('[data-project-node-id="2"] [data-action="toggle-project-menu"]').click()
+	await page.locator('[data-menu-root="true"] [data-action="share-project"][data-project-id="2"]').click()
+
+	await page.locator('[data-detail-section-toggle="sharedUsers"]').click()
+	await expect(page.getByText('Admin shares require Admin permission on this project.')).toBeVisible()
+	const jamieShareRow = page.locator('.project-share-row').filter({hasText: 'Jamie Rivers'})
+	await expect(jamieShareRow).toBeVisible()
+	await expect(jamieShareRow.locator('.project-share-permission-select')).toBeDisabled()
+	await expect(jamieShareRow.getByRole('button', {name: 'Remove'})).toBeDisabled()
+})
+
+test('project detail keeps sharing available when project permission metadata is missing but the current account still matches the project payload', async ({page}) => {
+	await stack.mockApi('projects/2', {
+		method: 'POST',
+		headers: {
+			'content-type': 'application/json',
+		},
+		body: JSON.stringify({
+			max_permission: 0,
+			owner: {
+				id: 1,
+				name: 'Smoke User',
+				username: 'smoke-user',
+				email: 'smoke@example.test',
+			},
+		}),
+	})
+
+	await openProjects(page)
+	const workNode = page.locator('[data-project-node-id="2"]')
+	await workNode.locator('[data-action="toggle-project-menu"]').click()
+	await page.locator('[data-menu-root="true"] [data-action="share-project"][data-project-id="2"]').click()
+
+	await expect(page.getByText('Sharing requires Read & Write or Admin permission on this project.')).toHaveCount(0)
+
+	await page.locator('[data-detail-section-toggle="sharedUsers"]').click()
+	await expect(page.locator('.project-share-inline-form input[placeholder="Search users"]')).toBeEnabled()
+
+	await page.locator('[data-detail-section-toggle="linkShares"]').click()
+	await expect(page.locator('[data-action="create-project-link-share"]')).toBeEnabled()
+	await page.locator('[data-project-link-share-name]').fill('Recovered share access')
+	await page.locator('[data-action="create-project-link-share"]').click()
+	await expect(page.locator('[data-project-link-share-row]').filter({hasText: 'Recovered share access'})).toBeVisible()
 })
 
 test('project link share inline details show password protection and expiry metadata', async ({page}) => {
@@ -517,6 +942,30 @@ test('shared link shell keeps header compact after filters and switches views fr
 	await viewMenu.getByRole('button', {name: 'Board'}).click()
 	await expect(page.getByRole('button', {name: 'View: kanban'})).toBeVisible()
 	await expect(page.locator('.kanban-lane-head').first()).toBeVisible()
+})
+
+test('shared link project detail blocks share creation and mutation actions', async ({page}) => {
+	const sharedProjectLink = await createMockLinkShare(2, {name: 'Shared project link'})
+	await createMockLinkShare(2, {name: 'Internal managed link'})
+
+	await page.context().clearCookies()
+	await page.goto(`${stack.appUrl}/share/${sharedProjectLink.hash}/auth`)
+
+	await expect(page.locator('.shared-project-shell')).toBeVisible()
+	await page.getByRole('button', {name: 'Project details'}).click()
+	await expect(page.locator('[data-project-detail-title]')).toHaveValue('Work')
+
+	await page.locator('[data-detail-section-toggle="sharedUsers"]').click()
+	await expect(page.getByText('Shared-link sessions cannot create or manage project shares.')).toBeVisible()
+	await expect(page.locator('.project-share-inline-form input[placeholder="Search users"]')).toBeDisabled()
+	await expect(page.locator('.project-share-inline-form .project-share-permission-select').first()).toBeDisabled()
+
+	await page.locator('[data-detail-section-toggle="linkShares"]').click()
+	await expect(page.locator('[data-action="create-project-link-share"]')).toBeDisabled()
+	const managedLinkRow = page.locator('[data-project-link-share-row]').filter({hasText: 'Internal managed link'})
+	await expect(managedLinkRow).toBeVisible()
+	await managedLinkRow.locator('[data-action="toggle-project-link-share"]').click()
+	await expect(managedLinkRow.locator('[data-action="remove-project-link-share"]')).toBeDisabled()
 })
 
 test('password-protected shared link asks for a password and opens after correct authentication', async ({page}) => {

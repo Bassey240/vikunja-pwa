@@ -6,6 +6,8 @@ export type SettingsSectionId =
 	| 'offline'
 	| 'notifications'
 	| 'security'
+	| 'webhooks'
+	| 'migration'
 	| 'collaboration'
 	| 'userAdministration'
 	| 'teams'
@@ -22,6 +24,20 @@ export function isCurrentUserTeamAdmin(team: Team, currentUsername: string) {
 	}
 
 	return (team.members || []).some(member => member.username === username && member.admin)
+}
+
+export function canManageTeam(team: Team, currentUsername: string) {
+	return isCurrentUserTeamAdmin(team, currentUsername)
+}
+
+export function canManageTeamMember(team: Team, currentUsername: string, targetUsername: string) {
+	const normalizedCurrentUsername = `${currentUsername || ''}`.trim().toLowerCase()
+	const normalizedTargetUsername = `${targetUsername || ''}`.trim().toLowerCase()
+	if (!normalizedCurrentUsername || !normalizedTargetUsername) {
+		return false
+	}
+
+	return normalizedCurrentUsername === normalizedTargetUsername || canManageTeam(team, currentUsername)
 }
 
 export function getBlockedTeamManagementMessage(currentUserIsTeamAdmin: boolean, teamHasNoAdmins: boolean) {

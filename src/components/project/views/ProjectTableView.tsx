@@ -8,6 +8,7 @@ import {
 	getUserInitials,
 	normalizePercentDone,
 } from '@/utils/formatting'
+import {normalizeLabelColor, pickLabelTextColor} from '@/utils/color-helpers'
 import {getMenuAnchor} from '@/utils/menuPosition'
 import {useMemo, useState} from 'react'
 import {useNavigate} from 'react-router-dom'
@@ -60,9 +61,11 @@ const DEFAULT_VISIBLE_COLUMNS: TableColumnId[] = ['index', 'done', 'title', 'lab
 export default function ProjectTableView({
 	projectId,
 	tasks,
+	focusProjectIdOverride = null,
 }: {
 	projectId: number
 	tasks: Task[]
+	focusProjectIdOverride?: number | null
 }) {
 	const navigate = useNavigate()
 	const projects = useAppStore(state => state.projects)
@@ -162,7 +165,9 @@ export default function ProjectTableView({
 						setFilterOpen(false)
 					}}
 					onReset={() => {
-						void loadSavedFilterTasks(null)
+						if (projectId > 0) {
+							void loadSavedFilterTasks(null)
+						}
 						resetTaskFilterDraft()
 						void applyTaskFilterDraft(taskFilterConfig.allowProject)
 					}}
@@ -170,7 +175,7 @@ export default function ProjectTableView({
 						void loadSavedFilterTasks(selectedProjectId)
 						setFilterOpen(false)
 						if (selectedProjectId) {
-							navigate('/filters')
+							navigate(`/projects/${selectedProjectId}`)
 						}
 					}}
 					onManageFilters={() => {
@@ -214,7 +219,7 @@ export default function ProjectTableView({
 											type="button"
 											onClick={() => {
 												void openTaskDetail(task.id)
-												openFocusedTask(task.id, task.project_id, 'tasks')
+												openFocusedTask(task.id, focusProjectIdOverride || task.project_id, 'tasks')
 											}}
 										>
 											<span className="project-table-task-title">{task.title}</span>
@@ -283,27 +288,6 @@ export default function ProjectTableView({
 			) : null}
 		</div>
 	)
-}
-
-function normalizeLabelColor(value: string) {
-	if (!value) {
-		return '#dbe8ff'
-	}
-
-	return value.startsWith('#') ? value : `#${value}`
-}
-
-function pickLabelTextColor(hex: string) {
-	const normalized = hex.replace('#', '')
-	if (normalized.length !== 6) {
-		return '#170f0d'
-	}
-
-	const red = parseInt(normalized.slice(0, 2), 16)
-	const green = parseInt(normalized.slice(2, 4), 16)
-	const blue = parseInt(normalized.slice(4, 6), 16)
-	const brightness = (red * 299 + green * 587 + blue * 114) / 1000
-	return brightness > 170 ? '#170f0d' : '#fff7f1'
 }
 
 function compareTasks(left: Task, right: Task, key: TableColumn['sortKey'], order: 'asc' | 'desc') {

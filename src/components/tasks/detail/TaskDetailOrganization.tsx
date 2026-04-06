@@ -2,7 +2,8 @@ import UserAvatar from '@/components/common/UserAvatar'
 import type {FormEvent} from 'react'
 import type {Label, TaskAssignee} from '@/types'
 import {getUserDisplayName} from '@/utils/formatting'
-import {pickLabelTextColor, type TaskDetailSection} from '@/utils/task-detail-helpers'
+import {normalizeLabelColor, pickLabelTextColor} from '@/utils/color-helpers'
+import type {TaskDetailSection} from '@/utils/task-detail-helpers'
 import CollapsibleSection from './CollapsibleSection'
 
 export default function TaskDetailOrganization({
@@ -50,7 +51,7 @@ export default function TaskDetailOrganization({
 					<div className="detail-label-list">
 						{taskLabels.length > 0 ? taskLabels.map(label => {
 							const hex = label.hex_color || label.hexColor || ''
-							const background = hex ? (hex.startsWith('#') ? hex : `#${hex}`) : '#dbe8ff'
+							const background = normalizeLabelColor(hex)
 							return (
 								<div key={label.id} className="label-chip" style={{background, color: pickLabelTextColor(background)}}>
 									<span>{label.title}</span>

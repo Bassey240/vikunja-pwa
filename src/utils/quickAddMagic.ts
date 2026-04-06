@@ -1,3 +1,5 @@
+import {addDays} from '@/utils/date-helpers'
+
 const WEEKDAY_INDEX: Record<string, number> = {
 	sun: 0,
 	sunday: 0,
@@ -250,7 +252,7 @@ function extractDate(text: string, now: Date) {
 		const useNextWeek = Boolean(weekdayMatch[2])
 		const weekday = WEEKDAY_INDEX[(weekdayMatch[3] || '').toLowerCase()]
 		if (typeof weekday === 'number') {
-			const date = nextWeekday(now, weekday, useNextWeek)
+			const date = nextWeekdayForQuickAdd(now, weekday, useNextWeek)
 			return removeAndApplyDate(text, weekdayMatch[0].trim(), withDefaultTime(date))
 		}
 	}
@@ -350,7 +352,7 @@ function normalizeYear(rawYear: string | undefined, fallbackYear: number) {
 	return numeric
 }
 
-function nextWeekday(now: Date, weekday: number, forceNextWeek: boolean) {
+function nextWeekdayForQuickAdd(now: Date, weekday: number, forceNextWeek: boolean) {
 	const date = startOfDay(now)
 	let distance = (weekday + 7 - date.getDay()) % 7
 	if (forceNextWeek || distance === 0) {
@@ -375,12 +377,6 @@ function withDefaultTime(date: Date) {
 function withTime(date: Date, hours: number, minutes: number) {
 	const nextDate = new Date(date)
 	nextDate.setHours(hours, minutes, 0, 0)
-	return nextDate
-}
-
-function addDays(date: Date, days: number) {
-	const nextDate = new Date(date)
-	nextDate.setDate(nextDate.getDate() + days)
 	return nextDate
 }
 

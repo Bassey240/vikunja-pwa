@@ -4,6 +4,7 @@ import {calculateMenuPosition, getMenuAnchor} from '@/utils/menuPosition'
 import useWideLayout from '@/hooks/useWideLayout'
 import InlineRootProjectComposer from '@/components/projects/InlineRootProjectComposer'
 import type {Project} from '@/types'
+import {buildSavedFilterProject, isSavedFilterProject} from '@/utils/saved-filters'
 import type {CSSProperties} from 'react'
 import {useEffect, useMemo, useState} from 'react'
 import {useLocation, useNavigate} from 'react-router-dom'
@@ -38,7 +39,9 @@ export default function WideSidebar({collapsed, onToggleCollapsed}: WideSidebarP
 	const account = useAppStore(state => state.account)
 	const connected = useAppStore(state => state.connected)
 	const projects = useAppStore(state => state.projects)
+	const savedFilters = useAppStore(state => state.savedFilters)
 	const selectedProjectId = useAppStore(state => state.selectedProjectId)
+	const selectedSavedFilterProjectId = useAppStore(state => state.selectedSavedFilterProjectId)
 	const openMenu = useAppStore(state => state.openMenu)
 	const setOpenMenu = useAppStore(state => state.setOpenMenu)
 	const closeTaskDetail = useAppStore(state => state.closeTaskDetail)
@@ -47,6 +50,7 @@ export default function WideSidebar({collapsed, onToggleCollapsed}: WideSidebarP
 	const navigateToProject = useAppStore(state => state.navigateToProject)
 	const openProjectDetail = useAppStore(state => state.openProjectDetail)
 	const openProjectComposer = useAppStore(state => state.openProjectComposer)
+	const loadSavedFilterTasks = useAppStore(state => state.loadSavedFilterTasks)
 	const getProjectAncestors = useAppStore(state => state.getProjectAncestors)
 	const [expandedProjectIds, setExpandedProjectIds] = useState<Set<number>>(new Set())
 
@@ -71,11 +75,17 @@ export default function WideSidebar({collapsed, onToggleCollapsed}: WideSidebarP
 		})
 	}, [getProjectAncestors, selectedProjectId])
 
-	const rootProjects = useMemo(() => getVisibleRootProjects(projects), [projects])
+	const savedFilterProjects = useMemo(() => savedFilters.map(buildSavedFilterProject), [savedFilters])
+	const rootProjects = useMemo(() => [...getVisibleRootProjects(projects), ...savedFilterProjects], [projects, savedFilterProjects])
 	const expandableProjectIds = useMemo(() => getExpandableProjectIds(projects), [projects])
 	const projectContextActive = location.pathname.startsWith('/projects/')
+	const routeProjectId = projectContextActive ? Number(location.pathname.split('/')[2] || 0) || null : null
 	const activeSidebarProjectId =
-		location.pathname === '/projects' ? null : projectContextActive ? selectedProjectId : null
+		location.pathname === '/projects'
+			? null
+			: projectContextActive
+				? routeProjectId ?? selectedSavedFilterProjectId ?? selectedProjectId
+				: null
 	const sidebarProjectsMenu = openMenu?.kind === 'sidebar-projects' ? openMenu : null
 
 	function goTo(path: string) {
@@ -98,6 +108,11 @@ export default function WideSidebar({collapsed, onToggleCollapsed}: WideSidebarP
 	}
 
 	function openProject(projectId: number) {
+		if (projectId < 0) {
+			void loadSavedFilterTasks(projectId, {silent: true})
+			navigate(`/projects/${projectId}`)
+			return
+		}
 		void navigateToProject(projectId)
 		navigate(`/projects/${projectId}`)
 		if (isWideLayout) {
@@ -249,13 +264,14 @@ function SidebarProjectItem({
 	depth: number
 }) {
 	const children = getVisibleChildProjects(project.id, projects)
+	const savedFilterProject = isSavedFilterProject(project)
 	const expanded = expandedProjectIds.has(project.id)
 	const active = selectedProjectId === project.id
 
 	return (
 		<div className="wide-sidebar-project-item" style={{'--depth': depth} as CSSProperties} data-project-node-id={project.id}>
 			<div className={`wide-sidebar-project-row ${active ? 'is-active' : ''}`.trim()}>
-				{children.length > 0 ? (
+				{!savedFilterProject && children.length > 0 ? (
 					<button
 						className="wide-sidebar-project-toggle"
 						type="button"
@@ -268,10 +284,11 @@ function SidebarProjectItem({
 					<span className="wide-sidebar-project-toggle-spacer" aria-hidden="true"></span>
 				)}
 				<button className="wide-sidebar-project-link" type="button" onClick={() => onOpenProject(project.id)}>
-					{project.title}
+					<span>{project.title}</span>
+					{savedFilterProject ? <span className="wide-sidebar-project-kind">Filter</span> : null}
 				</button>
 			</div>
-			{expanded && children.length > 0 ? (
+			{!savedFilterProject && expanded && children.length > 0 ? (
 				<div className="wide-sidebar-project-children">
 					{children.map(child => (
 						<SidebarProjectItem

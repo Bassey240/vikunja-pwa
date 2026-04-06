@@ -22,26 +22,84 @@ admin tooling.
 
 ## Current product state
 
-The current public release target is `0.3.1`. It is a focused hotfix on top of
-`0.3.0-alpha` that stabilizes task drag-and-drop in Inbox and Today, hardens
-drag cleanup across screen changes, and keeps expanded project previews
-list-task-only even when project focus was using Kanban.
+The current public release target is `0.4.0`. It builds on `0.3.1` and moves
+the app from a drag-and-drop stabilization hotfix into a broader integration
+and control-plane release: webhooks, migration imports, OpenID Connect login,
+saved-filter workspaces, project views, project backgrounds, background refresh
+polling, and a clearer in-app administration surface are now part of the same
+product.
+
+The main remaining release risk is testing depth rather than missing
+implementation. Webhooks, migration imports, and OpenID Connect still need
+broader real-instance validation on real providers and receivers before this
+release should be treated as fully baked.
 
 - Today-first shell with Inbox, Upcoming, Projects, Search, Filters, Labels, and Settings
 - nested sub-project browsing with inline parent/child task trees and continuous add flows
 - list, Kanban, Table, and enhanced Gantt project views backed by the real Vikunja API
 - responsive desktop and tablet shell with sidebar and inspector behavior
 - collaboration flows for users, teams, project sharing, link shares, and shared-project access
+- user and project webhooks with in-app event selection and per-project management
+- migration tools for Todoist, Trello, Microsoft To Do, TickTick, and Vikunja export imports, with OAuth callback completion and file-upload flows
+- OpenID Connect sign-in with provider discovery, redirect initiation, callback completion, and session bootstrap
+- project view management with create/delete flows and seeded views from current filters
+- project background management with upload/remove, Unsplash support, blur-hash previews, and project-surface rendering
+- saved filters with a structured builder, advanced-clause composition, and project-style workspace integration
 - expanded account/security coverage: avatar control, session management, password/email changes, data export, deletion scheduling, 2FA, CalDAV tokens, and API tokens
 - full offline editing for supported task and project mutations with IndexedDB persistence and reconnect replay
-- backend-managed account sessions, onboarding flows, instance-aware auth capability checks, and notification preferences
+- backend-managed account sessions, onboarding flows, instance-aware auth capability checks, background refresh polling, and notification preferences
 - installable PWA runtime with offline reopen support, service-worker shell caching, offline queue restore, and notification setup
-- optional admin control-plane features for user management, SMTP diagnostics, and deployment-aware apply/restart
+- optional administration features for operator status, user management, SMTP diagnostics, migration-provider configuration, dump/restore, repair, and deployment-aware apply/restart
 
-Recent work has shifted from baseline parity to coherence: planning, offline
-resilience, Kanban interaction polish, and deeper account/security settings are
-now part of the same product, and `0.3.1` tightens one of the most visible
-rough edges in daily use.
+Recent work has shifted from baseline parity to operational coherence:
+planning, offline resilience, external integrations, auth flexibility, and
+operator-facing configuration now live in the same shell instead of forcing a
+handoff back to the stock Vikunja frontend.
+
+## 0.4.0 scope
+
+`0.4.0` is the first release where the PWA can cover the main external
+integration loops directly: subscribe to Vikunja webhooks, start supported
+imports, complete OIDC login, manage project backgrounds, create project views,
+and work from saved filters as first-class project workspaces. It also rolls in
+the recent permission/admin cleanup and security-hardening pass.
+
+For release readiness, the remaining caveat is testing depth rather than
+missing implementation: the heaviest remaining manual validation is still on
+real webhook delivery, real OAuth migration providers, and real OIDC providers.
+
+## What's New In 0.4.0
+
+- User webhooks are now manageable from `Settings`, and project webhooks are now manageable from `Project detail`, including target URL, secret, and event selection.
+- Migration imports are now available inside the PWA for Todoist, Trello, Microsoft To Do, TickTick, and Vikunja export flows, with OAuth callback handling and per-service status reporting.
+- OpenID Connect login is now fully wired end to end: provider discovery, redirect launch, callback completion, and PWA session creation.
+- Project views can now be created and deleted inside the PWA, and new views can be seeded directly from the current task-filter state.
+- Project backgrounds are now supported end to end in the PWA, including upload/remove, Unsplash selection, blur-hash fallback previews, project-tree rendering, and project/task workspace backgrounds.
+- Saved filters can now be created, edited, and deleted in-app, then opened as filter projects in the normal Projects workspace with the same task surfaces and drag handling as other project workspaces.
+- The settings admin surface has been clarified into `Administration`, with explicit operator status plus SMTP and migration-provider configuration in the same operator area.
+- Migration settings now keep disabled providers visible, explain why they are unavailable, and link operators directly to the provider-configuration area.
+- Background refresh polling now keeps task collections and the project tree fresher after external changes, with mutation debounce and visibility-return refresh behavior.
+- The audit remediation pass added raw-body limits on sensitive upload endpoints, stricter cookie-auth origin checks, shared helper cleanup, and missing token definitions.
+
+Included in `0.4.0`:
+
+- everything from `0.3.1`
+- user and project webhook management
+- in-app migration tools and migration-provider configuration
+- end-to-end OpenID Connect login
+- project view management
+- project background management
+- saved filter builder and filter-project workspace integration
+- background external-change polling
+- permission/admin cleanup and access visibility improvements
+- security hardening from the audit remediation plan
+
+Explicitly not in `0.4.0`:
+
+- webhook-driven realtime push invalidation
+- a global instance-user role editor beyond the current CLI bridge surface
+- full raw-query saved-filter editing parity for every possible Vikunja clause/operator combination
+- app-store packaging or share-target flows
 
 ## 0.3.1 hotfix scope
 
@@ -93,7 +151,6 @@ Explicitly not in `0.3.0-alpha`:
 
 - offline support for attachments, sharing changes, admin settings, or security-admin flows
 - push-based realtime sync or background conflict resolution beyond reconnect replay
-- saved-filter authoring/builder UI
 - richer post-v1 platform work like OIDC-first multi-account UX, share target flows, or app-store packaging
 
 ## What's New In 0.2.1
@@ -135,7 +192,6 @@ Explicitly not in `0.2.0-alpha`:
 
 - offline sync, queued edits, or conflict handling
 - real event-driven push delivery
-- saved-filter authoring/builder UI
 - richer post-v1 platform features like OIDC, share target, app-store packaging, or multi-account switching UX
 
 ## Changes Since 0.2.1
@@ -432,7 +488,8 @@ kept outside this public repo.
 - For self-hosted Vikunja, the intended path is `Settings > Accounts` with username/password login.
 - API token mode still exists, but the token is submitted to the backend and kept out of browser storage.
 - Account sessions are now stored server-side in an encrypted local file, so ordinary backend restarts keep interactive sessions.
-- Admin user lifecycle actions and bridge-only admin operations run through a backend-only Vikunja CLI bridge; the browser never gets Docker or CLI access.
+- Admin user lifecycle actions and bridge-only administration operations run through a backend-only Vikunja CLI bridge; the browser never gets Docker or CLI access.
+- Administration currently exposes operator-gated lifecycle operations plus SMTP and migration-provider config. Instance-level user roles or global permissions are not exposed by the current Vikunja CLI bridge.
 - Deployment-level SMTP/admin config is only written to an explicit host config path. The running Vikunja container filesystem is never treated as the source of truth.
 - Shared project links authenticate into a dedicated public/shared shell instead of the normal signed-in app shell.
 - The app can also run directly over HTTPS with local certs for secure mobile PWA testing, including iPhone installed-app notification checks.
@@ -522,7 +579,7 @@ Not supported:
 - task labels surfaced directly on task cards
 - label detail editing
 - global task query support for cross-project search and upcoming filters
-- saved filter browsing and task loading through Vikunja pseudo-projects
+- saved filter browsing, structured authoring, editing, deletion, and task loading through Vikunja pseudo-projects
 - enhanced Gantt planning with zoom presets, dependency arrows, richer task bars, and direct drag/resize scheduling
 - Kanban drag-and-drop across sort, bucket move, subtask drop, menu move, and done-bucket toggle flows
 - offline snapshot restore plus queued supported task/project edits with reconnect replay and visible sync status
@@ -534,24 +591,31 @@ Not supported:
 - task position endpoint wiring and in-app reorder prototype
 - first-pass bulk task editing across list/tree task surfaces
 - admin user CRUD through the backend Vikunja CLI bridge
+- visible operator/bridge status in Settings plus explicit permission/access indicators for project sharing and team management
 - collaboration/privacy settings for the signed-in user
 - team CRUD plus team member/admin management
 - project user sharing, project team sharing, and link sharing
 - dedicated shared-project shell and password-protected link-share auth flow
 - per-category notification-center preferences stored in Vikunja `frontend_settings`
+- user and project webhook management
+- migration imports for supported OAuth and file-based providers
+- OpenID Connect login through the connected Vikunja instance
+- background polling for task collections and the project tree after external changes
+- operator-managed migration-provider settings, including redirect-URL helpers for PWA callback flows
 - zero-date normalization so unset Vikunja dates do not render as fake `1 Jan` values
 
 ## Known constraints
 
 - This is still a prototype, not a production client.
 - Vikunja supports labels on tasks, but not project labels through the upstream API route set currently used here.
-- Saved filters are intentionally browse/open only in the client right now.
 - Bridge/admin routes depend on an explicit operator email allowlist configured in the deployment environment.
+- The current bridge does not expose instance-user role editing, so Administration is limited to create, edit identity, enable/disable, reset password, and delete for user lifecycle management.
 - The smoke suite now covers collaboration, shared-link, notification-preference, and bulk-edit flows. Continue maintaining selectors as the shell evolves.
 - Offline support now includes cached reopen plus queued replay for supported task and project mutations, but attachments, sharing changes, admin config, and security-admin actions still require a live connection.
 - Browser notification setup and test alerts now work on supported desktop browsers and installed HTTPS iPhone web apps. Notification-center preferences are also shipped, but event-driven push delivery is still not built yet.
 - The server now exposes `/health`, request/error logs, trusted-origin checks, and rate limiting on auth/session routes.
 - All app responses now carry baseline security headers, JSON request bodies are capped at 1 MB, and `X-Forwarded-For` is only trusted when `APP_TRUST_PROXY=true`.
+- For Todoist, Trello, or Microsoft To Do imports to return to the PWA instead of the stock Vikunja frontend, the redirect URL must be updated both in Vikunja and in the external provider developer app.
 
 ## Testing
 
@@ -594,5 +658,5 @@ CI is wired for both GitHub Actions and Forgejo Actions in:
 
 ## Next recommended passes
 
-1. Decide whether saved filters should stay browse-only or get a structured builder UI instead of raw CRUD.
-2. Decide how far post-v1 offline work should go beyond the current queued task/project editing milestone.
+1. Decide how far post-v1 offline work should go beyond the current queued task/project editing milestone.
+2. Decide whether saved filters should eventually grow beyond the current structured builder into full raw-query editing and sidebar-level favorites management.

@@ -24,6 +24,7 @@ interface TaskBranchProps {
 	matcher?: TaskMatcher
 	sortBy?: TaskSortBy
 	bulkMode?: boolean
+	focusProjectIdOverride?: number | null
 }
 
 export default function TaskBranch({
@@ -35,6 +36,7 @@ export default function TaskBranch({
 	matcher,
 	sortBy = 'position',
 	bulkMode = false,
+	focusProjectIdOverride = null,
 }: TaskBranchProps) {
 	const isWideLayout = useWideLayout()
 	const openMenu = useAppStore(state => state.openMenu)
@@ -189,7 +191,7 @@ export default function TaskBranch({
 							if (isWideLayout) {
 								void openTaskDetail(task.id)
 							}
-							openFocusedTask(task.id, task.project_id, screen)
+							openFocusedTask(task.id, focusProjectIdOverride || task.project_id, screen)
 						}}
 					>
 						<TaskCard task={task} childCount={childCount} compact={compact} />
@@ -261,6 +263,7 @@ export default function TaskBranch({
 							matcher={matcher}
 							sortBy={sortBy}
 							bulkMode={bulkMode}
+							focusProjectIdOverride={focusProjectIdOverride}
 						/>
 					))}
 				</div>

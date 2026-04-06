@@ -59,6 +59,14 @@ import {createBulkTasksSlice, type BulkTasksSlice} from './bulk-tasks'
 import {createTaskComposersSlice, type TaskComposersSlice} from './task-composers'
 import {createTaskDetailSlice, type TaskDetailStoreSlice} from './task-detail'
 
+interface LoadTaskCollectionOptions {
+	silent?: boolean
+}
+
+interface EnsureProjectFilterTasksOptions extends LoadTaskCollectionOptions {
+	force?: boolean
+}
+
 export interface TasksSlice extends BulkTasksSlice, TaskComposersSlice, TaskDetailStoreSlice {
 	tasks: Task[]
 	currentTasksProjectId: number | null
@@ -88,14 +96,14 @@ export interface TasksSlice extends BulkTasksSlice, TaskComposersSlice, TaskDeta
 	togglingTaskIds: Set<number>
 	recentlyCompletedTaskIds: Set<number>
 	movingTaskIds: Set<number>
-	loadTasks: (projectId: number | null) => Promise<void>
-	loadTodayTasks: () => Promise<void>
-	loadInboxTasks: () => Promise<void>
-	loadUpcomingTasks: () => Promise<void>
-	loadSearchTasks: (query?: string) => Promise<void>
-	loadSavedFilterTasks: (projectId: number | null) => Promise<void>
-	ensureProjectFilterTasksLoaded: (options?: {force?: boolean}) => Promise<void>
-	refreshCurrentCollections: () => Promise<void>
+	loadTasks: (projectId: number | null, options?: LoadTaskCollectionOptions) => Promise<void>
+	loadTodayTasks: (options?: LoadTaskCollectionOptions) => Promise<void>
+	loadInboxTasks: (options?: LoadTaskCollectionOptions) => Promise<void>
+	loadUpcomingTasks: (options?: LoadTaskCollectionOptions) => Promise<void>
+	loadSearchTasks: (query?: string, options?: LoadTaskCollectionOptions) => Promise<void>
+	loadSavedFilterTasks: (projectId: number | null, options?: LoadTaskCollectionOptions) => Promise<void>
+	ensureProjectFilterTasksLoaded: (options?: EnsureProjectFilterTasksOptions) => Promise<void>
+	refreshCurrentCollections: (options?: LoadTaskCollectionOptions) => Promise<void>
 	setSearchQuery: (query: string) => void
 	clearSearchState: () => void
 	setTaskFilterField: (field: TaskFilterField, value: string, allowProject: boolean) => void
@@ -150,7 +158,7 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 	movingTaskIds: new Set(),
 	...createBulkTasksSlice(set, get),
 
-	async loadTasks(projectId) {
+	async loadTasks(projectId, {silent = false} = {}) {
 		if (!projectId) {
 			set({
 				tasks: [],
@@ -198,7 +206,9 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 			return
 		}
 
-		set({loadingTasks: true, error: null})
+		if (!silent) {
+			set({loadingTasks: true, error: null})
+		}
 
 		try {
 			const viewId = await resolveActiveProjectTaskViewId(get, projectId, 'project')
@@ -215,38 +225,38 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 				tasks,
 				currentTasksProjectId: projectId,
 				currentProjectViewId: viewId,
-				loadingTasks: false,
 			})
 			persistOfflineTaskCollections(get())
 		} catch (error) {
 			set({error: formatError(error as Error)})
-			set({loadingTasks: false})
+		} finally {
+			if (!silent) {
+				set({loadingTasks: false})
+			}
 		}
 	},
 
-	async loadTodayTasks() {
+	async loadTodayTasks({silent = false} = {}) {
 		if (!get().isOnline && get().offlineReadOnlyMode) {
 			const snapshot = await loadOfflineSnapshot()
-			if (
-				Number(get().selectedSavedFilterProjectId || 0) === numericProjectId &&
-				(get().savedFilterTasks.length > 0 || get().currentSavedFilterViewId !== null)
-			) {
+			if (get().todayTasks.length > 0) {
 				return
 			}
-			if (Number(snapshot?.selectedSavedFilterProjectId || 0) === numericProjectId) {
+			if (snapshot) {
 				set({
-					savedFilterTasks: snapshot?.savedFilterTasks || [],
-					currentSavedFilterViewId: snapshot?.currentSavedFilterViewId ?? null,
+					todayTasks: snapshot.todayTasks || [],
 					error: null,
 				})
 			}
 			return
 		}
 
-		set({
-			loadingToday: true,
-			error: null,
-		})
+		if (!silent) {
+			set({
+				loadingToday: true,
+				error: null,
+			})
+		}
 
 		try {
 			const previousTodayTasks = get().todayTasks
@@ -285,11 +295,13 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 		} catch (error) {
 			set({error: formatError(error as Error)})
 		} finally {
-			set({loadingToday: false})
+			if (!silent) {
+				set({loadingToday: false})
+			}
 		}
 	},
 
-	async loadInboxTasks() {
+	async loadInboxTasks({silent = false} = {}) {
 		const inboxProjectId = get().resolveInboxProjectId()
 		set({inboxProjectId})
 
@@ -306,10 +318,12 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 			return
 		}
 
-		set({
-			loadingInbox: true,
-			error: null,
-		})
+		if (!silent) {
+			set({
+				loadingInbox: true,
+				error: null,
+			})
+		}
 
 		try {
 			const viewId = await resolveActiveProjectTaskViewId(get, inboxProjectId, 'inbox')
@@ -338,19 +352,23 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 		} catch (error) {
 			set({error: formatError(error as Error)})
 		} finally {
-			set({loadingInbox: false})
+			if (!silent) {
+				set({loadingInbox: false})
+			}
 		}
 	},
 
-	async loadUpcomingTasks() {
+	async loadUpcomingTasks({silent = false} = {}) {
 		if (!get().isOnline && get().offlineReadOnlyMode) {
 			return
 		}
 
-		set({
-			loadingUpcoming: true,
-			error: null,
-		})
+		if (!silent) {
+			set({
+				loadingUpcoming: true,
+				error: null,
+			})
+		}
 
 		try {
 			const upcomingTasks = normalizeTaskGraph(await api<Task[]>(buildTaskCollectionPath({
@@ -363,11 +381,13 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 		} catch (error) {
 			set({error: formatError(error as Error)})
 		} finally {
-			set({loadingUpcoming: false})
+			if (!silent) {
+				set({loadingUpcoming: false})
+			}
 		}
 	},
 
-	async loadSearchTasks(query = get().searchQuery) {
+	async loadSearchTasks(query = get().searchQuery, {silent = false} = {}) {
 		const normalizedQuery = `${query || ''}`.trim()
 		set({
 			searchQuery: normalizedQuery,
@@ -383,10 +403,12 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 			return
 		}
 
-		set({
-			loadingSearch: true,
-			error: null,
-		})
+		if (!silent) {
+			set({
+				loadingSearch: true,
+				error: null,
+			})
+		}
 
 		try {
 			const searchTasks = normalizeTaskGraph(await api<Task[]>(buildTaskCollectionPath({
@@ -398,11 +420,13 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 		} catch (error) {
 			set({error: formatError(error as Error)})
 		} finally {
-			set({loadingSearch: false})
+			if (!silent) {
+				set({loadingSearch: false})
+			}
 		}
 	},
 
-	async loadSavedFilterTasks(projectId) {
+	async loadSavedFilterTasks(projectId, {silent = false} = {}) {
 		const numericProjectId = Number(projectId || 0)
 		set({selectedSavedFilterProjectId: numericProjectId || null})
 
@@ -418,10 +442,12 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 			return
 		}
 
-		set({
-			loadingSavedFilterTasks: true,
-			error: null,
-		})
+		if (!silent) {
+			set({
+				loadingSavedFilterTasks: true,
+				error: null,
+			})
+		}
 
 		try {
 			const viewId = await resolveActiveProjectTaskViewId(get, numericProjectId, 'savedFilter')
@@ -442,11 +468,13 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 		} catch (error) {
 			set({error: formatError(error as Error)})
 		} finally {
-			set({loadingSavedFilterTasks: false})
+			if (!silent) {
+				set({loadingSavedFilterTasks: false})
+			}
 		}
 	},
 
-	async ensureProjectFilterTasksLoaded({force = false} = {}) {
+	async ensureProjectFilterTasksLoaded({force = false, silent = false} = {}) {
 		if (!force && get().projectFilterTasksLoaded) {
 			return
 		}
@@ -467,10 +495,12 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 			return
 		}
 
-		set({
-			loadingProjectFilterTasks: true,
-			error: null,
-		})
+		if (!silent) {
+			set({
+				loadingProjectFilterTasks: true,
+				error: null,
+			})
+		}
 
 		try {
 			const projectFilterTasks = normalizeTaskGraph(await api<Task[]>(buildTaskCollectionPath({
@@ -488,11 +518,13 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 				projectFilterTasksLoaded: false,
 			})
 		} finally {
-			set({loadingProjectFilterTasks: false})
+			if (!silent) {
+				set({loadingProjectFilterTasks: false})
+			}
 		}
 	},
 
-	async refreshCurrentCollections() {
+	async refreshCurrentCollections({silent = false} = {}) {
 		if (!get().isOnline && get().offlineReadOnlyMode) {
 			return
 		}
@@ -500,31 +532,31 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 		const refreshes: Promise<unknown>[] = []
 
 		if (get().selectedProjectId) {
-			refreshes.push(get().loadTasks(get().selectedProjectId))
+			refreshes.push(get().loadTasks(get().selectedProjectId, {silent}))
 		}
 
 		if (get().screen === 'today' || get().todayTasks.length > 0) {
-			refreshes.push(get().loadTodayTasks())
+			refreshes.push(get().loadTodayTasks({silent}))
 		}
 
 		if (get().screen === 'inbox' || get().inboxTasks.length > 0) {
-			refreshes.push(get().loadInboxTasks())
+			refreshes.push(get().loadInboxTasks({silent}))
 		}
 
 		if (get().screen === 'upcoming' || get().upcomingTasks.length > 0) {
-			refreshes.push(get().loadUpcomingTasks())
+			refreshes.push(get().loadUpcomingTasks({silent}))
 		}
 
 		if (get().searchHasRun && get().searchQuery) {
-			refreshes.push(get().loadSearchTasks(get().searchQuery))
+			refreshes.push(get().loadSearchTasks(get().searchQuery, {silent}))
 		}
 
 		if (get().selectedSavedFilterProjectId) {
-			refreshes.push(get().loadSavedFilterTasks(get().selectedSavedFilterProjectId))
+			refreshes.push(get().loadSavedFilterTasks(get().selectedSavedFilterProjectId, {silent}))
 		}
 
 		if (get().projectFilterTasksLoaded) {
-			refreshes.push(get().ensureProjectFilterTasksLoaded({force: true}))
+			refreshes.push(get().ensureProjectFilterTasksLoaded({force: true, silent}))
 		}
 
 		refreshes.push(get().refreshExpandedProjectPreviews({silent: true}))
@@ -1509,31 +1541,31 @@ async function refreshBackgroundVisibleTaskCollectionsAfterDrop(
 		const refreshes: Promise<unknown>[] = []
 
 		if (state.selectedProjectId) {
-			refreshes.push(get().loadTasks(state.selectedProjectId))
+			refreshes.push(get().loadTasks(state.selectedProjectId, {silent: true}))
 		}
 
 		if (state.todayTasks.length > 0) {
-			refreshes.push(get().loadTodayTasks())
+			refreshes.push(get().loadTodayTasks({silent: true}))
 		}
 
 		if (state.inboxTasks.length > 0) {
-			refreshes.push(get().loadInboxTasks())
+			refreshes.push(get().loadInboxTasks({silent: true}))
 		}
 
 		if (state.upcomingTasks.length > 0) {
-			refreshes.push(get().loadUpcomingTasks())
+			refreshes.push(get().loadUpcomingTasks({silent: true}))
 		}
 
 		if (state.searchHasRun && state.searchQuery) {
-			refreshes.push(get().loadSearchTasks(state.searchQuery))
+			refreshes.push(get().loadSearchTasks(state.searchQuery, {silent: true}))
 		}
 
 		if (state.selectedSavedFilterProjectId) {
-			refreshes.push(get().loadSavedFilterTasks(state.selectedSavedFilterProjectId))
+			refreshes.push(get().loadSavedFilterTasks(state.selectedSavedFilterProjectId, {silent: true}))
 		}
 
 		if (state.projectFilterTasksLoaded) {
-			refreshes.push(get().ensureProjectFilterTasksLoaded({force: true}))
+			refreshes.push(get().ensureProjectFilterTasksLoaded({force: true, silent: true}))
 		}
 
 		if (state.expandedProjectIds.size > 0) {

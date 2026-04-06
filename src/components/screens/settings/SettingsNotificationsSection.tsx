@@ -23,7 +23,7 @@ export default function SettingsNotificationsSection({
 	emailDeliveryAvailable,
 	emailRemindersEnabled,
 	overdueTasksRemindersEnabled,
-	accountIsAdmin,
+	accountCanUseAdminBridge,
 	pushManagerSupported,
 	isSecureContext,
 	standaloneWebApp,
@@ -42,7 +42,7 @@ export default function SettingsNotificationsSection({
 	emailDeliveryAvailable: boolean
 	emailRemindersEnabled: boolean
 	overdueTasksRemindersEnabled: boolean
-	accountIsAdmin: boolean
+	accountCanUseAdminBridge: boolean
 	pushManagerSupported: boolean
 	isSecureContext: boolean
 	standaloneWebApp: boolean
@@ -199,10 +199,10 @@ export default function SettingsNotificationsSection({
 				<div className="detail-item detail-item-full detail-field settings-checkbox-field">
 					<div className="detail-label">Email notifications</div>
 					{!emailDeliveryAvailable ? (
-						<div className="detail-helper-text">
-							Email delivery is not configured on this instance.
-							{accountIsAdmin ? ' Configure SMTP in the Admin section below.' : ''}
-						</div>
+							<div className="detail-helper-text">
+								Email delivery is not configured on this instance.
+								{accountCanUseAdminBridge ? ' Configure SMTP in the Admin section below.' : ''}
+							</div>
 					) : (
 						<>
 							<label className="settings-checkbox-row">

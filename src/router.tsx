@@ -1,3 +1,5 @@
+import MigrationCallbackScreen from '@/components/auth/MigrationCallbackScreen'
+import OpenIdCallbackScreen from '@/components/auth/OpenIdCallbackScreen'
 import ResetPasswordScreen from '@/components/auth/ResetPasswordScreen'
 import FiltersScreen from '@/components/screens/FiltersScreen'
 import AppShell from '@/components/layout/AppShell'
@@ -16,6 +18,18 @@ export const router = createBrowserRouter([
 	{
 		path: '/auth/reset-password',
 		element: <ResetPasswordScreen />,
+	},
+	{
+		path: '/auth/openid/callback',
+		element: <OpenIdCallbackScreen />,
+	},
+	{
+		path: '/auth/openid/:provider',
+		element: <OpenIdCallbackScreen />,
+	},
+	{
+		path: '/migrate/:service',
+		element: <MigrationCallbackScreen />,
 	},
 	{
 		path: '/share/:share/auth',

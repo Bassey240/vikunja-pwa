@@ -13,6 +13,7 @@ import FiltersScreen from '@/components/screens/FiltersScreen'
 import LabelsScreen from '@/components/screens/LabelsScreen'
 import SettingsScreen from '@/components/screens/SettingsScreen'
 import SharedProjectShell from '@/components/sharing/SharedProjectShell'
+import useCollectionPolling from '@/hooks/useCollectionPolling'
 import useWideLayout, {useCompactWideLayout} from '@/hooks/useWideLayout'
 import {shouldSuppressDragClicks, useSortableBridge} from '@/hooks/useDragAndDrop'
 import {getProjectDescendantIds} from '@/store/project-helpers'
@@ -20,6 +21,8 @@ import {memo, type CSSProperties, type Dispatch, type ReactNode, type SetStateAc
 import {useLocation, useNavigate} from 'react-router-dom'
 import {useAppStore} from '@/store'
 import type {Screen} from '@/types'
+import {getCollectionPollingConfig} from '@/utils/collectionPolling'
+import {getProjectBackgroundBrightness, projectHasBackground} from '@/utils/project-background'
 import BottomNav from './BottomNav'
 
 // Freeze: keep AppShell limited to shell layout and routing; move overlays and other non-shell concerns elsewhere.
@@ -85,6 +88,8 @@ export default function AppShell() {
 	const focusedTaskSourceScreen = useAppStore(state => state.focusedTaskSourceScreen)
 	const focusedTaskProjectId = useAppStore(state => state.focusedTaskProjectId)
 	const projects = useAppStore(state => state.projects)
+	const projectBackgroundUrls = useAppStore(state => state.projectBackgroundUrls)
+	const projectBackgroundPreviewUrls = useAppStore(state => state.projectBackgroundPreviewUrls)
 	const setOpenMenu = useAppStore(state => state.setOpenMenu)
 	const setScreen = useAppStore(state => state.setScreen)
 	const closeTaskDetail = useAppStore(state => state.closeTaskDetail)
@@ -95,6 +100,7 @@ export default function AppShell() {
 	const loadTodayTasks = useAppStore(state => state.loadTodayTasks)
 	const loadInboxTasks = useAppStore(state => state.loadInboxTasks)
 	const loadUpcomingTasks = useAppStore(state => state.loadUpcomingTasks)
+	const loadProjectBackground = useAppStore(state => state.loadProjectBackground)
 	const refreshRuntimeState = useAppStore(state => state.refreshRuntimeState)
 	const refreshAppData = useAppStore(state => state.refreshAppData)
 	const refreshOfflineQueueCounts = useAppStore(state => state.refreshOfflineQueueCounts)
@@ -121,6 +127,12 @@ export default function AppShell() {
 			(projectComposerOpen && projectComposerPlacement === 'sheet'))
 	const currentScreen = screenFromPath(location.pathname)
 	const currentProjectRouteId = currentScreen === 'tasks' ? Number(location.pathname.split('/')[2] || 0) : 0
+	const currentProjectShellProject = currentProjectRouteId > 0 ? projects.find(project => project.id === currentProjectRouteId) || null : null
+	const currentProjectShellHasBackground = projectHasBackground(currentProjectShellProject)
+	const currentProjectShellBackgroundUrl = currentProjectRouteId > 0 ? (projectBackgroundUrls[currentProjectRouteId] ?? null) : null
+	const currentProjectShellBackgroundPreviewUrl = currentProjectRouteId > 0 ? (projectBackgroundPreviewUrls[currentProjectRouteId] ?? null) : null
+	const currentProjectShellResolvedBackgroundUrl = currentProjectShellBackgroundUrl || currentProjectShellBackgroundPreviewUrl
+	const currentProjectShellBrightness = getProjectBackgroundBrightness(account?.user?.settings?.frontend_settings)
 	const [mountedScreens, setMountedScreens] = useState<Record<Screen, boolean>>({
 		today: true,
 		inbox: false,
@@ -164,6 +176,35 @@ export default function AppShell() {
 		: 0
 	const effectiveWideInspectorWidth =
 		compactWideShell && !wideInspectorWidthStored ? DEFAULT_COMPACT_WIDE_INSPECTOR_WIDTH : wideInspectorWidth
+	const collectionPollingConfig = getCollectionPollingConfig()
+
+	useCollectionPolling({
+		enabled: initialized && connected && !linkShareAuth && isOnline && !offlineReadOnlyMode,
+		intervalMs: collectionPollingConfig.taskIntervalMs,
+		mutationDebounceMs: collectionPollingConfig.mutationDebounceMs,
+		onPoll: async () => {
+			const state = useAppStore.getState()
+			if (state.pendingUndoMutation) {
+				return
+			}
+
+			await state.refreshCurrentCollections({silent: true})
+		},
+	})
+
+	useCollectionPolling({
+		enabled: initialized && connected && !linkShareAuth && isOnline && !offlineReadOnlyMode,
+		intervalMs: collectionPollingConfig.projectIntervalMs,
+		mutationDebounceMs: collectionPollingConfig.mutationDebounceMs,
+		onPoll: async () => {
+			const state = useAppStore.getState()
+			if (state.pendingUndoMutation) {
+				return
+			}
+
+			await state.loadProjects({silent: true})
+		},
+	})
 
 	useEffect(() => {
 		if (didInitRef.current) {
@@ -256,6 +297,25 @@ export default function AppShell() {
 
 		setMountedTaskProjectId(current => (current === currentProjectRouteId ? current : currentProjectRouteId))
 	}, [currentProjectRouteId, currentScreen])
+
+	useEffect(() => {
+		if (
+			currentScreen !== 'tasks' ||
+			!currentProjectRouteId ||
+			!currentProjectShellHasBackground ||
+			currentProjectShellBackgroundUrl
+		) {
+			return
+		}
+
+		void loadProjectBackground(currentProjectRouteId)
+	}, [
+		currentProjectRouteId,
+		currentProjectShellBackgroundUrl,
+		currentProjectShellHasBackground,
+		currentScreen,
+		loadProjectBackground,
+	])
 
 	useEffect(() => {
 		if (!initialized || !connected || linkShareAuth || !isOnline || offlineReadOnlyMode) {
@@ -663,36 +723,55 @@ export default function AppShell() {
 				/>
 			) : null}
 			<div className="shell-workspace">
+				{currentProjectShellHasBackground ? (
+					<div
+							className="project-shell-background"
+							data-project-background-surface="shell"
+							data-has-background="true"
+						style={{'--project-shell-background-brightness': `${currentProjectShellBrightness}%`} as CSSProperties}
+						aria-hidden="true"
+					>
+						<div className="project-surface-background-media project-shell-background-media">
+							{currentProjectShellResolvedBackgroundUrl ? (
+								<img src={currentProjectShellResolvedBackgroundUrl} alt="" className="project-surface-background-image" />
+							) : (
+								<div className="project-surface-background-placeholder" />
+							)}
+							<div className="project-surface-background-overlay project-shell-background-overlay" />
+						</div>
+					</div>
+				) : null}
 				<div className="workspace-screen-stack">
-					<WorkspaceScreen active={currentScreen === 'today'} mounted={mountedScreens.today}>
+					<WorkspaceScreen screen="today" active={currentScreen === 'today'} mounted={mountedScreens.today}>
 						<TodayScreen />
 					</WorkspaceScreen>
-					<WorkspaceScreen active={currentScreen === 'inbox'} mounted={mountedScreens.inbox}>
+					<WorkspaceScreen screen="inbox" active={currentScreen === 'inbox'} mounted={mountedScreens.inbox}>
 						<InboxScreen />
 					</WorkspaceScreen>
-					<WorkspaceScreen active={currentScreen === 'upcoming'} mounted={mountedScreens.upcoming}>
+					<WorkspaceScreen screen="upcoming" active={currentScreen === 'upcoming'} mounted={mountedScreens.upcoming}>
 						<UpcomingScreen />
 					</WorkspaceScreen>
-					<WorkspaceScreen active={currentScreen === 'projects'} mounted={mountedScreens.projects}>
+					<WorkspaceScreen screen="projects" active={currentScreen === 'projects'} mounted={mountedScreens.projects}>
 						<ProjectsScreen />
 					</WorkspaceScreen>
 					<WorkspaceScreen
+						screen="tasks"
 						active={currentScreen === 'tasks'}
 						mounted={mountedScreens.tasks}
 						renderToken={mountedTaskProjectId}
 					>
 						<ProjectTasksScreen projectId={mountedTaskProjectId} />
 					</WorkspaceScreen>
-					<WorkspaceScreen active={currentScreen === 'search'} mounted={mountedScreens.search}>
+					<WorkspaceScreen screen="search" active={currentScreen === 'search'} mounted={mountedScreens.search}>
 						<SearchScreen />
 					</WorkspaceScreen>
-					<WorkspaceScreen active={currentScreen === 'filters'} mounted={mountedScreens.filters}>
+					<WorkspaceScreen screen="filters" active={currentScreen === 'filters'} mounted={mountedScreens.filters}>
 						<FiltersScreen />
 					</WorkspaceScreen>
-					<WorkspaceScreen active={currentScreen === 'labels'} mounted={mountedScreens.labels}>
+					<WorkspaceScreen screen="labels" active={currentScreen === 'labels'} mounted={mountedScreens.labels}>
 						<LabelsScreen />
 					</WorkspaceScreen>
-					<WorkspaceScreen active={currentScreen === 'settings'} mounted={mountedScreens.settings}>
+					<WorkspaceScreen screen="settings" active={currentScreen === 'settings'} mounted={mountedScreens.settings}>
 						<SettingsScreen />
 					</WorkspaceScreen>
 				</div>
@@ -775,11 +854,13 @@ export default function AppShell() {
 
 const WorkspaceScreen = memo(
 	function WorkspaceScreen({
+		screen,
 		active,
 		mounted,
 		renderToken = null,
 		children,
 	}: {
+		screen: Screen
 		active: boolean
 		mounted: boolean
 		renderToken?: number | string | null
@@ -792,6 +873,7 @@ const WorkspaceScreen = memo(
 		return (
 			<div
 				className={`workspace-screen ${active ? 'is-active' : 'is-hidden'}`.trim()}
+				data-screen={screen}
 				aria-hidden={active ? undefined : true}
 			>
 				{children}

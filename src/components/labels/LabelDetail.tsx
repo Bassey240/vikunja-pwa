@@ -1,5 +1,6 @@
 import DetailSheet from '@/components/common/DetailSheet'
 import {useAppStore} from '@/store'
+import {ACCENT_BLUE} from '@/utils/color-constants'
 import {getColorInputValue, normalizeHexColor} from '@/utils/formatting'
 import {useEffect, useState} from 'react'
 
@@ -10,7 +11,7 @@ export default function LabelDetail() {
 	const saveLabelDetailPatch = useAppStore(state => state.saveLabelDetailPatch)
 	const deleteLabel = useAppStore(state => state.deleteLabel)
 	const [title, setTitle] = useState('')
-	const [color, setColor] = useState('#1973ff')
+	const [color, setColor] = useState(ACCENT_BLUE)
 
 	useEffect(() => {
 		setTitle(labelDetail?.title || '')

@@ -23,6 +23,7 @@ import {
 } from '@/components/project/views/gantt/gantt-helpers'
 import {useAppStore} from '@/store'
 import type {Task} from '@/types'
+import {DEFAULT_LABEL_BG} from '@/utils/color-constants'
 import {getMenuAnchor} from '@/utils/menuPosition'
 import {formatShortDate, normalizeHexColor, normalizeTaskDateValue} from '@/utils/formatting'
 import {Fragment, useCallback, useEffect, useMemo, useRef, useState} from 'react'
@@ -30,9 +31,11 @@ import {Fragment, useCallback, useEffect, useMemo, useRef, useState} from 'react
 export default function ProjectGanttView({
 	projectId,
 	tasks,
+	focusProjectIdOverride = null,
 }: {
 	projectId: number
 	tasks: Task[]
+	focusProjectIdOverride?: number | null
 }) {
 	const offlineReadOnlyMode = useAppStore(state => state.offlineReadOnlyMode)
 	const openFocusedTask = useAppStore(state => state.openFocusedTask)
@@ -461,7 +464,7 @@ export default function ProjectGanttView({
 															<span key={label.id} className="gantt-bar-label-chip">
 																<span
 																	className="gantt-bar-label-chip-dot"
-																	style={{background: normalizeHexColor(label.hex_color || label.hexColor || '') || '#dbe8ff'}}
+																	style={{background: normalizeHexColor(label.hex_color || label.hexColor || '') || DEFAULT_LABEL_BG}}
 																/>
 																<span className="gantt-bar-label-chip-text">{label.title}</span>
 															</span>
@@ -520,7 +523,7 @@ export default function ProjectGanttView({
 													onClick: () => {
 														setOpenMenu(null)
 														void openTaskDetail(entry.task.id)
-														openFocusedTask(entry.task.id, entry.task.project_id, 'tasks')
+														openFocusedTask(entry.task.id, focusProjectIdOverride || entry.task.project_id, 'tasks')
 													},
 												},
 											]}

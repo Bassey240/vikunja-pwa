@@ -21,6 +21,7 @@ export default function AuthScreen() {
 	const settingsNotice = useAppStore(state => state.settingsNotice)
 	const error = useAppStore(state => state.error)
 	const totpLoginRequired = useAppStore(state => state.totpLoginRequired)
+	const oidcPending = useAppStore(state => state.oidcPending)
 	const isOnline = useAppStore(state => state.isOnline)
 	const setAccountField = useAppStore(state => state.setAccountField)
 	const setAccountAuthMode = useAppStore(state => state.setAccountAuthMode)
@@ -31,6 +32,7 @@ export default function AuthScreen() {
 	const login = useAppStore(state => state.login)
 	const register = useAppStore(state => state.register)
 	const requestPasswordReset = useAppStore(state => state.requestPasswordReset)
+	const getOidcAuthUrl = useAppStore(state => state.getOidcAuthUrl)
 
 	const showPasswordForm = accountForm.authMode === 'password'
 	const authCapabilityBaseUrl = authSubscreen === 'register' ? registrationForm.baseUrl : accountForm.baseUrl
@@ -298,16 +300,22 @@ export default function AuthScreen() {
 															key={provider.key}
 															className="pill-button subtle"
 															type="button"
+															disabled={oidcPending || !normalizedAuthCapabilityBaseUrl}
 															onClick={() => {
-																window.open(provider.auth_url, '_blank', 'noopener,noreferrer')
+																const redirectUri = new URL('/auth/openid/callback', window.location.origin).toString()
+																void getOidcAuthUrl(provider.key, normalizedAuthCapabilityBaseUrl, redirectUri).then(authUrl => {
+																	if (authUrl) {
+																		window.location.assign(authUrl)
+																	}
+																})
 															}}
 														>
-															Sign in with {provider.name || provider.key}
+															{oidcPending ? 'Redirecting…' : `Sign in with ${provider.name || provider.key}`}
 														</button>
 													))}
 												</div>
 												<div className="empty-state compact">
-													OIDC callback handling is not wired in this build yet. These buttons preview the configured providers.
+													Use the provider configured on your Vikunja instance. The login returns here and creates a normal PWA session.
 												</div>
 											</div>
 										) : null}

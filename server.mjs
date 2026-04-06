@@ -1,7 +1,7 @@
 import http from 'node:http'
 import https from 'node:https'
 import {readFileSync} from 'node:fs'
-import {randomUUID} from 'node:crypto'
+import {randomBytes, randomUUID} from 'node:crypto'
 import path from 'node:path'
 import {fileURLToPath} from 'node:url'
 import {createAdminBridge} from './server/admin-bridge.mjs'
@@ -15,6 +15,7 @@ import {serveStatic} from './server/static.mjs'
 import {
 	authenticateLinkShare,
 	createApiTokenAccount,
+	createOidcAccount,
 	createLinkShareAccount,
 	createPasswordAccount,
 	createVikunjaClient,
@@ -57,6 +58,13 @@ const {
 
 const appSessionCookieName = 'vikunja_pwa_session'
 const ignoreLegacyCookieName = 'vikunja_pwa_ignore_legacy'
+const AVATAR_UPLOAD_MAX_BYTES = 5 * 1024 * 1024
+const ADMIN_RESTORE_MAX_BYTES = 100 * 1024 * 1024
+const TASK_ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024
+const MIGRATION_UPLOAD_MAX_BYTES = 100 * 1024 * 1024
+const PROJECT_BACKGROUND_MAX_BYTES = 15 * 1024 * 1024
+const OPENID_STATE_TTL_MS = 10 * 60 * 1000
+const FILE_MIGRATION_SERVICES = new Set(['ticktick', 'vikunja-file'])
 const serverStartedAt = Date.now()
 const sessionStore = createSessionStore({
 	ttlSeconds: appSessionTtlSeconds,
@@ -73,7 +81,8 @@ const sessionMutationRateLimiter = createRateLimiter({
 	max: sessionMutationRateLimitMax,
 })
 const legacyConfigured = Boolean(vikunjaBaseUrl && vikunjaApiToken)
-const buildId = '2026-04-03-hotfix-0.3.1'
+const buildId = '2026-04-06-release-0.4.0'
+const openIdLoginState = new Map()
 const adminBridge = createAdminBridge({
 	bridgeMode: vikunjaBridgeMode,
 	vikunjaContainerName,
@@ -214,25 +223,12 @@ async function handleApi(req, res, url) {
 			return
 		}
 
-		let infoRes
 		try {
-			infoRes = await fetch(new URL('info', `${probeUrl}/`), {
-				headers: {
-					Accept: 'application/json',
-				},
-			})
+			const info = await fetchUpstreamInfo(probeUrl)
+			sendJson(res, 200, decorateInfoPayload(info))
 		} catch {
 			sendJson(res, 502, {error: 'Could not reach Vikunja instance.'})
-			return
 		}
-
-		if (!infoRes.ok) {
-			sendJson(res, infoRes.status, {error: 'Could not reach Vikunja instance.'})
-			return
-		}
-
-		const info = await infoRes.json().catch(() => ({}))
-		sendJson(res, 200, info)
 		return
 	}
 
@@ -261,6 +257,125 @@ async function handleApi(req, res, url) {
 		}
 
 		sendJson(res, 200, await fetchUpstreamAuthInfo(baseUrl))
+		return
+	}
+
+	const openIdAuthUrlMatch = url.pathname.match(/^\/api\/session\/openid\/([^/]+)\/auth-url$/)
+	if (openIdAuthUrlMatch && req.method === 'GET') {
+		if (!enforceRateLimit(req, res, loginRateLimiter, 'login')) {
+			return
+		}
+
+		const providerKey = decodeURIComponent(openIdAuthUrlMatch[1] || '').trim()
+		const baseUrl = normalizeBaseUrl(url.searchParams.get('baseUrl') || '')
+		const redirectUri = `${url.searchParams.get('redirectUri') || ''}`.trim()
+		if (!providerKey || !baseUrl || !redirectUri) {
+			sendJson(res, 400, {error: 'Provider, baseUrl, and redirectUri are required.'})
+			return
+		}
+		if (!isAllowedPublicRedirectUri(redirectUri)) {
+			sendJson(res, 400, {error: 'redirectUri must stay on the current PWA origin.'})
+			return
+		}
+
+		let provider
+		try {
+			const info = await fetchUpstreamInfo(baseUrl)
+			provider = getOidcProviderFromInfo(info, providerKey)
+		} catch {
+			sendJson(res, 502, {error: 'Could not reach Vikunja instance.'})
+			return
+		}
+
+		if (!provider?.auth_url) {
+			sendJson(res, 404, {error: 'The requested OIDC provider is not available on this Vikunja instance.'})
+			return
+		}
+
+		const state = randomBytes(16).toString('hex')
+		const nonce = randomBytes(16).toString('hex')
+		openIdLoginState.set(state, {
+			state,
+			nonce,
+			provider: provider.key,
+			baseUrl,
+			redirectUri,
+			expiresAt: Date.now() + OPENID_STATE_TTL_MS,
+		})
+		cleanupExpiredOpenIdLoginState()
+
+		sendJson(res, 200, {
+			authUrl: buildOidcAuthUrl(provider.auth_url, {
+				state,
+				nonce,
+				redirectUri,
+			}),
+		})
+		return
+	}
+
+	if (url.pathname === '/api/session/openid/callback' && req.method === 'POST') {
+		if (!enforceRateLimit(req, res, loginRateLimiter, 'login')) {
+			return
+		}
+
+		const body = await readJsonBody(req)
+		const code = `${body.code || ''}`.trim()
+		const state = `${body.state || ''}`.trim()
+		if (!code || !state) {
+			sendJson(res, 400, {error: 'Both code and state are required.'})
+			return
+		}
+
+		cleanupExpiredOpenIdLoginState()
+		const stateEntry = openIdLoginState.get(state)
+		if (!stateEntry || stateEntry.expiresAt <= Date.now()) {
+			openIdLoginState.delete(state)
+			sendJson(res, 400, {error: 'This OIDC sign-in request is invalid or expired.'})
+			return
+		}
+		openIdLoginState.delete(state)
+
+		let account
+		try {
+			account = await createOidcAccount({
+				baseUrl: stateEntry.baseUrl,
+				provider: stateEntry.provider,
+				code,
+				redirectUrl: stateEntry.redirectUri,
+			})
+			account = await hydrateOperatorAccountIdentity(account)
+		} catch (error) {
+			const message = formatErrorMessage(error, 'Single sign-on failed.')
+			sendJson(res, Number(error?.statusCode || 401) || 401, {error: message})
+			return
+		}
+
+		const currentSessionId = getAppSessionId(req)
+		if (currentSessionId) {
+			sessionStore.delete(currentSessionId)
+		}
+
+		const nextSessionId = sessionStore.create({account})
+		sendJson(
+			res,
+			200,
+			{
+				connected: true,
+				account: summarizeAccount(account, 'account'),
+			},
+			{
+				'Set-Cookie': [
+					buildAppSessionCookie(nextSessionId),
+					clearCookie(ignoreLegacyCookieName, {
+						httpOnly: true,
+						sameSite: 'Strict',
+						secure: cookieSecure,
+						path: '/',
+					}),
+				],
+			},
+		)
 		return
 	}
 
@@ -652,7 +767,7 @@ async function handleApi(req, res, url) {
 	if (url.pathname === '/api/info' && req.method === 'GET') {
 		const context = await requireVikunjaContext(req, res)
 		const info = await context.client.request('info')
-		sendJson(res, 200, info)
+		sendJson(res, 200, decorateInfoPayload(info))
 		return
 	}
 
@@ -849,7 +964,7 @@ async function handleApi(req, res, url) {
 			return
 		}
 
-		const rawBody = await readRawBody(req)
+		const rawBody = await readRawBody(req, {maxBytes: AVATAR_UPLOAD_MAX_BYTES})
 		await context.client.request('user/settings/avatar/upload', {
 			method: 'PUT',
 			rawBody,
@@ -982,7 +1097,7 @@ async function handleApi(req, res, url) {
 
 	if (url.pathname === '/api/admin/restore' && req.method === 'POST') {
 		await requireAdminSession(req, res)
-		const zipBuffer = await readRawBody(req)
+		const zipBuffer = await readRawBody(req, {maxBytes: ADMIN_RESTORE_MAX_BYTES})
 		if (!zipBuffer.length) {
 			sendJson(res, 400, {error: 'A backup ZIP file is required.'})
 			return
@@ -1059,6 +1174,50 @@ async function handleApi(req, res, url) {
 		await requireAdminSession(req, res, {allowBridgeUnavailable: true})
 		const result = await adminConfig.restartVikunja()
 		const config = await adminConfig.readMailerConfig()
+		sendJson(res, 200, {
+			...result,
+			config,
+		})
+		return
+	}
+
+	if (url.pathname === '/api/admin/config/migration-importers' && req.method === 'GET') {
+		await requireAdminSession(req, res, {allowBridgeUnavailable: true})
+		const config = await adminConfig.readMigrationImporterConfig()
+		sendJson(res, 200, config)
+		return
+	}
+
+	if (url.pathname === '/api/admin/config/migration-importers' && req.method === 'POST') {
+		await requireAdminSession(req, res, {allowBridgeUnavailable: true})
+		const body = await readJsonBody(req)
+		const config = await adminConfig.writeMigrationImporterConfig({
+			todoist: {
+				enabled: body.todoist?.enabled,
+				clientId: body.todoist?.clientId,
+				clientSecret: body.todoist?.clientSecret,
+				redirectUrl: body.todoist?.redirectUrl,
+			},
+			trello: {
+				enabled: body.trello?.enabled,
+				key: body.trello?.key,
+				redirectUrl: body.trello?.redirectUrl,
+			},
+			microsoftTodo: {
+				enabled: body.microsoftTodo?.enabled,
+				clientId: body.microsoftTodo?.clientId,
+				clientSecret: body.microsoftTodo?.clientSecret,
+				redirectUrl: body.microsoftTodo?.redirectUrl,
+			},
+		})
+		sendJson(res, 200, config)
+		return
+	}
+
+	if (url.pathname === '/api/admin/config/migration-importers/apply' && req.method === 'POST') {
+		await requireAdminSession(req, res, {allowBridgeUnavailable: true})
+		const result = await adminConfig.restartVikunja()
+		const config = await adminConfig.readMigrationImporterConfig()
 		sendJson(res, 200, {
 			...result,
 			config,
@@ -1295,6 +1454,140 @@ async function handleApi(req, res, url) {
 		const routes = await vikunja.request('routes')
 		sendJson(res, 200, {routes})
 		return
+	}
+
+	if (url.pathname === '/api/session/webhooks' && req.method === 'GET') {
+		const webhooks = await vikunja.fetchAllPages('user/settings/webhooks')
+		sendJson(res, 200, {webhooks: Array.isArray(webhooks) ? webhooks : []})
+		return
+	}
+
+	if (url.pathname === '/api/session/webhooks' && req.method === 'PUT') {
+		if (!enforceRateLimit(req, res, sessionMutationRateLimiter, 'session-mutation')) {
+			return
+		}
+
+		const body = await readJsonBody(req)
+		const webhook = await vikunja.request('user/settings/webhooks', {
+			method: 'PUT',
+			body: normalizeWebhookBody(body),
+		})
+		sendJson(res, 201, webhook)
+		return
+	}
+
+	if (url.pathname === '/api/session/webhooks/events' && req.method === 'GET') {
+		const events = await vikunja.request('user/settings/webhooks/events')
+		sendJson(res, 200, {events: Array.isArray(events) ? events : []})
+		return
+	}
+
+	if (url.pathname === '/api/webhooks/events' && req.method === 'GET') {
+		const events = await vikunja.request('webhooks/events')
+		sendJson(res, 200, {events: Array.isArray(events) ? events : []})
+		return
+	}
+
+	const userWebhookMatch = url.pathname.match(/^\/api\/session\/webhooks\/(\d+)$/)
+	if (userWebhookMatch && req.method === 'POST') {
+		if (!enforceRateLimit(req, res, sessionMutationRateLimiter, 'session-mutation')) {
+			return
+		}
+
+		const webhookId = Number(userWebhookMatch[1])
+		const body = await readJsonBody(req)
+		const webhook = await vikunja.request(`user/settings/webhooks/${webhookId}`, {
+			method: 'POST',
+			body: {events: normalizeWebhookEventsBody(body?.events)},
+		})
+		sendJson(res, 200, webhook)
+		return
+	}
+
+	if (userWebhookMatch && req.method === 'DELETE') {
+		if (!enforceRateLimit(req, res, sessionMutationRateLimiter, 'session-mutation')) {
+			return
+		}
+
+		const webhookId = Number(userWebhookMatch[1])
+		await vikunja.request(`user/settings/webhooks/${webhookId}`, {
+			method: 'DELETE',
+		})
+		sendJson(res, 200, {ok: true})
+		return
+	}
+
+	const migrationServiceMatch = url.pathname.match(/^\/api\/migration\/([^/]+)\/(auth|migrate|status)$/)
+	if (migrationServiceMatch) {
+		const service = normalizeMigrationService(decodeURIComponent(migrationServiceMatch[1] || ''))
+		const action = migrationServiceMatch[2]
+		if (!service) {
+			sendJson(res, 404, {error: 'Unknown migration service.'})
+			return
+		}
+
+		if (action === 'auth' && req.method === 'GET') {
+			if (!enforceRateLimit(req, res, sessionMutationRateLimiter, 'session-mutation')) {
+				return
+			}
+			if (FILE_MIGRATION_SERVICES.has(service)) {
+				sendJson(res, 400, {error: 'This migration service expects a file upload instead of browser sign-in.'})
+				return
+			}
+			const authUrl = await vikunja.request(`migration/${service}/auth`)
+			const normalizedAuthUrl = normalizeMigrationAuthUrl(authUrl)
+			if (!normalizedAuthUrl) {
+				sendJson(res, 502, {error: 'Vikunja did not return a usable migration auth URL.'})
+				return
+			}
+			sendJson(res, 200, {authUrl: normalizedAuthUrl})
+			return
+		}
+
+		if (action === 'status' && req.method === 'GET') {
+			const status = await vikunja.request(`migration/${service}/status`)
+			sendJson(res, 200, normalizeMigrationStatusPayload(service, status))
+			return
+		}
+
+		if (action === 'migrate' && req.method === 'POST') {
+			if (!enforceRateLimit(req, res, sessionMutationRateLimiter, 'session-mutation')) {
+				return
+			}
+
+			if (FILE_MIGRATION_SERVICES.has(service)) {
+				const contentType = `${req.headers['content-type'] || ''}`.trim()
+				if (!contentType.toLowerCase().includes('multipart/form-data')) {
+					sendJson(res, 400, {error: 'multipart/form-data is required.'})
+					return
+				}
+
+				const rawBody = await readRawBody(req, {maxBytes: MIGRATION_UPLOAD_MAX_BYTES})
+				const result = await vikunja.request(`migration/${service}/migrate`, {
+					method: 'POST',
+					rawBody,
+					headers: {
+						'Content-Type': contentType,
+					},
+				})
+				sendJson(res, 200, normalizeMigrationStatusPayload(service, result))
+				return
+			}
+
+			const body = await readJsonBody(req)
+			const code = `${body.code || ''}`.trim()
+			if (!code) {
+				sendJson(res, 400, {error: 'code is required.'})
+				return
+			}
+
+			const result = await vikunja.request(`migration/${service}/migrate`, {
+				method: 'POST',
+				body: {code},
+			})
+			sendJson(res, 200, normalizeMigrationStatusPayload(service, result))
+			return
+		}
 	}
 
 	if (url.pathname === '/api/user' && req.method === 'GET') {
@@ -1758,6 +2051,38 @@ async function handleApi(req, res, url) {
 		return
 	}
 
+	if (projectViewsMatch && req.method === 'PUT') {
+		const projectId = Number(projectViewsMatch[1])
+		const body = await readJsonBody(req)
+		const title = `${body?.title || ''}`.trim()
+		const viewKind = `${body?.view_kind || ''}`.trim()
+		const allowedKinds = new Set(['list', 'gantt', 'table', 'kanban'])
+		if (!title || title.length > 250) {
+			sendJson(res, 400, {error: 'Title must be 1–250 characters.'})
+			return
+		}
+		if (!allowedKinds.has(viewKind)) {
+			sendJson(res, 400, {error: 'view_kind must be one of list, gantt, table, kanban.'})
+			return
+		}
+		const view = await vikunja.request(`projects/${projectId}/views`, {
+			method: 'PUT',
+			body: {
+				title,
+				project_id: projectId,
+				view_kind: viewKind,
+				filter: body?.filter ?? null,
+				position: Number(body?.position || 0),
+				bucket_configuration_mode: body?.bucket_configuration_mode || (viewKind === 'kanban' ? 'manual' : 'none'),
+				bucket_configuration: Array.isArray(body?.bucket_configuration) ? body.bucket_configuration : [],
+				default_bucket_id: Number(body?.default_bucket_id || 0),
+				done_bucket_id: Number(body?.done_bucket_id || 0),
+			},
+		})
+		sendJson(res, 201, {view})
+		return
+	}
+
 	if (projectViewMatch && (req.method === 'POST' || req.method === 'PUT')) {
 		const projectId = Number(projectViewMatch[1])
 		const viewId = Number(projectViewMatch[2])
@@ -1770,6 +2095,16 @@ async function handleApi(req, res, url) {
 		return
 	}
 
+	if (projectViewMatch && req.method === 'DELETE') {
+		const projectId = Number(projectViewMatch[1])
+		const viewId = Number(projectViewMatch[2])
+		await vikunja.request(`projects/${projectId}/views/${viewId}`, {
+			method: 'DELETE',
+		})
+		sendJson(res, 200, {ok: true})
+		return
+	}
+
 	const projectUsersMatch = url.pathname.match(/^\/api\/projects\/(-?\d+)\/projectusers$/)
 	const projectSharedUsersMatch = url.pathname.match(/^\/api\/projects\/(-?\d+)\/users$/)
 	const projectSharedUserMatch = url.pathname.match(/^\/api\/projects\/(-?\d+)\/users\/([^/]+)$/)
@@ -1777,8 +2112,128 @@ async function handleApi(req, res, url) {
 	const projectSharedTeamMatch = url.pathname.match(/^\/api\/projects\/(-?\d+)\/teams\/(\d+)$/)
 	const projectLinkSharesMatch = url.pathname.match(/^\/api\/projects\/(-?\d+)\/shares$/)
 	const projectLinkShareMatch = url.pathname.match(/^\/api\/projects\/(-?\d+)\/shares\/(\d+)$/)
+	const projectBackgroundMatch = url.pathname.match(/^\/api\/projects\/(-?\d+)\/background$/)
+	const projectBackgroundUploadMatch = url.pathname.match(/^\/api\/projects\/(-?\d+)\/backgrounds\/upload$/)
+	const projectBackgroundUnsplashMatch = url.pathname.match(/^\/api\/projects\/(-?\d+)\/backgrounds\/unsplash$/)
+	const unsplashSearchMatch = url.pathname.match(/^\/api\/backgrounds\/unsplash\/search$/)
+	const unsplashImageMatch = url.pathname.match(/^\/api\/backgrounds\/unsplash\/images\/([^/]+)(\/thumb)?$/)
+	const projectWebhooksMatch = url.pathname.match(/^\/api\/projects\/(-?\d+)\/webhooks$/)
+	const projectWebhookMatch = url.pathname.match(/^\/api\/projects\/(-?\d+)\/webhooks\/(\d+)$/)
 	const notificationCollectionMatch = url.pathname.match(/^\/api\/notifications$/)
 	const notificationMatch = url.pathname.match(/^\/api\/notifications\/(\d+)$/)
+
+	if (projectBackgroundMatch && req.method === 'GET') {
+		const projectId = Number(projectBackgroundMatch[1])
+		try {
+			const response = await vikunja.requestRaw(`projects/${projectId}/background`, {
+				method: 'GET',
+				headers: {Accept: '*/*'},
+			})
+			const buffer = Buffer.from(await response.arrayBuffer())
+			const headers = {}
+			for (const header of ['content-type', 'content-length', 'cache-control', 'etag', 'last-modified']) {
+				const value = response.headers.get(header)
+				if (value) {
+					headers[header] = value
+				}
+			}
+			sendBuffer(res, response.status, buffer, headers)
+		} catch (error) {
+			if (error?.statusCode === 404) {
+				sendJson(res, 404, {error: 'No background set.'})
+				return
+			}
+			throw error
+		}
+		return
+	}
+
+	if (projectBackgroundMatch && req.method === 'DELETE') {
+		const projectId = Number(projectBackgroundMatch[1])
+		await vikunja.request(`projects/${projectId}/background`, {method: 'DELETE'})
+		sendJson(res, 200, {ok: true})
+		return
+	}
+
+	if (projectBackgroundUploadMatch && req.method === 'PUT') {
+		const projectId = Number(projectBackgroundUploadMatch[1])
+		const contentType = `${req.headers['content-type'] || ''}`.trim()
+		if (!contentType.toLowerCase().includes('multipart/form-data')) {
+			sendJson(res, 400, {error: 'multipart/form-data is required.'})
+			return
+		}
+		const rawBody = await readRawBody(req, {maxBytes: PROJECT_BACKGROUND_MAX_BYTES})
+		const result = await vikunja.request(`projects/${projectId}/backgrounds/upload`, {
+			method: 'PUT',
+			rawBody,
+			headers: {
+				Accept: 'application/json',
+				'Content-Type': contentType,
+			},
+		})
+		sendJson(res, 200, {project: result})
+		return
+	}
+
+	if (projectBackgroundUnsplashMatch && req.method === 'POST') {
+		const projectId = Number(projectBackgroundUnsplashMatch[1])
+		const body = await readJsonBody(req)
+		const image = {
+			id: `${body?.id || ''}`,
+			url: `${body?.url || ''}`,
+			thumb: `${body?.thumb || ''}`,
+			blur_hash: `${body?.blur_hash || ''}`,
+			info: body?.info ?? {},
+		}
+		if (!image.id) {
+			sendJson(res, 400, {error: 'Unsplash image id is required.'})
+			return
+		}
+		const result = await vikunja.request(`projects/${projectId}/backgrounds/unsplash`, {
+			method: 'POST',
+			body: image,
+		})
+		sendJson(res, 200, {project: result})
+		return
+	}
+
+	if (unsplashSearchMatch && req.method === 'GET') {
+		const search = `${url.searchParams.get('s') || ''}`.trim()
+		const page = `${url.searchParams.get('p') || '1'}`.trim()
+		if (!search) {
+			sendJson(res, 400, {error: 'Search term required.'})
+			return
+		}
+		const results = await vikunja.request('backgrounds/unsplash/search', {
+			method: 'GET',
+			params: {s: search, p: page},
+		})
+		sendJson(res, 200, {results: Array.isArray(results) ? results : []})
+		return
+	}
+
+	if (unsplashImageMatch && req.method === 'GET') {
+		const imageId = encodeURIComponent(unsplashImageMatch[1])
+		const isThumb = Boolean(unsplashImageMatch[2])
+		const path = isThumb
+			? `backgrounds/unsplash/images/${imageId}/thumb`
+			: `backgrounds/unsplash/images/${imageId}`
+		const response = await vikunja.requestRaw(path, {
+			method: 'GET',
+			headers: {Accept: '*/*'},
+		})
+		const buffer = Buffer.from(await response.arrayBuffer())
+		const headers = {}
+		for (const header of ['content-type', 'content-length', 'cache-control', 'etag', 'last-modified']) {
+			const value = response.headers.get(header)
+			if (value) {
+				headers[header] = value
+			}
+		}
+		sendBuffer(res, response.status, buffer, headers)
+		return
+	}
+
 	if (projectUsersMatch && req.method === 'GET') {
 		const projectId = Number(projectUsersMatch[1])
 		const search = `${url.searchParams.get('s') || ''}`.trim()
@@ -1916,6 +2371,58 @@ async function handleApi(req, res, url) {
 		const projectId = Number(projectLinkShareMatch[1])
 		const shareId = Number(projectLinkShareMatch[2])
 		await vikunja.request(`projects/${projectId}/shares/${shareId}`, {
+			method: 'DELETE',
+		})
+		sendJson(res, 200, {ok: true})
+		return
+	}
+
+	if (projectWebhooksMatch && req.method === 'GET') {
+		const projectId = Number(projectWebhooksMatch[1])
+		const webhooks = await vikunja.fetchAllPages(`projects/${projectId}/webhooks`)
+		sendJson(res, 200, {webhooks: Array.isArray(webhooks) ? webhooks : []})
+		return
+	}
+
+	if (projectWebhooksMatch && req.method === 'PUT') {
+		if (!enforceRateLimit(req, res, sessionMutationRateLimiter, 'session-mutation')) {
+			return
+		}
+
+		const projectId = Number(projectWebhooksMatch[1])
+		const body = await readJsonBody(req)
+		const webhook = await vikunja.request(`projects/${projectId}/webhooks`, {
+			method: 'PUT',
+			body: normalizeWebhookBody(body),
+		})
+		sendJson(res, 201, webhook)
+		return
+	}
+
+	if (projectWebhookMatch && req.method === 'POST') {
+		if (!enforceRateLimit(req, res, sessionMutationRateLimiter, 'session-mutation')) {
+			return
+		}
+
+		const projectId = Number(projectWebhookMatch[1])
+		const hookId = Number(projectWebhookMatch[2])
+		const body = await readJsonBody(req)
+		const webhook = await vikunja.request(`projects/${projectId}/webhooks/${hookId}`, {
+			method: 'POST',
+			body: {events: normalizeWebhookEventsBody(body?.events)},
+		})
+		sendJson(res, 200, webhook)
+		return
+	}
+
+	if (projectWebhookMatch && req.method === 'DELETE') {
+		if (!enforceRateLimit(req, res, sessionMutationRateLimiter, 'session-mutation')) {
+			return
+		}
+
+		const projectId = Number(projectWebhookMatch[1])
+		const hookId = Number(projectWebhookMatch[2])
+		await vikunja.request(`projects/${projectId}/webhooks/${hookId}`, {
 			method: 'DELETE',
 		})
 		sendJson(res, 200, {ok: true})
@@ -2375,7 +2882,7 @@ async function handleApi(req, res, url) {
 			return
 		}
 
-		const rawBody = await readRawBody(req)
+		const rawBody = await readRawBody(req, {maxBytes: TASK_ATTACHMENT_MAX_BYTES})
 		const result = await vikunja.request(`tasks/${taskId}/attachments`, {
 			method: 'PUT',
 			rawBody,
@@ -2735,6 +3242,23 @@ function coordinateAccountRefresh(sessionId, refreshOperation) {
 }
 
 async function fetchUpstreamAuthInfo(baseUrl) {
+	try {
+		const payload = await fetchUpstreamInfo(baseUrl)
+		const localAuth = typeof payload?.auth?.local === 'object' && payload.auth.local ? payload.auth.local : null
+		return {
+			baseUrl,
+			localEnabled: typeof localAuth?.enabled === 'boolean' ? localAuth.enabled : null,
+			registrationEnabled:
+				typeof localAuth?.registration_enabled === 'boolean' ? localAuth.registration_enabled : null,
+		}
+	} catch {
+		const error = new Error('Unable to load auth settings from the Vikunja server.')
+		error.statusCode = 502
+		throw error
+	}
+}
+
+async function fetchUpstreamInfo(baseUrl) {
 	let infoResponse
 	try {
 		infoResponse = await fetch(new URL('info', `${baseUrl}/`), {
@@ -2743,25 +3267,186 @@ async function fetchUpstreamAuthInfo(baseUrl) {
 			},
 		})
 	} catch {
-		const error = new Error('Unable to load auth settings from the Vikunja server.')
+		const error = new Error('Unable to load info from the Vikunja server.')
 		error.statusCode = 502
 		throw error
 	}
 
 	if (!infoResponse.ok) {
-		const error = new Error('Unable to load auth settings from the Vikunja server.')
-		error.statusCode = 502
+		const error = new Error('Unable to load info from the Vikunja server.')
+		error.statusCode = infoResponse.status || 502
 		throw error
 	}
 
-	const payload = await infoResponse.json().catch(() => ({}))
-	const localAuth = typeof payload?.auth?.local === 'object' && payload.auth.local ? payload.auth.local : null
-	return {
-		baseUrl,
-		localEnabled: typeof localAuth?.enabled === 'boolean' ? localAuth.enabled : null,
-		registrationEnabled:
-			typeof localAuth?.registration_enabled === 'boolean' ? localAuth.registration_enabled : null,
+	return await infoResponse.json().catch(() => ({}))
+}
+
+function decorateInfoPayload(payload) {
+	if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+		return payload
 	}
+
+	return {
+		...payload,
+		oidcProviders: getOidcProvidersFromInfo(payload).map(provider => ({
+			key: provider.key,
+			name: provider.name,
+		})),
+	}
+}
+
+function getOidcProvidersFromInfo(payload) {
+	const providers =
+		Array.isArray(payload?.auth?.openid?.providers)
+			? payload.auth.openid.providers
+			: Array.isArray(payload?.auth?.openid_connect?.providers)
+				? payload.auth.openid_connect.providers
+				: []
+
+	return providers
+		.map(provider => {
+			if (!provider || typeof provider !== 'object' || Array.isArray(provider)) {
+				return null
+			}
+			const key = `${provider.key || ''}`.trim()
+			const name = `${provider.name || key}`.trim()
+			const auth_url = `${provider.auth_url || provider.authurl || ''}`.trim()
+			return key && auth_url ? {key, name, auth_url} : null
+		})
+		.filter(Boolean)
+}
+
+function getOidcProviderFromInfo(payload, providerKey) {
+	const normalizedProviderKey = `${providerKey || ''}`.trim()
+	return getOidcProvidersFromInfo(payload).find(provider => provider.key === normalizedProviderKey) || null
+}
+
+function isAllowedPublicRedirectUri(redirectUri) {
+	const normalizedRedirectUri = `${redirectUri || ''}`.trim()
+	if (!normalizedRedirectUri || !publicAppOrigin) {
+		return false
+	}
+
+	try {
+		return new URL(normalizedRedirectUri).origin === publicAppOrigin
+	} catch {
+		return false
+	}
+}
+
+function cleanupExpiredOpenIdLoginState() {
+	const now = Date.now()
+	for (const [state, value] of openIdLoginState.entries()) {
+		if (!value || Number(value.expiresAt || 0) <= now) {
+			openIdLoginState.delete(state)
+		}
+	}
+}
+
+function buildOidcAuthUrl(authUrl, {state, nonce, redirectUri}) {
+	const nextAuthUrl = new URL(`${authUrl || ''}`)
+	nextAuthUrl.searchParams.set('state', state)
+	nextAuthUrl.searchParams.set('nonce', nonce)
+	nextAuthUrl.searchParams.set('redirect_url', redirectUri)
+	return nextAuthUrl.toString()
+}
+
+function normalizeWebhookBody(body) {
+	return {
+		target_url: `${body?.target_url || body?.targetUrl || ''}`.trim(),
+		events: normalizeWebhookEventsBody(body?.events),
+		secret: `${body?.secret || ''}`.trim() || null,
+	}
+}
+
+function normalizeWebhookEventsBody(value) {
+	if (!Array.isArray(value)) {
+		return []
+	}
+
+	return [...new Set(
+		value
+			.map(eventName => `${eventName || ''}`.trim())
+			.filter(Boolean),
+	)]
+}
+
+function normalizeMigrationService(value) {
+	const normalized = `${value || ''}`.trim().toLowerCase()
+	switch (normalized) {
+		case 'todoist':
+		case 'trello':
+		case 'microsoft-todo':
+		case 'ticktick':
+		case 'vikunja-file':
+			return normalized
+		default:
+			return ''
+	}
+}
+
+function normalizeMigrationAuthUrl(value) {
+	if (typeof value === 'string') {
+		return `${value}`.trim()
+	}
+	if (value && typeof value === 'object' && !Array.isArray(value)) {
+		return `${value.authUrl || value.url || value.auth_url || ''}`.trim()
+	}
+	return ''
+}
+
+function normalizeMigrationStatusPayload(service, payload) {
+	const normalizedService = normalizeMigrationService(service)
+	const rawStatus = `${payload?.status || ''}`.trim().toLowerCase()
+	const message =
+		typeof payload?.message === 'string'
+			? `${payload.message}`.trim() || null
+			: typeof payload?.error === 'string'
+				? `${payload.error}`.trim() || null
+				: null
+
+	if (rawStatus === 'idle' || rawStatus === 'running' || rawStatus === 'done' || rawStatus === 'error') {
+		return {
+			service: normalizedService,
+			status: rawStatus,
+			message,
+		}
+	}
+	if (payload?.done === true || payload?.migrated === true || rawStatus === 'success') {
+		return {
+			service: normalizedService,
+			status: 'done',
+			message,
+		}
+	}
+	if (payload?.running === true || rawStatus === 'pending') {
+		return {
+			service: normalizedService,
+			status: 'running',
+			message,
+		}
+	}
+	return {
+		service: normalizedService,
+		status: 'idle',
+		message,
+	}
+}
+
+function formatErrorMessage(error, fallback) {
+	const directMessage = `${error?.message || ''}`.trim()
+	if (directMessage) {
+		return directMessage
+	}
+
+	if (error?.details && typeof error.details === 'object' && !Array.isArray(error.details)) {
+		const detailMessage = `${error.details.message || error.details.error || ''}`.trim()
+		if (detailMessage) {
+			return detailMessage
+		}
+	}
+
+	return fallback
 }
 
 async function getVikunjaContext(req, res = null) {
@@ -3008,7 +3693,7 @@ function summarizeAccount(account, source) {
 			account.linkShareAuth === true && Number(account.linkShareProjectId || 0) > 0
 				? Number(account.linkShareProjectId)
 				: null,
-		isAdmin:
+		canUseAdminBridge:
 			source === 'account' &&
 			account.authMode === 'password' &&
 			adminBridge.isOperatorAccount(account),
@@ -3311,6 +3996,12 @@ function assertTrustedOrigin(req) {
 
 	const candidateOrigin = getRequestOrigin(req)
 	if (!candidateOrigin) {
+		if (hasAppSessionCookie(req)) {
+			const error = new Error('Origin header required for cookie-authenticated requests.')
+			error.statusCode = 403
+			throw error
+		}
+
 		return
 	}
 
@@ -3325,6 +4016,10 @@ function assertTrustedOrigin(req) {
 		expectedOrigin: getExpectedRequestOrigin(req),
 	}
 	throw error
+}
+
+function hasAppSessionCookie(req) {
+	return Boolean(getAppSessionId(req))
 }
 
 function isUnsafeMethod(method) {
@@ -3581,6 +4276,10 @@ function toIntegerOrNull(value) {
 
 function buildSavedFilterPayload(body, filterId = 0) {
 	const filters = body?.filters && typeof body.filters === 'object' ? body.filters : {}
+	const normalizedSort = normalizeSavedFilterSortPayload(
+		filters.sort_by ?? filters.sortBy ?? body?.sort_by ?? body?.sortBy,
+		filters.order_by ?? filters.orderBy ?? body?.order_by ?? body?.orderBy,
+	)
 	const payload = {
 		title: `${body?.title || ''}`.trim(),
 		description: `${body?.description || ''}`.trim(),
@@ -3588,8 +4287,8 @@ function buildSavedFilterPayload(body, filterId = 0) {
 		filters: {
 			filter: `${filters.filter || body?.filter || 'done = false'}`.trim(),
 			filter_include_nulls: Boolean(filters.filter_include_nulls ?? filters.filterIncludeNulls ?? body?.filter_include_nulls ?? body?.filterIncludeNulls),
-			sort_by: normalizeTaskCollectionArray(filters.sort_by ?? filters.sortBy ?? body?.sort_by ?? body?.sortBy),
-			order_by: normalizeTaskCollectionArray(filters.order_by ?? filters.orderBy ?? body?.order_by ?? body?.orderBy),
+			sort_by: normalizedSort.sort_by,
+			order_by: normalizedSort.order_by,
 		},
 	}
 
@@ -3608,6 +4307,25 @@ function buildSavedFilterPayload(body, filterId = 0) {
 	}
 
 	return payload
+}
+
+function normalizeSavedFilterSortPayload(sortByValue, orderByValue) {
+	const sortBy = normalizeTaskCollectionArray(sortByValue)
+		.filter(value => value !== 'position')
+	const orderBy = normalizeTaskCollectionArray(orderByValue)
+		.map(value => `${value}`.trim().toLowerCase())
+
+	if (sortBy.length === 0) {
+		return {
+			sort_by: ['done', 'id'],
+			order_by: ['asc', 'desc'],
+		}
+	}
+
+	return {
+		sort_by: sortBy,
+		order_by: sortBy.map((_, index) => orderBy[index] === 'desc' ? 'desc' : 'asc'),
+	}
 }
 
 function normalizeTaskCollectionArray(value) {

@@ -8,6 +8,8 @@ import type {
 	AvatarProvider,
 	MailerConfig,
 	MailerConfigInput,
+	MigrationImporterConfig,
+	MigrationImporterConfigInput,
 	NotificationSettingsForm,
 	UserFrontendSettings,
 } from '@/types'
@@ -42,6 +44,11 @@ interface MailerConfigApplyPayload {
 	config?: MailerConfig | null
 }
 
+interface MigrationImporterConfigApplyPayload {
+	restarted?: boolean
+	config?: MigrationImporterConfig | null
+}
+
 export interface UsersSlice {
 	adminUsers: AdminUser[]
 	adminUsersLoaded: boolean
@@ -64,6 +71,11 @@ export interface UsersSlice {
 	mailerConfigLoading: boolean
 	mailerConfigSubmitting: boolean
 	mailerConfigRestarting: boolean
+	migrationImporterConfig: MigrationImporterConfig | null
+	migrationImporterConfigLoadAttempted: boolean
+	migrationImporterConfigLoading: boolean
+	migrationImporterConfigSubmitting: boolean
+	migrationImporterConfigRestarting: boolean
 	collaborationSettingsSubmitting: boolean
 	notificationPreferencesSubmitting: boolean
 	avatarProvider: AvatarProvider | null
@@ -84,6 +96,9 @@ export interface UsersSlice {
 	loadMailerConfig: () => Promise<void>
 	saveMailerConfig: (settings: MailerConfigInput) => Promise<boolean>
 	applyMailerConfig: () => Promise<boolean>
+	loadMigrationImporterConfig: () => Promise<void>
+	saveMigrationImporterConfig: (settings: MigrationImporterConfigInput) => Promise<boolean>
+	applyMigrationImporterConfig: () => Promise<boolean>
 	createAdminUser: (payload: {username: string; email: string; password: string}) => Promise<boolean>
 	updateAdminUser: (identifier: number | string, payload: {username: string; email: string}) => Promise<boolean>
 	setAdminUserEnabled: (identifier: number | string, enabled: boolean) => Promise<boolean>
@@ -119,6 +134,11 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 	mailerConfigLoading: false,
 	mailerConfigSubmitting: false,
 	mailerConfigRestarting: false,
+	migrationImporterConfig: null,
+	migrationImporterConfigLoadAttempted: false,
+	migrationImporterConfigLoading: false,
+	migrationImporterConfigSubmitting: false,
+	migrationImporterConfigRestarting: false,
 	collaborationSettingsSubmitting: false,
 	notificationPreferencesSubmitting: false,
 	avatarProvider: null,
@@ -506,6 +526,123 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 		}
 	},
 
+	async loadMigrationImporterConfig() {
+		if (!canManageUsers(get())) {
+			set({
+				migrationImporterConfig: null,
+				migrationImporterConfigLoadAttempted: false,
+				migrationImporterConfigLoading: false,
+			})
+			return
+		}
+
+		if (get().migrationImporterConfigLoading) {
+			return
+		}
+
+		set({
+			migrationImporterConfigLoading: true,
+			error: null,
+		})
+
+		try {
+			const config = await api<MigrationImporterConfig>('/api/admin/config/migration-importers')
+			set({
+				migrationImporterConfig: config,
+				migrationImporterConfigLoadAttempted: true,
+			})
+		} catch (error) {
+			set({
+				error: formatError(error as Error),
+				migrationImporterConfigLoadAttempted: true,
+			})
+		} finally {
+			set({migrationImporterConfigLoading: false})
+		}
+	},
+
+	async saveMigrationImporterConfig(settings) {
+		if (!canManageUsers(get())) {
+			return false
+		}
+
+		set({
+			migrationImporterConfigSubmitting: true,
+			error: null,
+			settingsNotice: null,
+		})
+
+		try {
+			const config = await api<MigrationImporterConfig, MigrationImporterConfigInput>('/api/admin/config/migration-importers', {
+				method: 'POST',
+				body: {
+					todoist: {
+						enabled: Boolean(settings.todoist?.enabled),
+						clientId: `${settings.todoist?.clientId || ''}`.trim(),
+						clientSecret: `${settings.todoist?.clientSecret || ''}`,
+						redirectUrl: `${settings.todoist?.redirectUrl || ''}`.trim(),
+					},
+					trello: {
+						enabled: Boolean(settings.trello?.enabled),
+						key: `${settings.trello?.key || ''}`.trim(),
+						redirectUrl: `${settings.trello?.redirectUrl || ''}`.trim(),
+					},
+					microsoftTodo: {
+						enabled: Boolean(settings.microsoftTodo?.enabled),
+						clientId: `${settings.microsoftTodo?.clientId || ''}`.trim(),
+						clientSecret: `${settings.microsoftTodo?.clientSecret || ''}`,
+						redirectUrl: `${settings.microsoftTodo?.redirectUrl || ''}`.trim(),
+					},
+				},
+			})
+			set({
+				migrationImporterConfig: config,
+				migrationImporterConfigLoadAttempted: true,
+				settingsNotice: 'Migration importer settings saved.',
+			})
+			return true
+		} catch (error) {
+			set({error: formatError(error as Error)})
+			return false
+		} finally {
+			set({migrationImporterConfigSubmitting: false})
+		}
+	},
+
+	async applyMigrationImporterConfig() {
+		if (!canManageUsers(get())) {
+			return false
+		}
+
+		set({
+			migrationImporterConfigRestarting: true,
+			error: null,
+			settingsNotice: null,
+		})
+
+		try {
+			const result = await api<MigrationImporterConfigApplyPayload>('/api/admin/config/migration-importers/apply', {
+				method: 'POST',
+			})
+			set({
+				migrationImporterConfig: result.config || null,
+				migrationImporterConfigLoadAttempted: true,
+				settingsNotice: result.restarted ? 'Migration importer settings applied.' : null,
+			})
+			await Promise.all([
+				get().loadAccountStatus(),
+				get().loadAdminRuntimeHealth(),
+				get().loadVikunjaInfo(),
+			])
+			return result.restarted === true
+		} catch (error) {
+			set({error: formatError(error as Error)})
+			return false
+		} finally {
+			set({migrationImporterConfigRestarting: false})
+		}
+	},
+
 	async createAdminUser(payload) {
 		if (!canManageUsers(get())) {
 			return false
@@ -838,6 +975,11 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 			mailerConfigLoading: false,
 			mailerConfigSubmitting: false,
 			mailerConfigRestarting: false,
+			migrationImporterConfig: null,
+			migrationImporterConfigLoadAttempted: false,
+			migrationImporterConfigLoading: false,
+			migrationImporterConfigSubmitting: false,
+			migrationImporterConfigRestarting: false,
 			collaborationSettingsSubmitting: false,
 			notificationPreferencesSubmitting: false,
 			avatarProvider: null,
@@ -853,7 +995,7 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 function canManageUsers(state: AppStore) {
 	return Boolean(
 		state.connected &&
-		state.account?.isAdmin &&
+		state.account?.canUseAdminBridge &&
 		state.account?.authMode === 'password',
 	)
 }
