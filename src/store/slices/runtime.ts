@@ -74,10 +74,6 @@ async function getReachableOnlineStatus() {
 		return true
 	}
 
-	if (window.navigator.onLine) {
-		return true
-	}
-
 	try {
 		const response = await fetch('/health', {
 			method: 'GET',

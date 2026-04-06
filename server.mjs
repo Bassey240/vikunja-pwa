@@ -199,19 +199,26 @@ async function handleApi(req, res, url) {
 	assertTrustedOrigin(req)
 
 	if (url.pathname === '/api/config' && req.method === 'GET') {
-		sendJson(res, 200, {
-			configured: legacyConfigured,
-			baseUrl: defaultVikunjaBaseUrl || null,
-			defaultBaseUrl: defaultVikunjaBaseUrl || null,
-			publicAppOrigin,
-			legacyConfigured,
-			buildId,
-			authModes: ['password', 'apiToken'],
-			features: {
-				adminBridgeMode: adminBridge.getPublicConfig().mode,
-				httpsEnabled,
+		sendJson(
+			res,
+			200,
+			{
+				configured: legacyConfigured,
+				baseUrl: defaultVikunjaBaseUrl || null,
+				defaultBaseUrl: defaultVikunjaBaseUrl || null,
+				publicAppOrigin,
+				legacyConfigured,
+				buildId,
+				authModes: ['password', 'apiToken'],
+				features: {
+					adminBridgeMode: adminBridge.getPublicConfig().mode,
+					httpsEnabled,
+				},
 			},
-		})
+			{
+				'Cache-Control': 'no-store',
+			},
+		)
 		return
 	}
 
@@ -235,17 +242,31 @@ async function handleApi(req, res, url) {
 	if (url.pathname === '/api/session' && req.method === 'GET') {
 		const context = await getVikunjaContext(req, res)
 		if (!context) {
-			sendJson(res, 200, {
-				connected: false,
-				account: null,
-			})
+			sendJson(
+				res,
+				200,
+				{
+					connected: false,
+					account: null,
+				},
+				{
+					'Cache-Control': 'no-store',
+				},
+			)
 			return
 		}
 
-		sendJson(res, 200, {
-			connected: true,
-			account: summarizeAccount(context.account, context.source),
-		})
+		sendJson(
+			res,
+			200,
+			{
+				connected: true,
+				account: summarizeAccount(context.account, context.source),
+			},
+			{
+				'Cache-Control': 'no-store',
+			},
+		)
 		return
 	}
 

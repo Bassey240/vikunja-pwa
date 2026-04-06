@@ -1018,6 +1018,44 @@ test('offline reload restores the last signed-in shell from the cached snapshot'
 	await expect(page.getByRole('navigation', {name: 'Primary'})).toBeVisible({timeout: 15_000})
 	await expect(page.getByRole('button', {name: 'Today'})).toBeVisible()
 	await expect(page.getByRole('heading', {name: 'Connect to your Vikunja server'})).toHaveCount(0)
+})
+
+test('offline reload restores the last signed-in shell even when online status is stale during boot', async ({page}) => {
+	await loginWithPassword(page)
+	await page.evaluate(async () => {
+		if ('serviceWorker' in navigator) {
+			await navigator.serviceWorker.ready
+		}
+	})
+	if (!await page.evaluate(() => Boolean(navigator.serviceWorker?.controller))) {
+		await page.reload({waitUntil: 'domcontentloaded'})
+		await expect(page.getByRole('navigation', {name: 'Primary'})).toBeVisible({timeout: 15_000})
+	}
+	await expect
+		.poll(() => page.evaluate(() => Boolean(navigator.serviceWorker?.controller)))
+		.toBe(true)
+	await expect
+		.poll(async () => Boolean(await getOfflineSnapshot(page)))
+		.toBe(true)
+	await expect
+		.poll(async () => Boolean(await hasCachedOfflineShell(page)))
+		.toBe(true)
+
+	await page.addInitScript(() => {
+		Object.defineProperty(window.navigator, 'onLine', {
+			configurable: true,
+			get() {
+				return true
+			},
+		})
+	})
+	await page.context().setOffline(true)
+	await page.reload({waitUntil: 'domcontentloaded'})
+
+	await expect.poll(() => page.evaluate(() => window.location.pathname)).toBe('/')
+	await expect(page.getByRole('navigation', {name: 'Primary'})).toBeVisible({timeout: 15_000})
+	await expect(page.getByRole('button', {name: 'Today'})).toBeVisible()
+	await expect(page.getByRole('heading', {name: 'Connect to your Vikunja server'})).toHaveCount(0)
 	await expect(page.locator('.runtime-status-banner').first()).toContainText('saved locally and will sync')
 })
 
