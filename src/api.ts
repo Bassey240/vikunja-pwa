@@ -1,3 +1,5 @@
+import {markCollectionMutationActivity} from '@/utils/collectionPolling'
+
 export interface ApiError extends Error {
 	statusCode?: number
 	details?: unknown
@@ -31,6 +33,10 @@ export async function api<TResponse, TBody = unknown>(
 		throw error
 	}
 
+	if ((options.method || 'GET') !== 'GET') {
+		markCollectionMutationActivity()
+	}
+
 	return payload as TResponse
 }
 
@@ -56,6 +62,8 @@ export async function uploadApi<TResponse>(
 		error.details = (payload as {details?: unknown}).details || null
 		throw error
 	}
+
+	markCollectionMutationActivity()
 
 	return payload as TResponse
 }

@@ -131,7 +131,7 @@ test('registration link stays hidden when the server disables self-registration'
 	}
 })
 
-test('instance info disables local password actions and exposes configured OIDC providers', async ({browser}) => {
+test('instance info disables local password actions and completes an OIDC sign-in callback', async ({browser}) => {
 	const oidcStack = await startTestStack({
 		legacyConfigured: false,
 		mockVikunjaOptions: {
@@ -141,7 +141,7 @@ test('instance info disables local password actions and exposes configured OIDC 
 				{
 					name: 'Acme SSO',
 					key: 'acme',
-					auth_url: 'https://sso.example.test/login',
+					auth_url: '/mock-oidc/acme/authorize',
 				},
 			],
 		},
@@ -161,6 +161,8 @@ test('instance info disables local password actions and exposes configured OIDC 
 		await expect(page.getByRole('button', {name: 'Create account'})).toHaveCount(0)
 		await expect(page.getByRole('button', {name: 'Forgot password?'})).toHaveCount(0)
 		await expect(page.getByRole('button', {name: 'Connect'})).toBeDisabled()
+		await page.getByRole('button', {name: 'Sign in with Acme SSO'}).click()
+		await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
 	} finally {
 		await page.close()
 		await oidcStack.stop()

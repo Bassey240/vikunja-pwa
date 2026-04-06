@@ -43,6 +43,60 @@ test('today tasks render and checkbox plus menu actions update the collection', 
 	await expect(page.locator('.workspace-screen.is-active .task-row').filter({hasText: 'Prepare daily summary (Copy)'})).toHaveCount(0)
 })
 
+test('background polling refreshes today after an external task change', async ({page}) => {
+	await page.addInitScript(() => {
+		window.__VIKUNJA_POLLING__ = {
+			taskIntervalMs: 250,
+			projectIntervalMs: 500,
+			mutationDebounceMs: 0,
+		}
+	})
+
+	await page.reload()
+	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
+
+	await stack.mockApi('tasks/102', {
+		method: 'POST',
+		headers: {
+			'content-type': 'application/json',
+		},
+		body: JSON.stringify({
+			title: 'Prepare synced summary',
+		}),
+	})
+
+	await expect(page.locator('.workspace-screen.is-active .task-row').filter({hasText: 'Prepare synced summary'})).toHaveCount(1, {timeout: 5000})
+})
+
+test('visibility restore polling refreshes today after an external task change', async ({page}) => {
+	await page.addInitScript(() => {
+		window.__VIKUNJA_POLLING__ = {
+			taskIntervalMs: 60_000,
+			projectIntervalMs: 60_000,
+			mutationDebounceMs: 0,
+		}
+	})
+
+	await page.reload()
+	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
+
+	await stack.mockApi('tasks/102', {
+		method: 'POST',
+		headers: {
+			'content-type': 'application/json',
+		},
+		body: JSON.stringify({
+			title: 'Prepare visibility synced summary',
+		}),
+	})
+
+	await page.evaluate(() => {
+		document.dispatchEvent(new Event('visibilitychange'))
+	})
+
+	await expect(page.locator('.workspace-screen.is-active .task-row').filter({hasText: 'Prepare visibility synced summary'})).toHaveCount(1, {timeout: 5000})
+})
+
 test('task completion commit preserves the task due date after the undo window', async ({page}) => {
 	let completionPayload = null
 	const completionRequest = page.waitForRequest(request => {

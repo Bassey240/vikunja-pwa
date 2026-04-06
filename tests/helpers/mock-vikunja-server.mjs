@@ -16,6 +16,7 @@ export async function createMockVikunjaServer({
 	totpState = null,
 	oidcProviders = [],
 	enabledBackgroundProviders = ['unsplash'],
+	availableMigrators = ['vikunja-file', 'ticktick', 'todoist', 'trello', 'microsoft-todo'],
 	motd = 'Smoke suite MOTD',
 	taskAttachmentsEnabled = true,
 	loginAccessTokenLifetimeSeconds = 3600,
@@ -35,6 +36,25 @@ export async function createMockVikunjaServer({
 	const server = http.createServer(async (req, res) => {
 		try {
 			const url = new URL(req.url || '/', 'http://127.0.0.1')
+			const mockOidcAuthorizeMatch = url.pathname.match(/^\/mock-oidc\/([^/]+)\/authorize$/)
+			if (mockOidcAuthorizeMatch && req.method === 'GET') {
+				const provider = decodeURIComponent(mockOidcAuthorizeMatch[1] || '')
+				const redirectUrl = `${url.searchParams.get('redirect_url') || ''}`.trim()
+				const stateToken = `${url.searchParams.get('state') || ''}`.trim()
+				if (!provider || !redirectUrl || !stateToken) {
+					sendJson(res, 400, {error: 'provider, redirect_url, and state are required.'})
+					return
+				}
+
+				const nextUrl = new URL(redirectUrl)
+				nextUrl.searchParams.set('code', `mock-oidc-code-${provider}`)
+				nextUrl.searchParams.set('state', stateToken)
+				res.statusCode = 302
+				res.setHeader('Location', nextUrl.toString())
+				res.end()
+				return
+			}
+
 			if (!url.pathname.startsWith('/api/v1/')) {
 				sendJson(res, 404, {error: 'Route not found.'})
 				return
@@ -61,6 +81,7 @@ export async function createMockVikunjaServer({
 			}
 
 			if (route === 'info' && req.method === 'GET') {
+				const requestOrigin = `http://${req.headers.host || '127.0.0.1'}`
 				sendJson(res, 200, {
 					version: 'test',
 					frontend_url: 'http://127.0.0.1',
@@ -68,6 +89,7 @@ export async function createMockVikunjaServer({
 					caldav_enabled: caldavEnabled,
 					task_attachments_enabled: taskAttachmentsEnabled,
 					enabled_background_providers: enabledBackgroundProviders,
+					available_migrators: availableMigrators,
 					link_sharing_enabled: true,
 					public_teams_enabled: true,
 					email_reminders_enabled: true,
@@ -78,7 +100,13 @@ export async function createMockVikunjaServer({
 						},
 						openid: {
 							enabled: oidcProviders.length > 0,
-							providers: oidcProviders,
+							providers: oidcProviders.map(provider => ({
+								...provider,
+								auth_url:
+									typeof provider?.auth_url === 'string' && provider.auth_url.startsWith('/')
+										? `${requestOrigin}${provider.auth_url}`
+										: provider?.auth_url,
+							})),
 						},
 					},
 					registration_enabled: registrationEnabled,
@@ -154,6 +182,34 @@ export async function createMockVikunjaServer({
 					},
 					{
 						'Set-Cookie': buildRefreshCookie(issueRefreshToken(username, {reset: true})),
+					},
+				)
+				return
+			}
+
+			const oidcCallbackMatch = route.match(/^auth\/openid\/([^/]+)\/callback$/)
+			if (oidcCallbackMatch && req.method === 'POST') {
+				const provider = decodeURIComponent(oidcCallbackMatch[1] || '')
+				const code = `${body?.code || ''}`.trim()
+				const redirectUrl = `${body?.redirect_url || ''}`.trim()
+				const configuredProvider = oidcProviders.find(entry => `${entry?.key || ''}`.trim() === provider)
+				if (!configuredProvider) {
+					sendJson(res, 404, {error: 'Unknown OpenID provider.'})
+					return
+				}
+				if (!code || !redirectUrl) {
+					sendJson(res, 400, {error: 'code and redirect_url are required.'})
+					return
+				}
+
+				sendJson(
+					res,
+					200,
+					{
+						token: buildToken('smoke-user', loginAccessTokenLifetimeSeconds),
+					},
+					{
+						'Set-Cookie': buildRefreshCookie(issueRefreshToken('smoke-user', {reset: true})),
 					},
 				)
 				return
@@ -585,6 +641,96 @@ export async function createMockVikunjaServer({
 				return
 			}
 
+			if (route === 'user/settings/webhooks' && req.method === 'GET') {
+				sendJson(res, 200, paginate((state.userWebhooks || []).map(normalizeWebhook), url))
+				return
+			}
+
+			if (route === 'user/settings/webhooks' && req.method === 'PUT') {
+				const now = new Date().toISOString()
+				const webhook = normalizeWebhook({
+					id: state.nextWebhookId++,
+					target_url: `${body?.target_url || ''}`.trim(),
+					events: Array.isArray(body?.events) ? body.events : [],
+					secret: `${body?.secret || ''}`.trim() || null,
+					created: now,
+					updated: now,
+				})
+				state.userWebhooks = [...(state.userWebhooks || []), webhook]
+				sendJson(res, 201, webhook)
+				return
+			}
+
+			if (route === 'user/settings/webhooks/events' && req.method === 'GET') {
+				sendJson(res, 200, state.userWebhookEvents || [])
+				return
+			}
+
+			const userWebhookMatch = route.match(/^user\/settings\/webhooks\/(\d+)$/)
+			if (userWebhookMatch && req.method === 'POST') {
+				const webhookId = Number(userWebhookMatch[1])
+				const webhook = getUserWebhook(state, webhookId)
+				webhook.events = normalizeWebhookEvents(body?.events)
+				webhook.updated = new Date().toISOString()
+				sendJson(res, 200, normalizeWebhook(webhook))
+				return
+			}
+
+			if (userWebhookMatch && req.method === 'DELETE') {
+				const webhookId = Number(userWebhookMatch[1])
+				state.userWebhooks = (state.userWebhooks || []).filter(entry => Number(entry.id || 0) !== webhookId)
+				sendJson(res, 200, {ok: true})
+				return
+			}
+
+			if (route === 'webhooks/events' && req.method === 'GET') {
+				sendJson(res, 200, state.projectWebhookEvents || [])
+				return
+			}
+
+			const migrationMatch = route.match(/^migration\/([^/]+)\/(auth|status|migrate)$/)
+			if (migrationMatch) {
+				const service = decodeURIComponent(migrationMatch[1] || '')
+				const action = migrationMatch[2]
+				if (!state.migrationStatus?.[service]) {
+					sendJson(res, 404, {error: 'Unknown migration service.'})
+					return
+				}
+
+				if (action === 'auth' && req.method === 'GET') {
+					sendJson(res, 200, {
+						authUrl: `https://import.example.test/${encodeURIComponent(service)}`,
+					})
+					return
+				}
+
+				if (action === 'status' && req.method === 'GET') {
+					sendJson(res, 200, normalizeMigrationState(service, state.migrationStatus[service]))
+					return
+				}
+
+				if (action === 'migrate' && req.method === 'POST') {
+					if ((service === 'ticktick' || service === 'vikunja-file') && !isMultipart) {
+						sendJson(res, 400, {error: 'File upload required.'})
+						return
+					}
+					if (service !== 'ticktick' && service !== 'vikunja-file' && !`${body?.code || ''}`.trim()) {
+						sendJson(res, 400, {error: 'code is required.'})
+						return
+					}
+
+					state.migrationStatus[service] = {
+						status: 'running',
+						message:
+							service === 'ticktick' || service === 'vikunja-file'
+								? 'Import file uploaded. Vikunja is processing it.'
+								: 'Import started. Vikunja is processing it.',
+					}
+					sendJson(res, 200, normalizeMigrationState(service, state.migrationStatus[service]))
+					return
+				}
+			}
+
 			const reactionMatch = route.match(/^(tasks|comments|projects)\/(\d+)\/reactions$/)
 			if (reactionMatch && req.method === 'GET') {
 				const entity = reactionMatch[1]
@@ -731,6 +877,7 @@ export async function createMockVikunjaServer({
 					identifier: `${body?.identifier || ''}`.trim(),
 					is_favorite: Boolean(body?.is_favorite),
 					is_archived: false,
+					max_permission: 2,
 				}
 				state.projects.push(project)
 				sendJson(res, 201, project)
@@ -738,6 +885,10 @@ export async function createMockVikunjaServer({
 			}
 
 			if (route === 'filters' && req.method === 'PUT') {
+				if (hasInvalidSavedFilterSort(body?.filters)) {
+					sendJson(res, 400, {message: 'You must provide a project view ID when sorting by position'})
+					return
+				}
 				const savedFilter = buildSavedFilter({
 					id: state.nextSavedFilterId++,
 					title: body?.title,
@@ -763,6 +914,10 @@ export async function createMockVikunjaServer({
 			}
 
 			if (filterMatch && req.method === 'POST') {
+				if (hasInvalidSavedFilterSort(body?.filters)) {
+					sendJson(res, 400, {message: 'You must provide a project view ID when sorting by position'})
+					return
+				}
 				const savedFilter = getSavedFilter(Number(filterMatch[1]))
 				const nextFilter = buildSavedFilter({
 					...savedFilter,
@@ -793,6 +948,140 @@ export async function createMockVikunjaServer({
 			if (projectViewsMatch && req.method === 'GET') {
 				const projectId = Number(projectViewsMatch[1])
 				sendJson(res, 200, paginate(getViewsForProject(projectId), url))
+				return
+			}
+
+			if (projectViewsMatch && req.method === 'PUT') {
+				const projectId = Number(projectViewsMatch[1])
+				const project = getProject(projectId)
+				const title = `${body?.title || ''}`.trim()
+				const viewKind = `${body?.view_kind || ''}`.trim()
+				if (!title || !viewKind) {
+					sendJson(res, 400, {error: 'title and view_kind are required.'})
+					return
+				}
+
+				const existingViews = getViewsForProject(projectId)
+				const nextPosition = Math.max(0, ...existingViews.map(view => Number(view.position || 0))) + 100
+				const view = {
+					id: state.nextViewId++,
+					project_id: projectId,
+					title,
+					view_kind: viewKind,
+					position: Number(body?.position || nextPosition),
+					filter: body?.filter || null,
+					bucket_configuration_mode: body?.bucket_configuration_mode || null,
+					bucket_configuration: Array.isArray(body?.bucket_configuration) ? body.bucket_configuration : null,
+				}
+				if (viewKind === 'kanban') {
+					const defaultBucketId = state.nextBucketId++
+					const doneBucketId = state.nextBucketId++
+					view.default_bucket_id = defaultBucketId
+					view.done_bucket_id = doneBucketId
+					state.bucketsByViewId = {
+						...state.bucketsByViewId,
+						[view.id]: [
+							{id: defaultBucketId, project_id: projectId, project_view_id: view.id, title: 'To Do', position: 100, limit: 0, tasks: []},
+							{id: doneBucketId, project_id: projectId, project_view_id: view.id, title: 'Done', position: 200, limit: 0, tasks: []},
+						],
+					}
+				}
+				state.viewsByProjectId = {
+					...state.viewsByProjectId,
+					[projectId]: [...existingViews, view].sort((left, right) => Number(left.position || 0) - Number(right.position || 0)),
+				}
+				project.updated = new Date().toISOString()
+				sendJson(res, 201, view)
+				return
+			}
+
+			const projectViewMatch = route.match(/^projects\/(-?\d+)\/views\/(\d+)$/)
+			if (projectViewMatch && req.method === 'DELETE') {
+				const projectId = Number(projectViewMatch[1])
+				const viewId = Number(projectViewMatch[2])
+				state.viewsByProjectId = {
+					...state.viewsByProjectId,
+					[projectId]: getViewsForProject(projectId).filter(view => Number(view.id || 0) !== viewId),
+				}
+				delete state.bucketsByViewId[viewId]
+				sendJson(res, 200, {ok: true})
+				return
+			}
+
+			const projectBackgroundMatch = route.match(/^projects\/(-?\d+)\/background$/)
+			if (projectBackgroundMatch && req.method === 'GET') {
+				const projectId = Number(projectBackgroundMatch[1])
+				if (!state.projectBackgrounds[projectId]) {
+					sendJson(res, 404, {error: 'No background set.'})
+					return
+				}
+				sendBuffer(res, 200, ONE_PIXEL_PNG, {'Content-Type': 'image/png'})
+				return
+			}
+
+			if (projectBackgroundMatch && req.method === 'DELETE') {
+				const projectId = Number(projectBackgroundMatch[1])
+				const project = getProject(projectId)
+				delete state.projectBackgrounds[projectId]
+				project.has_background = false
+				project.background_information = null
+				project.background_blur_hash = null
+				project.backgroundInformation = null
+				project.backgroundBlurHash = null
+				sendJson(res, 200, {ok: true})
+				return
+			}
+
+			const projectBackgroundUploadMatch = route.match(/^projects\/(-?\d+)\/backgrounds\/upload$/)
+			if (projectBackgroundUploadMatch && req.method === 'PUT') {
+				const projectId = Number(projectBackgroundUploadMatch[1])
+				const project = getProject(projectId)
+				state.projectBackgrounds[projectId] = {source: 'upload'}
+				project.has_background = true
+				project.background_information = {provider: 'upload'}
+				project.background_blur_hash = 'L5H2EC=PM+yV0g-mq.wG9c010J}I'
+				project.backgroundInformation = project.background_information
+				project.backgroundBlurHash = project.background_blur_hash
+				sendJson(res, 200, project)
+				return
+			}
+
+			const projectBackgroundUnsplashMatch = route.match(/^projects\/(-?\d+)\/backgrounds\/unsplash$/)
+			if (projectBackgroundUnsplashMatch && req.method === 'POST') {
+				const projectId = Number(projectBackgroundUnsplashMatch[1])
+				const project = getProject(projectId)
+				const imageId = `${body?.id || body?.image?.id || ''}`.trim()
+				if (!imageId) {
+					sendJson(res, 400, {error: 'image.id is required.'})
+					return
+				}
+				state.projectBackgrounds[projectId] = {source: 'unsplash', imageId}
+				project.has_background = true
+				project.background_information = {
+					provider: 'unsplash',
+					image_id: imageId,
+					url: `${body?.url || ''}`,
+					thumb: `${body?.thumb || ''}`,
+				}
+				project.background_blur_hash = `${body?.blur_hash || 'L5H2EC=PM+yV0g-mq.wG9c010J}I'}`
+				project.backgroundInformation = project.background_information
+				project.backgroundBlurHash = project.background_blur_hash
+				sendJson(res, 200, project)
+				return
+			}
+
+			if (route === 'backgrounds/unsplash/search' && req.method === 'GET') {
+				const search = `${url.searchParams.get('s') || ''}`.trim().toLowerCase()
+				const results = !search
+					? state.unsplashImages
+					: state.unsplashImages.filter(image => `${image.info?.description || image.info?.alt_description || image.id || ''}`.toLowerCase().includes(search))
+				sendJson(res, 200, results)
+				return
+			}
+
+			const unsplashImageMatch = route.match(/^backgrounds\/unsplash\/images\/([^/]+)(?:\/thumb)?$/)
+			if (unsplashImageMatch && req.method === 'GET') {
+				sendBuffer(res, 200, ONE_PIXEL_PNG, {'Content-Type': 'image/png'})
 				return
 			}
 
@@ -1026,6 +1315,54 @@ export async function createMockVikunjaServer({
 				return
 			}
 
+			const projectWebhooksMatch = route.match(/^projects\/(-?\d+)\/webhooks$/)
+			if (projectWebhooksMatch && req.method === 'GET') {
+				const projectId = Number(projectWebhooksMatch[1])
+				sendJson(res, 200, paginate(listProjectWebhooks(state, projectId), url))
+				return
+			}
+
+			if (projectWebhooksMatch && req.method === 'PUT') {
+				const projectId = Number(projectWebhooksMatch[1])
+				const now = new Date().toISOString()
+				const webhook = normalizeWebhook({
+					id: state.nextWebhookId++,
+					target_url: `${body?.target_url || ''}`.trim(),
+					events: Array.isArray(body?.events) ? body.events : [],
+					secret: `${body?.secret || ''}`.trim() || null,
+					created: now,
+					updated: now,
+				})
+				state.projectWebhooks = {
+					...(state.projectWebhooks || {}),
+					[projectId]: [...listProjectWebhooks(state, projectId), webhook],
+				}
+				sendJson(res, 201, webhook)
+				return
+			}
+
+			const projectWebhookMatch = route.match(/^projects\/(-?\d+)\/webhooks\/(\d+)$/)
+			if (projectWebhookMatch && req.method === 'POST') {
+				const projectId = Number(projectWebhookMatch[1])
+				const webhookId = Number(projectWebhookMatch[2])
+				const webhook = getProjectWebhook(state, projectId, webhookId)
+				webhook.events = normalizeWebhookEvents(body?.events)
+				webhook.updated = new Date().toISOString()
+				sendJson(res, 200, normalizeWebhook(webhook))
+				return
+			}
+
+			if (projectWebhookMatch && req.method === 'DELETE') {
+				const projectId = Number(projectWebhookMatch[1])
+				const webhookId = Number(projectWebhookMatch[2])
+				state.projectWebhooks = {
+					...(state.projectWebhooks || {}),
+					[projectId]: listProjectWebhooks(state, projectId).filter(entry => Number(entry.id || 0) !== webhookId),
+				}
+				sendJson(res, 200, {ok: true})
+				return
+			}
+
 			if (projectLinkSharesMatch && req.method === 'PUT') {
 				const projectId = Number(projectLinkSharesMatch[1])
 				const now = new Date().toISOString()
@@ -1186,6 +1523,7 @@ export async function createMockVikunjaServer({
 					title: `${sourceProject.title} (Copy)`,
 					parent_project_id: Number(body?.parent_project_id ?? body?.parentProjectId ?? sourceProject.parent_project_id ?? 0),
 					position: getNextProjectPosition(),
+					max_permission: 2,
 				}
 				state.projects.push(duplicateProject)
 				sendJson(res, 200, duplicateProject)
@@ -1727,9 +2065,21 @@ export async function createMockVikunjaServer({
 		if (projectId < 0) {
 			const savedFilter = state.savedFilters.find(entry => entry.projectId === projectId)
 			const filter = savedFilter?.filters?.filter || 'done = false'
+			const searchText = `${savedFilter?.filters?.s || ''}`.trim().toLowerCase()
+			const effectiveSearchParams = new URLSearchParams(searchParams)
+			if (!effectiveSearchParams.getAll('sort_by').length && Array.isArray(savedFilter?.filters?.sort_by)) {
+				for (const sortBy of savedFilter.filters.sort_by) {
+					effectiveSearchParams.append('sort_by', `${sortBy}`)
+				}
+			}
+			if (!effectiveSearchParams.getAll('order_by').length && Array.isArray(savedFilter?.filters?.order_by)) {
+				for (const orderBy of savedFilter.filters.order_by) {
+					effectiveSearchParams.append('order_by', `${orderBy}`)
+				}
+			}
 			return sortTasks(
-				state.tasks.filter(task => matchesSavedFilter(task, filter, state.labels)),
-				searchParams,
+				state.tasks.filter(task => matchesSavedFilter(task, filter, state.labels, searchText)),
+				effectiveSearchParams,
 			).map(serializeTask)
 		}
 
@@ -2163,6 +2513,7 @@ export async function createMockVikunjaServer({
 			identifier: 'FILTER',
 			is_favorite: Boolean(savedFilter.is_favorite),
 			is_archived: false,
+			max_permission: 2,
 			created: savedFilter.created,
 			updated: savedFilter.updated,
 		}
@@ -2222,6 +2573,13 @@ function buildMutableState(fixture) {
 	state.nextProjectId = Math.max(...state.projects.filter(project => project.id > 0).map(project => project.id), 0) + 1
 	state.nextTeamId = Math.max(0, ...(state.teams || []).map(team => Number(team.id || 0))) + 1
 	state.nextLinkShareId = Math.max(0, ...(state.linkShares || []).map(share => Number(share.id || 0))) + 1
+	state.nextWebhookId = Math.max(
+		0,
+		...((state.userWebhooks || []).map(webhook => Number(webhook.id || 0))),
+		...Object.values(state.projectWebhooks || {}).flatMap(webhooks =>
+			(Array.isArray(webhooks) ? webhooks : []).map(webhook => Number(webhook.id || 0)),
+		),
+	) + 1
 	state.nextCaldavTokenId = Math.max(0, ...((state.caldavTokens || []).map(token => Number(token.id || 0)))) + 1
 	state.nextApiTokenId = Math.max(0, ...((state.apiTokens || []).map(token => Number(token.id || 0)))) + 1
 	state.nextTaskId = Math.max(...state.tasks.map(task => task.id), 0) + 1
@@ -2239,6 +2597,51 @@ function buildMutableState(fixture) {
 	) + 1
 	state.nextLabelId = Math.max(...state.labels.map(label => label.id), 0) + 1
 	state.nextSavedFilterId = Math.max(...(state.savedFilters || []).map(savedFilter => savedFilter.id), -1) + 1
+	state.nextViewId = Math.max(
+		0,
+		...Object.values(state.viewsByProjectId || {}).flatMap(views =>
+			(Array.isArray(views) ? views : []).map(view => Number(view.id || 0)),
+		),
+	) + 1
+	state.nextBucketId = Math.max(
+		0,
+		...Object.values(state.bucketsByViewId || {}).flatMap(buckets =>
+			(Array.isArray(buckets) ? buckets : []).map(bucket => Number(bucket.id || 0)),
+		),
+	) + 1
+	state.projectBackgrounds = {}
+	state.unsplashImages = [
+		{
+			id: 'unsplash-1',
+			url: 'https://images.example.test/unsplash-1/full',
+			thumb: 'https://images.example.test/unsplash-1/thumb',
+			blur_hash: 'L5H2EC=PM+yV0g-mq.wG9c010J}I',
+			info: {
+				description: 'Mountain ridge at sunrise',
+				alt_description: 'Sunrise over mountains',
+				links: {html: 'https://unsplash.example.test/photos/unsplash-1'},
+				user: {
+					name: 'Alex Photographer',
+					links: {html: 'https://unsplash.example.test/@alex'},
+				},
+			},
+		},
+		{
+			id: 'unsplash-2',
+			url: 'https://images.example.test/unsplash-2/full',
+			thumb: 'https://images.example.test/unsplash-2/thumb',
+			blur_hash: 'L9AS#7xut7t7~qofRjof?bRjt7ay',
+			info: {
+				description: 'Forest trail in morning fog',
+				alt_description: 'Forest path',
+				links: {html: 'https://unsplash.example.test/photos/unsplash-2'},
+				user: {
+					name: 'Jamie Lens',
+					links: {html: 'https://unsplash.example.test/@jamie'},
+				},
+			},
+		},
+	]
 	return state
 }
 
@@ -2299,6 +2702,64 @@ function normalizeSharePermission(value) {
 		return 1
 	}
 	return 0
+}
+
+function normalizeWebhookEvents(value) {
+	if (!Array.isArray(value)) {
+		return []
+	}
+
+	return [...new Set(
+		value
+			.map(entry => `${entry || ''}`.trim())
+			.filter(Boolean),
+	)]
+}
+
+function normalizeWebhook(webhook) {
+	return {
+		id: Number(webhook?.id || 0),
+		target_url: `${webhook?.target_url || webhook?.targetUrl || ''}`.trim(),
+		events: normalizeWebhookEvents(webhook?.events),
+		secret: typeof webhook?.secret === 'string' ? `${webhook.secret}`.trim() || null : null,
+		created: normalizeDateString(webhook?.created || null),
+		updated: normalizeDateString(webhook?.updated || null),
+	}
+}
+
+function listProjectWebhooks(state, projectId) {
+	return (Array.isArray(state.projectWebhooks?.[projectId]) ? state.projectWebhooks[projectId] : []).map(normalizeWebhook)
+}
+
+function getProjectWebhook(state, projectId, webhookId) {
+	const webhooks = Array.isArray(state.projectWebhooks?.[projectId]) ? state.projectWebhooks[projectId] : []
+	const webhook = webhooks.find(entry => Number(entry?.id || 0) === webhookId)
+	if (!webhook) {
+		const error = new Error('The project webhook does not exist.')
+		error.statusCode = 404
+		throw error
+	}
+	return webhook
+}
+
+function getUserWebhook(state, webhookId) {
+	const webhook = (state.userWebhooks || []).find(entry => Number(entry?.id || 0) === webhookId)
+	if (!webhook) {
+		const error = new Error('The webhook does not exist.')
+		error.statusCode = 404
+		throw error
+	}
+	return webhook
+}
+
+function normalizeMigrationState(service, value) {
+	const status = `${value?.status || ''}`.trim() || 'idle'
+	const message = typeof value?.message === 'string' ? `${value.message}`.trim() || null : null
+	return {
+		service,
+		status,
+		message,
+	}
 }
 
 function normalizeTeam(team) {
@@ -2792,20 +3253,50 @@ function buildSavedFilter(savedFilter) {
 		updated: savedFilter.updated || now,
 		filters: {
 			filter: `${savedFilter.filters?.filter || 'done = false'}`.trim(),
-			filter_include_nulls: Boolean(savedFilter.filters?.filter_include_nulls),
-			sort_by: Array.isArray(savedFilter.filters?.sort_by) ? savedFilter.filters.sort_by.map(entry => `${entry}`) : [],
-			order_by: Array.isArray(savedFilter.filters?.order_by) ? savedFilter.filters.order_by.map(entry => `${entry}`) : [],
+			filter_include_nulls: savedFilter.filters?.filter_include_nulls !== false,
+			sort_by: Array.isArray(savedFilter.filters?.sort_by) && savedFilter.filters.sort_by.length > 0
+				? savedFilter.filters.sort_by.map(entry => `${entry}`)
+				: ['done', 'id'],
+			order_by: Array.isArray(savedFilter.filters?.order_by) && savedFilter.filters.order_by.length > 0
+				? savedFilter.filters.order_by.map(entry => `${entry}`)
+				: ['asc', 'desc'],
+			s: `${savedFilter.filters?.s || ''}`.trim(),
 		},
 	}
 }
 
-function matchesSavedFilter(task, filter, labels) {
+function hasInvalidSavedFilterSort(filters) {
+	const sortBy = Array.isArray(filters?.sort_by)
+		? filters.sort_by
+		: Array.isArray(filters?.sortBy)
+			? filters.sortBy
+			: []
+	return sortBy.some(entry => `${entry}`.trim() === 'position')
+}
+
+function matchesSavedFilter(task, filter, labels, searchText = '') {
 	const normalizedFilter = `${filter || ''}`.trim()
+	if (searchText) {
+		const haystacks = [`${task.title || ''}`, `${task.description || ''}`]
+		if (!haystacks.some(value => value.toLowerCase().includes(searchText))) {
+			return false
+		}
+	}
+
 	if (!normalizedFilter) {
 		return true
 	}
 
 	if (normalizedFilter.includes('done = false') && task.done) {
+		return false
+	}
+
+	if (normalizedFilter.includes('done = true') && !task.done) {
+		return false
+	}
+
+	const projectMatch = normalizedFilter.match(/\bproject\s*=\s*(\d+)/i)
+	if (projectMatch && Number(task.project_id || 0) !== Number(projectMatch[1])) {
 		return false
 	}
 
@@ -2820,12 +3311,79 @@ function matchesSavedFilter(task, filter, labels) {
 		}
 	}
 
+	const labelIdMatches = [...normalizedFilter.matchAll(/labels\s+in\s+([\d,\s]+)/gi)]
+	if (labelIdMatches.length > 0) {
+		const requiredLabelIds = labelIdMatches
+			.flatMap(match => `${match[1] || ''}`.split(','))
+			.map(value => Number(value.trim()))
+			.filter(Boolean)
+		if (!requiredLabelIds.every(labelId => task.labelIds.includes(labelId))) {
+			return false
+		}
+	}
+
+	const priorityEqualsMatch = normalizedFilter.match(/\bpriority\s*=\s*(\d+)/i)
+	if (priorityEqualsMatch && Number(task.priority || 0) !== Number(priorityEqualsMatch[1])) {
+		return false
+	}
+
 	const priorityMatch = normalizedFilter.match(/priority\s*>=\s*(\d+)/)
 	if (priorityMatch && Number(task.priority || 0) < Number(priorityMatch[1])) {
 		return false
 	}
 
+	const titleLikeMatch = normalizedFilter.match(/\btitle\s+like\s+"((?:\\.|[^"])*)"/i)
+	if (titleLikeMatch && !`${task.title || ''}`.toLowerCase().includes(unescapeFilterValue(titleLikeMatch[1]).toLowerCase())) {
+		return false
+	}
+
+	const descriptionLikeMatch = normalizedFilter.match(/\bdescription\s+like\s+"((?:\\.|[^"])*)"/i)
+	if (descriptionLikeMatch && !`${task.description || ''}`.toLowerCase().includes(unescapeFilterValue(descriptionLikeMatch[1]).toLowerCase())) {
+		return false
+	}
+
+	if (normalizedFilter.includes('due_date = 0') && task.due_date) {
+		return false
+	}
+
+	const dueTodayMatch = normalizedFilter.match(/\bdue_date\s*=\s*"([^"]+)"/i)
+	if (dueTodayMatch) {
+		const expected = `${dueTodayMatch[1] || ''}`.trim()
+		const actual = task.due_date ? `${task.due_date}`.slice(0, 10) : ''
+		if (actual !== expected) {
+			return false
+		}
+	}
+
+	const dueBeforeMatch = normalizedFilter.match(/\bdue_date\s*<\s*"([^"]+)"/i)
+	if (dueBeforeMatch) {
+		const actual = task.due_date ? `${task.due_date}`.slice(0, 10) : ''
+		if (!actual || actual >= `${dueBeforeMatch[1] || ''}`.trim()) {
+			return false
+		}
+	}
+
+	const dueAfterMatch = normalizedFilter.match(/\bdue_date\s*>=\s*"([^"]+)"/i)
+	if (dueAfterMatch) {
+		const actual = task.due_date ? `${task.due_date}`.slice(0, 10) : ''
+		if (!actual || actual < `${dueAfterMatch[1] || ''}`.trim()) {
+			return false
+		}
+	}
+
+	const dueUntilMatch = normalizedFilter.match(/\bdue_date\s*<=\s*"([^"]+)"/i)
+	if (dueUntilMatch) {
+		const actual = task.due_date ? `${task.due_date}`.slice(0, 10) : ''
+		if (!actual || actual > `${dueUntilMatch[1] || ''}`.trim()) {
+			return false
+		}
+	}
+
 	return true
+}
+
+function unescapeFilterValue(value) {
+	return `${value || ''}`.replace(/\\"/g, '"')
 }
 
 function makeTaskRef(task) {

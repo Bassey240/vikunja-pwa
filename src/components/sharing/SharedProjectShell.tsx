@@ -5,7 +5,8 @@ import TaskDetail from '@/components/tasks/TaskDetail'
 import RootComposer from '@/components/tasks/RootComposer'
 import useWideLayout from '@/hooks/useWideLayout'
 import {useAppStore} from '@/store'
-import {useEffect, useMemo} from 'react'
+import {type CSSProperties, useEffect, useMemo} from 'react'
+import {getProjectBackgroundBrightness, projectHasBackground} from '@/utils/project-background'
 import {useLocation, useNavigate} from 'react-router-dom'
 
 export default function SharedProjectShell() {
@@ -14,8 +15,12 @@ export default function SharedProjectShell() {
 	const isWideLayout = useWideLayout()
 	const account = useAppStore(state => state.account)
 	const isOnline = useAppStore(state => state.isOnline)
+	const projects = useAppStore(state => state.projects)
+	const projectBackgroundUrls = useAppStore(state => state.projectBackgroundUrls)
+	const projectBackgroundPreviewUrls = useAppStore(state => state.projectBackgroundPreviewUrls)
 	const taskDetailOpen = useAppStore(state => state.taskDetailOpen)
 	const projectDetailOpen = useAppStore(state => state.projectDetailOpen)
+	const loadProjectBackground = useAppStore(state => state.loadProjectBackground)
 
 	const projectId = useMemo(() => {
 		const match = location.pathname.match(/^\/projects\/(\d+)/)
@@ -48,10 +53,39 @@ export default function SharedProjectShell() {
 	}
 
 	const resolvedProjectId = projectId || targetProjectId
+	const resolvedProject = resolvedProjectId > 0 ? projects.find(project => project.id === resolvedProjectId) || null : null
+	const sharedProjectHasBackground = projectHasBackground(resolvedProject)
+	const sharedProjectBackgroundUrl = resolvedProjectId > 0 ? (projectBackgroundUrls[resolvedProjectId] ?? null) : null
+	const sharedProjectBackgroundPreviewUrl = resolvedProjectId > 0 ? (projectBackgroundPreviewUrls[resolvedProjectId] ?? null) : null
+	const sharedProjectResolvedBackgroundUrl = sharedProjectBackgroundUrl || sharedProjectBackgroundPreviewUrl
+	const sharedProjectBackgroundBrightness = getProjectBackgroundBrightness(account?.user?.settings?.frontend_settings)
+
+	useEffect(() => {
+		if (!resolvedProjectId || !sharedProjectHasBackground || sharedProjectBackgroundUrl) {
+			return
+		}
+
+		void loadProjectBackground(resolvedProjectId)
+	}, [loadProjectBackground, resolvedProjectId, sharedProjectBackgroundUrl, sharedProjectHasBackground])
 
 	return (
 		<div className="shared-project-shell">
-			<div className={`shared-project-frame ${isWideLayout ? 'is-wide' : 'is-narrow'}`.trim()}>
+			<div
+				className={`shared-project-frame ${isWideLayout ? 'is-wide' : 'is-narrow'}`.trim()}
+				style={{'--project-shell-background-brightness': `${sharedProjectBackgroundBrightness}%`} as CSSProperties}
+			>
+				{sharedProjectHasBackground ? (
+					<div className="project-shell-background shared-project-shell-background" data-project-background-surface="shell" data-has-background="true" aria-hidden="true">
+						<div className="project-surface-background-media project-shell-background-media">
+							{sharedProjectResolvedBackgroundUrl ? (
+								<img src={sharedProjectResolvedBackgroundUrl} alt="" className="project-surface-background-image" />
+							) : (
+								<div className="project-surface-background-placeholder" />
+							)}
+							<div className="project-surface-background-overlay project-shell-background-overlay" />
+						</div>
+					</div>
+				) : null}
 				{!isOnline ? (
 					<section className="runtime-status-banner runtime-status-banner-warning shared-runtime-status-banner" role="status" aria-live="polite">
 						You&apos;re offline. This shared project stays visible from the cached shell, but live data may be stale until the connection returns.

@@ -2,6 +2,7 @@ import {create} from 'zustand'
 import {createAuthSlice, type AuthSlice} from './slices/auth'
 import {createLabelsSlice, type LabelsSlice} from './slices/labels'
 import {createMutationsSlice, type MutationsSlice} from './slices/mutations'
+import {createMigrationSlice, type MigrationSlice} from './slices/migration'
 import {createNotificationsSlice, type NotificationsSlice} from './slices/notifications'
 import {createProjectsSlice, type ProjectsSlice} from './slices/projects'
 import {createRuntimeSlice, type RuntimeSlice} from './slices/runtime'
@@ -13,6 +14,7 @@ import {createTeamsSlice, type TeamsSlice} from './slices/teams'
 import {createUiSlice, type UiSlice} from './slices/ui'
 import {createUsersSlice, type UsersSlice} from './slices/users'
 import {createViewsSlice, type ViewsSlice} from './slices/views'
+import {createWebhooksSlice, type WebhooksSlice} from './slices/webhooks'
 
 export type AppStore =
 	& AuthSlice
@@ -23,6 +25,8 @@ export type AppStore =
 	& NotificationsSlice
 	& TeamsSlice
 	& SecuritySlice
+	& WebhooksSlice
+	& MigrationSlice
 	& SharingSlice
 	& SubscriptionsSlice
 	& ProjectsSlice
@@ -38,6 +42,8 @@ export const useAppStore = create<AppStore>()((...args) => ({
 	...createUsersSlice(...args),
 	...createTeamsSlice(...args),
 	...createSecuritySlice(...args),
+	...createWebhooksSlice(...args),
+	...createMigrationSlice(...args),
 	...createSharingSlice(...args),
 	...createLabelsSlice(...args),
 	...createNotificationsSlice(...args),

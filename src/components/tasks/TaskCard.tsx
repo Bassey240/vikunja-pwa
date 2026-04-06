@@ -9,6 +9,7 @@ import {
 	normalizeRepeatAfter,
 	normalizeTaskDateValue,
 } from '@/utils/formatting'
+import {normalizeLabelColor, pickLabelTextColor} from '@/utils/color-helpers'
 
 interface TaskCardProps {
 	task: Task
@@ -85,7 +86,7 @@ export default function TaskCard({task, childCount, compact = false}: TaskCardPr
 				<div className="task-label-row">
 					{visibleLabels.map(label => {
 						const hex = label.hex_color || label.hexColor || ''
-						const background = hex ? (hex.startsWith('#') ? hex : `#${hex}`) : '#dbe8ff'
+						const background = normalizeLabelColor(hex)
 						return (
 							<span
 								key={label.id}
@@ -119,18 +120,4 @@ export default function TaskCard({task, childCount, compact = false}: TaskCardPr
 			) : null}
 		</div>
 	)
-}
-
-function pickLabelTextColor(hex: string) {
-	const normalized = hex.replace('#', '')
-	if (normalized.length !== 6) {
-		return '#170f0d'
-	}
-
-	const red = parseInt(normalized.slice(0, 2), 16)
-	const green = parseInt(normalized.slice(2, 4), 16)
-	const blue = parseInt(normalized.slice(4, 6), 16)
-	const brightness = (red * 299 + green * 587 + blue * 114) / 1000
-
-	return brightness > 170 ? '#170f0d' : '#fff7f1'
 }

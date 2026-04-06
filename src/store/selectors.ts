@@ -1,4 +1,4 @@
-import type {Screen, Task, TaskRelationRef} from '@/types'
+import type {Project, Screen, SharePermission, Task, TaskRelationRef, UserProfile} from '@/types'
 import {getTaskSortByForScreen, type ProjectFilters, type TaskFilters, type TaskSortBy, type TaskSortOrder} from '@/hooks/useFilters'
 import {cloneRelatedTasksMap} from '@/utils/taskRelations'
 import {compareByPositionThenId} from './project-helpers'
@@ -24,8 +24,105 @@ interface TaskBranchContext {
 
 const defaultTaskMatcher: TaskMatcher = task => !task.done
 
+export interface ProjectPermissionActor extends Pick<UserProfile, 'id' | 'username' | 'email'> {
+	canUseAdminBridge?: boolean | null
+}
+
 export function isManualTaskSort(sortBy: TaskSortBy | null | undefined) {
 	return (sortBy || 'position') === 'position'
+}
+
+export function getProjectPermission(
+	project: Pick<Project, 'maxPermission' | 'max_permission' | 'owner'> | null | undefined,
+	actor: ProjectPermissionActor | null = null,
+) {
+	if (actor?.canUseAdminBridge) {
+		return 2
+	}
+
+	const value = Number(project?.maxPermission ?? project?.max_permission ?? 0)
+	if (value === 2) {
+		return 2
+	}
+	if (value === 1) {
+		return 1
+	}
+
+	if (matchesProjectActor(project, actor)) {
+		return 2
+	}
+
+	return 0
+}
+
+export function canWriteProject(
+	project: Pick<Project, 'maxPermission' | 'max_permission' | 'owner'> | null | undefined,
+	actor: ProjectPermissionActor | null = null,
+) {
+	return getProjectPermission(project, actor) >= 1
+}
+
+export function canAdminProject(
+	project: Pick<Project, 'maxPermission' | 'max_permission' | 'owner'> | null | undefined,
+	actor: ProjectPermissionActor | null = null,
+) {
+	return getProjectPermission(project, actor) >= 2
+}
+
+export function canManageProjectSharing(
+	project: Pick<Project, 'maxPermission' | 'max_permission' | 'owner'> | null | undefined,
+	actor: ProjectPermissionActor | null = null,
+) {
+	return canWriteProject(project, actor)
+}
+
+export function canManageProjectSharePermission(
+	project: Pick<Project, 'maxPermission' | 'max_permission' | 'owner'> | null | undefined,
+	permission: SharePermission,
+	actor: ProjectPermissionActor | null = null,
+) {
+	return permission === 2 ? canAdminProject(project, actor) : canManageProjectSharing(project, actor)
+}
+
+export function getAssignableProjectSharePermissions(
+	project: Pick<Project, 'maxPermission' | 'max_permission' | 'owner'> | null | undefined,
+	currentPermission: SharePermission | null = null,
+	actor: ProjectPermissionActor | null = null,
+) {
+	const permissions: SharePermission[] = [0, 1]
+	if (canAdminProject(project, actor) || currentPermission === 2) {
+		permissions.push(2)
+	}
+	return permissions
+}
+
+function matchesProjectActor(
+	project: Pick<Project, 'owner'> | null | undefined,
+	actor: ProjectPermissionActor | null,
+) {
+	if (!project?.owner || !actor) {
+		return false
+	}
+
+	const actorId = Number(actor.id || 0)
+	const ownerId = Number(project.owner.id || 0)
+	if (actorId > 0 && ownerId > 0) {
+		return actorId === ownerId
+	}
+
+	const actorUsername = normalizeProjectIdentity(actor.username)
+	const ownerUsername = normalizeProjectIdentity(project.owner.username)
+	if (actorUsername && ownerUsername && actorUsername === ownerUsername) {
+		return true
+	}
+
+	const actorEmail = normalizeProjectIdentity(actor.email)
+	const ownerEmail = normalizeProjectIdentity(project.owner.email)
+	return Boolean(actorEmail && ownerEmail && actorEmail === ownerEmail)
+}
+
+function normalizeProjectIdentity(value: string | null | undefined) {
+	return `${value || ''}`.trim().toLowerCase()
 }
 
 export function isSameListManualTaskReorderAllowed({

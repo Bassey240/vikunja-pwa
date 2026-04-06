@@ -13,9 +13,10 @@ import {
 	taskMatchesProjectFilters,
 } from '@/hooks/useFilters'
 import {useShowCompletedProjectFilter} from '@/hooks/useShowCompleted'
-import {getProjectAggregateCountsMap} from '@/store/project-helpers'
+import {compareByPositionThenId, getProjectAggregateCountsMap} from '@/store/project-helpers'
 import {useAppStore} from '@/store'
 import {getMenuAnchor} from '@/utils/menuPosition'
+import {buildSavedFilterProject, savedFilterMatchesProjectFilters} from '@/utils/saved-filters'
 import {useEffect, useMemo, useState} from 'react'
 import {useNavigate} from 'react-router-dom'
 
@@ -28,6 +29,7 @@ export default function ProjectsScreen() {
 	const projectFilterTasks = useAppStore(state => state.projectFilterTasks)
 	const projectFilterTasksLoaded = useAppStore(state => state.projectFilterTasksLoaded)
 	const projectFilters = useAppStore(state => state.projectFilters)
+	const savedFilters = useAppStore(state => state.savedFilters)
 	const focusedTaskId = useAppStore(state => state.focusedTaskId)
 	const focusedTaskSourceScreen = useAppStore(state => state.focusedTaskSourceScreen)
 	const loadProjects = useAppStore(state => state.loadProjects)
@@ -75,6 +77,17 @@ export default function ProjectsScreen() {
 		() => createVisibleProjectTree(projects, projectFilters, projectFilterTasks),
 		[projectFilterTasks, projectFilters, projects],
 	)
+	const visibleSavedFilterProjects = useMemo(
+		() =>
+			savedFilters
+				.filter(filter => savedFilterMatchesProjectFilters(filter, projectFilters))
+				.map(buildSavedFilterProject),
+		[projectFilters, savedFilters],
+	)
+	const visibleRootEntries = useMemo(
+		() => [...visibleProjectTree.rootProjects, ...visibleSavedFilterProjects].sort(compareByPositionThenId),
+		[visibleProjectTree.rootProjects, visibleSavedFilterProjects],
+	)
 	const previewTaskMatcher = useMemo(
 		() => (task: (typeof projectFilterTasks)[number]) => taskMatchesProjectFilters(task, projectFilters),
 		[projectFilters],
@@ -121,11 +134,12 @@ export default function ProjectsScreen() {
 	async function handleSavedFilterSelect(projectId: number | null) {
 		setFilterOpen(false)
 		if (!projectId) {
+			await loadSavedFilterTasks(null)
 			return
 		}
 
 		await loadSavedFilterTasks(projectId)
-		navigate('/filters')
+		navigate(`/projects/${projectId}`)
 	}
 
 	return (
@@ -133,7 +147,7 @@ export default function ProjectsScreen() {
 			<Topbar
 				includeBackButton={false}
 				desktopHeadingTitle="Projects"
-				desktopHeadingCount={visibleProjectTree.rootProjects.length}
+				desktopHeadingCount={visibleRootEntries.length}
 				onDismissTray={() => setPanelAnchor(null)}
 				primaryAction={{
 					action: 'open-root-composer',
@@ -240,7 +254,7 @@ export default function ProjectsScreen() {
 					<div className="panel-head desktop-promoted-panel-head">
 						<div className="panel-heading-inline">
 							<h2 className="panel-title">Projects</h2>
-							<div className="count-chip">{visibleProjectTree.rootProjects.length}</div>
+							<div className="count-chip">{visibleRootEntries.length}</div>
 						</div>
 					</div>
 					<div className="screen-body">
@@ -272,18 +286,18 @@ export default function ProjectsScreen() {
 						<BulkTaskEditor scopeKey={bulkScopeKey} />
 						<InlineRootTaskComposer />
 						<InlineRootProjectComposer placement="center" />
-						{loadingProjects && visibleProjectTree.rootProjects.length === 0 ? <div className="empty-state">Loading projects...</div> : null}
-						{visibleProjectTree.rootProjects.length > 0 ? (
-							<ProjectTree
-								countsByProjectId={countsByProjectId}
-								rootProjects={visibleProjectTree.rootProjects}
-								getChildren={visibleProjectTree.getChildren}
-								previewTaskMatcher={previewTaskMatcher}
-								previewTaskSortBy={projectFilters.taskSortBy}
-								previewTaskBulkMode={bulkMode}
+						{loadingProjects && visibleRootEntries.length === 0 ? <div className="empty-state">Loading projects...</div> : null}
+						{visibleRootEntries.length > 0 ? (
+						<ProjectTree
+							countsByProjectId={countsByProjectId}
+							rootProjects={visibleRootEntries}
+							getChildren={projectId => (projectId < 0 ? [] : visibleProjectTree.getChildren(projectId))}
+							previewTaskMatcher={previewTaskMatcher}
+							previewTaskSortBy={projectFilters.taskSortBy}
+							previewTaskBulkMode={bulkMode}
 							/>
 						) : null}
-						{!loadingProjects && visibleProjectTree.rootProjects.length === 0 ? <div className="empty-state">No projects available.</div> : null}
+						{!loadingProjects && visibleRootEntries.length === 0 ? <div className="empty-state">No projects available.</div> : null}
 					</div>
 				</section>
 			</div>

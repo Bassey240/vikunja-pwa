@@ -4,10 +4,7 @@ import type {
 	NotificationPreferenceMap,
 	UserFrontendSettings,
 } from '@/types'
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
+import {isRecord} from '@/utils/type-guards'
 
 export const notificationPreferenceDefinitions: Array<{
 	category: NotificationCategory

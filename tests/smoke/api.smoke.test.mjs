@@ -2,6 +2,9 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {startTestStack} from '../helpers/app-under-test.mjs'
 
+const ONE_PIXEL_PNG_BASE64 =
+	'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO6V1x8AAAAASUVORK5CYII='
+
 let stack
 
 test.before(async () => {
@@ -86,6 +89,33 @@ function getAppSessionCookie(response) {
 		?.split(';')[0]
 }
 
+function sameOriginHeaders(targetStack, sessionCookie, headers = {}) {
+	return {
+		Cookie: sessionCookie,
+		Origin: targetStack.appUrl,
+		...headers,
+	}
+}
+
+function createMultipartUploadBody({
+	filename,
+	sizeBytes,
+	contentType = 'application/octet-stream',
+	fillByte = 0x61,
+}) {
+	const boundary = `----codex-boundary-${sizeBytes}`
+	const prefix = Buffer.from(
+		`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${contentType}\r\n\r\n`,
+		'utf8',
+	)
+	const fileBody = Buffer.alloc(sizeBytes, fillByte)
+	const suffix = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8')
+	return {
+		body: Buffer.concat([prefix, fileBody, suffix]),
+		contentType: `multipart/form-data; boundary=${boundary}`,
+	}
+}
+
 test('config, session, saved filters, and project bootstrap routes respond', async () => {
 	const healthResponse = await fetch(new URL('/health', stack.appUrl))
 	assert.equal(healthResponse.status, 200)
@@ -117,6 +147,80 @@ test('config, session, saved filters, and project bootstrap routes respond', asy
 	assert.equal(filters.filters[0].title, 'Focused Work')
 })
 
+test('saved filter proxy routes support create read update and delete', async () => {
+	const authStack = await startTestStack({legacyConfigured: false})
+
+	try {
+		const sessionCookie = await loginWithPasswordSession(authStack)
+
+			const createResponse = await fetch(new URL('/api/filters', authStack.appUrl), {
+				method: 'POST',
+				headers: sameOriginHeaders(authStack, sessionCookie, {
+					'Content-Type': 'application/json',
+				}),
+				body: JSON.stringify({
+					title: 'Open Work',
+					description: 'Cross-project open tasks',
+					is_favorite: true,
+					filters: {
+						filter: 'done = false',
+						filter_include_nulls: true,
+						sort_by: ['position'],
+						order_by: ['asc'],
+					},
+				}),
+			})
+			assert.equal(createResponse.status, 201)
+			const createdFilter = (await createResponse.json()).filter
+			assert.equal(createdFilter.title, 'Open Work')
+			assert.deepEqual(createdFilter.filters.sort_by, ['done', 'id'])
+			assert.deepEqual(createdFilter.filters.order_by, ['asc', 'desc'])
+
+			const createdFilterDetail = await authStack.api(`/api/filters/${createdFilter.id}`, {
+				headers: {
+					Cookie: sessionCookie,
+				},
+			})
+			assert.equal((createdFilterDetail.filter || createdFilterDetail).filters.filter, 'done = false')
+
+		const updateResponse = await fetch(new URL(`/api/filters/${createdFilter.id}`, authStack.appUrl), {
+			method: 'POST',
+			headers: sameOriginHeaders(authStack, sessionCookie, {
+				'Content-Type': 'application/json',
+			}),
+			body: JSON.stringify({
+				title: 'Urgent Work',
+				description: 'Updated saved filter',
+				is_favorite: false,
+				filters: {
+					filter: 'project = 2 && priority = 4 && done = false',
+					filter_include_nulls: false,
+					sort_by: ['updated'],
+					order_by: ['desc'],
+				},
+			}),
+		})
+		assert.equal(updateResponse.status, 200)
+		const updatedFilter = (await updateResponse.json()).filter
+		assert.equal(updatedFilter.title, 'Urgent Work')
+
+		const deleteResponse = await fetch(new URL(`/api/filters/${createdFilter.id}`, authStack.appUrl), {
+			method: 'DELETE',
+			headers: sameOriginHeaders(authStack, sessionCookie),
+		})
+		assert.equal(deleteResponse.status, 200)
+
+		const filtersAfterDelete = await authStack.api('/api/filters', {
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(filtersAfterDelete.filters.some(filter => filter.title === 'Urgent Work'), false)
+	} finally {
+		await authStack.stop()
+	}
+})
+
 test('task collection routes return search, today, and view-backed task trees', async () => {
 	const todayTasks = await stack.api('/api/tasks/today')
 	assert.deepEqual(
@@ -137,6 +241,90 @@ test('task collection routes return search, today, and view-backed task trees', 
 		releaseChecklist.related_tasks.subtask.map(task => task.id),
 		[204],
 	)
+})
+
+test('project view and background proxy routes support create delete upload and unsplash flows', async () => {
+	const authStack = await startTestStack({legacyConfigured: false})
+
+	try {
+		const sessionCookie = await loginWithPasswordSession(authStack)
+
+		const createViewResponse = await fetch(new URL('/api/projects/2/views', authStack.appUrl), {
+			method: 'PUT',
+			headers: sameOriginHeaders(authStack, sessionCookie, {
+				'Content-Type': 'application/json',
+			}),
+			body: JSON.stringify({
+				title: 'Filtered board',
+				view_kind: 'kanban',
+				filter: {
+					filter: 'done = false',
+					filter_timezone: 'Europe/Amsterdam',
+				},
+			}),
+		})
+		assert.equal(createViewResponse.status, 201)
+		const createdView = (await createViewResponse.json()).view
+		assert.equal(createdView.title, 'Filtered board')
+		assert.equal(createdView.view_kind, 'kanban')
+
+		const deleteViewResponse = await fetch(new URL(`/api/projects/2/views/${createdView.id}`, authStack.appUrl), {
+			method: 'DELETE',
+			headers: sameOriginHeaders(authStack, sessionCookie),
+		})
+		assert.equal(deleteViewResponse.status, 200)
+		assert.equal((await authStack.mockApi('projects/2/views')).some(view => view.id === createdView.id), false)
+
+		const uploadBody = new FormData()
+		uploadBody.append('background', new Blob([Buffer.from(ONE_PIXEL_PNG_BASE64, 'base64')], {type: 'image/png'}), 'bg.png')
+		const uploadResponse = await fetch(new URL('/api/projects/2/backgrounds/upload', authStack.appUrl), {
+			method: 'PUT',
+			headers: {
+				Cookie: sessionCookie,
+				Origin: authStack.appUrl,
+			},
+			body: uploadBody,
+		})
+		assert.equal(uploadResponse.status, 200)
+		assert.ok((await authStack.mockApi('projects/2')).background_information)
+
+		const backgroundResponse = await fetch(new URL('/api/projects/2/background', authStack.appUrl), {
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(backgroundResponse.status, 200)
+		assert.match(backgroundResponse.headers.get('content-type') || '', /image\/png/)
+
+		const unsplashSearchResponse = await fetch(new URL('/api/backgrounds/unsplash/search?s=mountain', authStack.appUrl), {
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(unsplashSearchResponse.status, 200)
+		const unsplashSearchPayload = await unsplashSearchResponse.json()
+		assert.ok(Array.isArray(unsplashSearchPayload.results))
+		assert.ok(unsplashSearchPayload.results.length > 0)
+
+		const unsplashSetResponse = await fetch(new URL('/api/projects/2/backgrounds/unsplash', authStack.appUrl), {
+			method: 'POST',
+			headers: sameOriginHeaders(authStack, sessionCookie, {
+				'Content-Type': 'application/json',
+			}),
+			body: JSON.stringify(unsplashSearchPayload.results[0]),
+		})
+		assert.equal(unsplashSetResponse.status, 200)
+		assert.ok((await authStack.mockApi('projects/2')).background_information)
+
+		const removeBackgroundResponse = await fetch(new URL('/api/projects/2/background', authStack.appUrl), {
+			method: 'DELETE',
+			headers: sameOriginHeaders(authStack, sessionCookie),
+		})
+		assert.equal(removeBackgroundResponse.status, 200)
+		assert.equal((await authStack.mockApi('projects/2')).background_information, null)
+	} finally {
+		await authStack.stop()
+	}
 })
 
 test('missing stale hashed bundles return a recovery response instead of a hard 404', async () => {
@@ -282,6 +470,188 @@ test('registration, password reset routes, and reset redirect work with an expli
 	}
 })
 
+test('oidc auth-url generation and callback create a normal password session', async () => {
+	const authStack = await startTestStack({
+		legacyConfigured: false,
+		mockVikunjaOptions: {
+			localAuthEnabled: false,
+			registrationEnabled: false,
+			oidcProviders: [
+				{
+					name: 'Acme SSO',
+					key: 'acme',
+					auth_url: '/mock-oidc/acme/authorize',
+				},
+			],
+		},
+	})
+
+	try {
+		const authUrlResponse = await fetch(
+			new URL(
+				`/api/session/openid/acme/auth-url?baseUrl=${encodeURIComponent(`${authStack.mock.origin}/api/v1`)}&redirectUri=${encodeURIComponent(`${authStack.appUrl}/auth/openid/callback`)}`,
+				authStack.appUrl,
+			),
+		)
+		assert.equal(authUrlResponse.status, 200)
+		const authUrlPayload = await authUrlResponse.json()
+		assert.ok(authUrlPayload.authUrl)
+
+		const generatedAuthUrl = new URL(authUrlPayload.authUrl)
+		assert.equal(generatedAuthUrl.pathname, '/mock-oidc/acme/authorize')
+		assert.equal(generatedAuthUrl.searchParams.get('redirect_url'), `${authStack.appUrl}/auth/openid/callback`)
+		assert.ok(generatedAuthUrl.searchParams.get('state'))
+		assert.ok(generatedAuthUrl.searchParams.get('nonce'))
+
+		const invalidCallbackResponse = await fetch(new URL('/api/session/openid/callback', authStack.appUrl), {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({
+				code: 'invalid',
+				state: 'unknown-state',
+			}),
+		})
+		assert.equal(invalidCallbackResponse.status, 400)
+
+		const callbackResponse = await fetch(new URL('/api/session/openid/callback', authStack.appUrl), {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({
+				code: 'mock-oidc-code-acme',
+				state: generatedAuthUrl.searchParams.get('state'),
+			}),
+		})
+		assert.equal(callbackResponse.status, 200)
+		const sessionCookie = getAppSessionCookie(callbackResponse)
+		assert.ok(sessionCookie)
+
+		const sessionResponse = await fetch(new URL('/api/session', authStack.appUrl), {
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(sessionResponse.status, 200)
+		const sessionPayload = await sessionResponse.json()
+		assert.equal(sessionPayload.connected, true)
+		assert.equal(sessionPayload.account.authMode, 'password')
+		assert.equal(sessionPayload.account.user.username, 'smoke-user')
+	} finally {
+		await authStack.stop()
+	}
+})
+
+test('webhook and migration proxy routes cover user, project, oauth, and file flows', async () => {
+	const authStack = await startTestStack({legacyConfigured: false})
+
+	try {
+		const sessionCookie = await loginWithPasswordSession(authStack)
+
+		const userEventsResponse = await fetch(new URL('/api/session/webhooks/events', authStack.appUrl), {
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(userEventsResponse.status, 200)
+		assert.equal((await userEventsResponse.json()).events.length > 0, true)
+
+		const createUserWebhookResponse = await fetch(new URL('/api/session/webhooks', authStack.appUrl), {
+			method: 'PUT',
+			headers: sameOriginHeaders(authStack, sessionCookie, {
+				'Content-Type': 'application/json',
+			}),
+			body: JSON.stringify({
+				targetUrl: 'https://example.test/user-hook',
+				events: ['task.created'],
+				secret: 'top-secret',
+			}),
+		})
+		assert.equal(createUserWebhookResponse.status, 201)
+
+		const userWebhooksResponse = await fetch(new URL('/api/session/webhooks', authStack.appUrl), {
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(userWebhooksResponse.status, 200)
+		assert.equal((await userWebhooksResponse.json()).webhooks.length, 1)
+
+		const projectEventsResponse = await fetch(new URL('/api/webhooks/events', authStack.appUrl), {
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(projectEventsResponse.status, 200)
+		assert.equal((await projectEventsResponse.json()).events.length > 0, true)
+
+		const createProjectWebhookResponse = await fetch(new URL('/api/projects/2/webhooks', authStack.appUrl), {
+			method: 'PUT',
+			headers: sameOriginHeaders(authStack, sessionCookie, {
+				'Content-Type': 'application/json',
+			}),
+			body: JSON.stringify({
+				targetUrl: 'https://example.test/project-hook',
+				events: ['task.updated'],
+			}),
+		})
+		assert.equal(createProjectWebhookResponse.status, 201)
+
+		const projectWebhooksResponse = await fetch(new URL('/api/projects/2/webhooks', authStack.appUrl), {
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(projectWebhooksResponse.status, 200)
+		assert.equal((await projectWebhooksResponse.json()).webhooks.length, 1)
+
+		const migrationStatusResponse = await fetch(new URL('/api/migration/todoist/status', authStack.appUrl), {
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(migrationStatusResponse.status, 200)
+		assert.equal((await migrationStatusResponse.json()).status, 'idle')
+
+		const migrationAuthResponse = await fetch(new URL('/api/migration/todoist/auth', authStack.appUrl), {
+			headers: sameOriginHeaders(authStack, sessionCookie),
+		})
+		assert.equal(migrationAuthResponse.status, 200)
+		assert.ok((await migrationAuthResponse.json()).authUrl)
+
+		const oauthMigrationResponse = await fetch(new URL('/api/migration/todoist/migrate', authStack.appUrl), {
+			method: 'POST',
+			headers: sameOriginHeaders(authStack, sessionCookie, {
+				'Content-Type': 'application/json',
+			}),
+			body: JSON.stringify({
+				code: 'oauth-import-code',
+			}),
+		})
+		assert.equal(oauthMigrationResponse.status, 200)
+		assert.equal((await oauthMigrationResponse.json()).status, 'running')
+
+		const fileMigrationUpload = createMultipartUploadBody({
+			filename: 'ticktick.csv',
+			sizeBytes: 32,
+			contentType: 'text/csv',
+		})
+		const fileMigrationResponse = await fetch(new URL('/api/migration/ticktick/migrate', authStack.appUrl), {
+			method: 'POST',
+			headers: sameOriginHeaders(authStack, sessionCookie, {
+				'Content-Type': fileMigrationUpload.contentType,
+			}),
+			body: fileMigrationUpload.body,
+		})
+		assert.equal(fileMigrationResponse.status, 200)
+		assert.equal((await fileMigrationResponse.json()).status, 'running')
+	} finally {
+		await authStack.stop()
+	}
+})
+
 test('auth info reflects registration availability and registration rejects disabled servers clearly', async () => {
 	const authStack = await startTestStack({
 		legacyConfigured: false,
@@ -409,10 +779,9 @@ test('admin testmail route requires an admin session, returns bridge output, and
 
 		const testmailResponse = await fetch(new URL('/api/admin/testmail', bridgeStack.appUrl), {
 			method: 'POST',
-			headers: {
+			headers: sameOriginHeaders(bridgeStack, sessionCookie, {
 				'Content-Type': 'application/json',
-				Cookie: sessionCookie,
-			},
+			}),
 			body: JSON.stringify({
 				email: 'test@example.com',
 			}),
@@ -429,9 +798,7 @@ test('admin testmail route requires an admin session, returns bridge output, and
 
 		const doctorResponse = await fetch(new URL('/api/admin/doctor', bridgeStack.appUrl), {
 			method: 'POST',
-			headers: {
-				Cookie: sessionCookie,
-			},
+			headers: sameOriginHeaders(bridgeStack, sessionCookie),
 		})
 		assert.equal(doctorResponse.status, 200)
 		const doctorPayload = await doctorResponse.json()
@@ -460,10 +827,9 @@ test('admin testmail route requires an admin session, returns bridge output, and
 		const sessionCookie = await loginWithPasswordSession(falseSuccessStack)
 		const response = await fetch(new URL('/api/admin/testmail', falseSuccessStack.appUrl), {
 			method: 'POST',
-			headers: {
+			headers: sameOriginHeaders(falseSuccessStack, sessionCookie, {
 				'Content-Type': 'application/json',
-				Cookie: sessionCookie,
-			},
+			}),
 			body: JSON.stringify({
 				email: 'test@example.com',
 			}),
@@ -483,10 +849,9 @@ test('admin testmail route requires an admin session, returns bridge output, and
 		const sessionCookie = await loginWithPasswordSession(noBridgeStack)
 		const response = await fetch(new URL('/api/admin/testmail', noBridgeStack.appUrl), {
 			method: 'POST',
-			headers: {
+			headers: sameOriginHeaders(noBridgeStack, sessionCookie, {
 				'Content-Type': 'application/json',
-				Cookie: sessionCookie,
-			},
+			}),
 			body: JSON.stringify({
 				email: 'test@example.com',
 			}),
@@ -543,7 +908,7 @@ test('operator allowlist still works when the authenticated user payload omits e
 		assert.equal(sessionResponse.status, 200)
 		const sessionPayload = await sessionResponse.json()
 		assert.equal(sessionPayload.connected, true)
-		assert.equal(sessionPayload.account.isAdmin, true)
+		assert.equal(sessionPayload.account.canUseAdminBridge, true)
 		assert.equal(sessionPayload.account.user.email, 'smoke@example.test')
 
 		const response = await fetch(new URL('/api/admin/runtime/health', bridgeStack.appUrl), {
@@ -553,7 +918,7 @@ test('operator allowlist still works when the authenticated user payload omits e
 		})
 		assert.equal(response.status, 200)
 		const payload = await response.json()
-		assert.equal(payload.admin.isAdmin, true)
+		assert.equal(payload.admin.canUseAdminBridge, true)
 		assert.equal(payload.admin.user.email, 'smoke@example.test')
 	} finally {
 		await bridgeStack.stop()
@@ -626,10 +991,9 @@ test('admin mailer config routes expose read-only vs file-backed capabilities an
 
 		const saveResponse = await fetch(new URL('/api/admin/config/mailer', readOnlyStack.appUrl), {
 			method: 'POST',
-			headers: {
+			headers: sameOriginHeaders(readOnlyStack, sessionCookie, {
 				'Content-Type': 'application/json',
-				Cookie: sessionCookie,
-			},
+			}),
 			body: JSON.stringify({
 				enabled: true,
 				host: 'smtp.should-not-save.local',
@@ -697,10 +1061,9 @@ test('admin mailer config routes expose read-only vs file-backed capabilities an
 
 		const saveResponse = await fetch(new URL('/api/admin/config/mailer', composeStack.appUrl), {
 			method: 'POST',
-			headers: {
+			headers: sameOriginHeaders(composeStack, sessionCookie, {
 				'Content-Type': 'application/json',
-				Cookie: sessionCookie,
-			},
+			}),
 			body: JSON.stringify({
 				enabled: true,
 				host: 'smtp.compose.test.local',
@@ -728,9 +1091,7 @@ test('admin mailer config routes expose read-only vs file-backed capabilities an
 
 		const applyResponse = await fetch(new URL('/api/admin/config/mailer/apply', composeStack.appUrl), {
 			method: 'POST',
-			headers: {
-				Cookie: sessionCookie,
-			},
+			headers: sameOriginHeaders(composeStack, sessionCookie),
 		})
 		assert.equal(applyResponse.status, 200)
 		const applyPayload = await applyResponse.json()
@@ -796,10 +1157,9 @@ test('admin mailer config routes expose read-only vs file-backed capabilities an
 
 		const saveResponse = await fetch(new URL('/api/admin/config/mailer', bridgeStack.appUrl), {
 			method: 'POST',
-			headers: {
+			headers: sameOriginHeaders(bridgeStack, sessionCookie, {
 				'Content-Type': 'application/json',
-				Cookie: sessionCookie,
-			},
+			}),
 			body: JSON.stringify({
 				enabled: true,
 				host: 'smtp.test.local',
@@ -838,9 +1198,7 @@ test('admin mailer config routes expose read-only vs file-backed capabilities an
 
 		const applyResponse = await fetch(new URL('/api/admin/config/mailer/apply', bridgeStack.appUrl), {
 			method: 'POST',
-			headers: {
-				Cookie: sessionCookie,
-			},
+			headers: sameOriginHeaders(bridgeStack, sessionCookie),
 		})
 		assert.equal(applyResponse.status, 200)
 		const applyPayload = await applyResponse.json()
@@ -852,6 +1210,253 @@ test('admin mailer config routes expose read-only vs file-backed capabilities an
 		assert.ok(bridgeState)
 		assert.match(bridgeStack.adminBridge?.readHostConfig() || '', /host: smtp\.test\.local/)
 		assert.match(bridgeStack.adminBridge?.readHostConfig() || '', /password: secret/)
+	} finally {
+		await bridgeStack.stop()
+	}
+})
+
+test('admin migration importer config routes expose read-only vs file-backed capabilities and persist when configured', async () => {
+	const readOnlyStack = await startTestStack({
+		legacyConfigured: false,
+		mockAdminBridge: {
+			envVars: {
+				VIKUNJA_MIGRATION_TODOIST_ENABLE: 'true',
+				VIKUNJA_MIGRATION_TODOIST_CLIENTID: 'todoist-env-id',
+				VIKUNJA_MIGRATION_TODOIST_REDIRECTURL: 'https://pwa.example.test/migrate/todoist',
+			},
+		},
+	})
+
+	try {
+		const sessionCookie = await loginWithPasswordSession(readOnlyStack)
+		const configResponse = await fetch(new URL('/api/admin/config/migration-importers', readOnlyStack.appUrl), {
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(configResponse.status, 200)
+		const configPayload = await configResponse.json()
+		assert.equal(configPayload.todoist.enabled, true)
+		assert.equal(configPayload.todoist.clientId, 'todoist-env-id')
+		assert.equal(configPayload.todoist.redirectUrl, 'https://pwa.example.test/migrate/todoist')
+		assert.deepEqual(configPayload.todoist.envOverrides, ['enabled', 'clientId', 'redirectUrl'])
+		assert.deepEqual(configPayload.capabilities, {
+			canInspect: true,
+			canWrite: false,
+			canApply: false,
+			reasonCode: 'no_config_path',
+		})
+
+		const saveResponse = await fetch(new URL('/api/admin/config/migration-importers', readOnlyStack.appUrl), {
+			method: 'POST',
+			headers: sameOriginHeaders(readOnlyStack, sessionCookie, {
+				'Content-Type': 'application/json',
+			}),
+			body: JSON.stringify({
+				todoist: {
+					enabled: false,
+					clientId: 'todoist-updated',
+					clientSecret: '',
+					redirectUrl: 'https://app.example.test/migrate/todoist',
+				},
+				trello: {
+					enabled: true,
+					key: 'trello-key',
+					redirectUrl: 'https://app.example.test/migrate/trello',
+				},
+				microsoftTodo: {
+					enabled: true,
+					clientId: 'ms-id',
+					clientSecret: '',
+					redirectUrl: 'https://app.example.test/migrate/microsoft-todo',
+				},
+			}),
+		})
+		assert.equal(saveResponse.status, 409)
+		const savePayload = await saveResponse.json()
+		assert.equal(savePayload.error, 'Migration importer settings are read-only because no writable deployment config source is configured.')
+		assert.equal(savePayload.details?.reasonCode, 'no_config_path')
+	} finally {
+		await readOnlyStack.stop()
+	}
+
+	const composeStack = await startTestStack({
+		legacyConfigured: false,
+		mockAdminBridge: {
+			composePathEnabled: true,
+			initialComposeYaml: `services:
+  vikunja:
+    image: vikunja/vikunja
+    environment:
+      VIKUNJA_MIGRATION_TODOIST_ENABLE: "false"
+      VIKUNJA_MIGRATION_TODOIST_CLIENTID: todoist-compose-initial
+      VIKUNJA_MIGRATION_TODOIST_REDIRECTURL: https://legacy.example.test/migrate/todoist
+      VIKUNJA_MIGRATION_TRELLO_ENABLE: "false"
+      VIKUNJA_MIGRATION_TRELLO_KEY: trello-compose-initial
+      VIKUNJA_MIGRATION_TRELLO_REDIRECTURL: https://legacy.example.test/migrate/trello
+      VIKUNJA_MIGRATION_MICROSOFTTODO_ENABLE: "false"
+      VIKUNJA_MIGRATION_MICROSOFTTODO_CLIENTID: microsoft-compose-initial
+      VIKUNJA_MIGRATION_MICROSOFTTODO_REDIRECTURL: https://legacy.example.test/migrate/microsoft-todo
+`,
+		},
+	})
+
+	try {
+		const sessionCookie = await loginWithPasswordSession(composeStack)
+		const configResponse = await fetch(new URL('/api/admin/config/migration-importers', composeStack.appUrl), {
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(configResponse.status, 200)
+		const configPayload = await configResponse.json()
+		assert.equal(configPayload.todoist.enabled, false)
+		assert.equal(configPayload.todoist.clientId, 'todoist-compose-initial')
+		assert.equal(configPayload.trello.key, 'trello-compose-initial')
+		assert.equal(configPayload.microsoftTodo.clientId, 'microsoft-compose-initial')
+		assert.deepEqual(configPayload.capabilities, {
+			canInspect: true,
+			canWrite: true,
+			canApply: true,
+			reasonCode: null,
+		})
+
+		const saveResponse = await fetch(new URL('/api/admin/config/migration-importers', composeStack.appUrl), {
+			method: 'POST',
+			headers: sameOriginHeaders(composeStack, sessionCookie, {
+				'Content-Type': 'application/json',
+			}),
+			body: JSON.stringify({
+				todoist: {
+					enabled: true,
+					clientId: 'todoist-compose-updated',
+					clientSecret: 'todoist-secret',
+					redirectUrl: 'https://pwa.example.test/migrate/todoist',
+				},
+				trello: {
+					enabled: true,
+					key: 'trello-compose-updated',
+					redirectUrl: 'https://pwa.example.test/migrate/trello',
+				},
+				microsoftTodo: {
+					enabled: true,
+					clientId: 'microsoft-compose-updated',
+					clientSecret: 'microsoft-secret',
+					redirectUrl: 'https://pwa.example.test/migrate/microsoft-todo',
+				},
+			}),
+		})
+		assert.equal(saveResponse.status, 200)
+		const savePayload = await saveResponse.json()
+		assert.equal(savePayload.todoist.enabled, true)
+		assert.equal(savePayload.todoist.clientId, 'todoist-compose-updated')
+		assert.equal(savePayload.todoist.clientSecretConfigured, true)
+		assert.equal(savePayload.todoist.redirectUrl, 'https://pwa.example.test/migrate/todoist')
+		assert.equal(savePayload.trello.key, 'trello-compose-updated')
+		assert.equal(savePayload.microsoftTodo.clientId, 'microsoft-compose-updated')
+		assert.equal(savePayload.microsoftTodo.clientSecretConfigured, true)
+
+		const applyResponse = await fetch(new URL('/api/admin/config/migration-importers/apply', composeStack.appUrl), {
+			method: 'POST',
+			headers: sameOriginHeaders(composeStack, sessionCookie),
+		})
+		assert.equal(applyResponse.status, 200)
+		const applyPayload = await applyResponse.json()
+		assert.equal(applyPayload.restarted, true)
+		assert.equal(applyPayload.config.todoist.redirectUrl, 'https://pwa.example.test/migrate/todoist')
+
+		assert.match(composeStack.adminBridge?.readComposeConfig() || '', /VIKUNJA_MIGRATION_TODOIST_ENABLE:\s*"?true"?/)
+		assert.match(composeStack.adminBridge?.readComposeConfig() || '', /VIKUNJA_MIGRATION_TODOIST_CLIENTSECRET: todoist-secret/)
+		assert.match(composeStack.adminBridge?.readComposeConfig() || '', /VIKUNJA_MIGRATION_TRELLO_KEY: trello-compose-updated/)
+		assert.match(composeStack.adminBridge?.readComposeConfig() || '', /VIKUNJA_MIGRATION_MICROSOFTTODO_REDIRECTURL: https:\/\/pwa\.example\.test\/migrate\/microsoft-todo/)
+	} finally {
+		await composeStack.stop()
+	}
+
+	const bridgeStack = await startTestStack({
+		legacyConfigured: false,
+		mockAdminBridge: {
+			hostConfigPathEnabled: true,
+			initialConfigYaml: `migration:
+  todoist:
+    enable: false
+    clientid: todoist-initial
+    redirecturl: https://legacy.example.test/migrate/todoist
+  trello:
+    enable: true
+    key: trello-initial
+    redirecturl: https://legacy.example.test/migrate/trello
+  microsofttodo:
+    enable: false
+    clientid: microsoft-initial
+    redirecturl: https://legacy.example.test/migrate/microsoft-todo
+`,
+			envVars: {
+				VIKUNJA_MIGRATION_MICROSOFTTODO_ENABLE: 'true',
+			},
+		},
+	})
+
+	try {
+		const sessionCookie = await loginWithPasswordSession(bridgeStack)
+		const configResponse = await fetch(new URL('/api/admin/config/migration-importers', bridgeStack.appUrl), {
+			headers: {
+				Cookie: sessionCookie,
+			},
+		})
+		assert.equal(configResponse.status, 200)
+		const configPayload = await configResponse.json()
+		assert.equal(configPayload.todoist.clientId, 'todoist-initial')
+		assert.equal(configPayload.trello.enabled, true)
+		assert.equal(configPayload.microsoftTodo.enabled, true)
+		assert.deepEqual(configPayload.microsoftTodo.envOverrides, ['enabled'])
+
+		const saveResponse = await fetch(new URL('/api/admin/config/migration-importers', bridgeStack.appUrl), {
+			method: 'POST',
+			headers: sameOriginHeaders(bridgeStack, sessionCookie, {
+				'Content-Type': 'application/json',
+			}),
+			body: JSON.stringify({
+				todoist: {
+					enabled: true,
+					clientId: 'todoist-updated',
+					clientSecret: 'todoist-host-secret',
+					redirectUrl: 'https://pwa.example.test/migrate/todoist',
+				},
+				trello: {
+					enabled: false,
+					key: 'trello-updated',
+					redirectUrl: 'https://pwa.example.test/migrate/trello',
+				},
+				microsoftTodo: {
+					enabled: false,
+					clientId: 'microsoft-updated',
+					clientSecret: 'microsoft-host-secret',
+					redirectUrl: 'https://pwa.example.test/migrate/microsoft-todo',
+				},
+			}),
+		})
+		assert.equal(saveResponse.status, 200)
+		const savePayload = await saveResponse.json()
+		assert.equal(savePayload.todoist.enabled, true)
+		assert.equal(savePayload.todoist.clientSecretConfigured, true)
+		assert.equal(savePayload.trello.enabled, false)
+		assert.equal(savePayload.microsoftTodo.enabled, true)
+		assert.equal(savePayload.microsoftTodo.clientSecretConfigured, true)
+
+		const applyResponse = await fetch(new URL('/api/admin/config/migration-importers/apply', bridgeStack.appUrl), {
+			method: 'POST',
+			headers: sameOriginHeaders(bridgeStack, sessionCookie),
+		})
+		assert.equal(applyResponse.status, 200)
+		const applyPayload = await applyResponse.json()
+		assert.equal(applyPayload.restarted, true)
+		assert.equal(applyPayload.config.trello.key, 'trello-updated')
+
+		assert.match(bridgeStack.adminBridge?.readHostConfig() || '', /clientid: todoist-updated/)
+		assert.match(bridgeStack.adminBridge?.readHostConfig() || '', /clientsecret: todoist-host-secret/)
+		assert.match(bridgeStack.adminBridge?.readHostConfig() || '', /key: trello-updated/)
+		assert.match(bridgeStack.adminBridge?.readHostConfig() || '', /redirecturl: https:\/\/pwa\.example\.test\/migrate\/microsoft-todo/)
 	} finally {
 		await bridgeStack.stop()
 	}
@@ -967,6 +1572,51 @@ test('unsafe api writes allow current same-origin browser requests', async () =>
 	}
 })
 
+test('cookie-authenticated unsafe writes require an Origin or Referer header', async () => {
+	const authStack = await startTestStack({legacyConfigured: false})
+
+	try {
+		const sessionCookie = await loginWithPasswordSession(authStack)
+		const response = await fetch(new URL('/api/projects/2/tasks', authStack.appUrl), {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Cookie: sessionCookie,
+			},
+			body: JSON.stringify({
+				title: 'Blocked missing origin',
+			}),
+		})
+
+		assert.equal(response.status, 403)
+		assert.equal((await response.json()).error, 'Origin header required for cookie-authenticated requests.')
+	} finally {
+		await authStack.stop()
+	}
+})
+
+test('unsafe writes without cookies still allow non-browser clients that omit origin headers', async () => {
+	const authStack = await startTestStack()
+
+	try {
+		const response = await fetch(new URL('/api/projects/2/tasks', authStack.appUrl), {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({
+				title: 'Allowed without cookie and origin',
+			}),
+		})
+
+		assert.equal(response.status, 201)
+		const payload = await response.json()
+		assert.equal(payload.task.title, 'Allowed without cookie and origin')
+	} finally {
+		await authStack.stop()
+	}
+})
+
 test('unsafe api writes honor forwarded host and protocol when proxy trust is enabled', async () => {
 	const proxiedStack = await startTestStack({
 		envOverrides: {
@@ -1045,10 +1695,9 @@ test('password change route is rate limited', async () => {
 
 		const attempt = () => fetch(new URL('/api/session/password', passwordStack.appUrl), {
 			method: 'POST',
-			headers: {
+			headers: sameOriginHeaders(passwordStack, sessionCookie, {
 				'Content-Type': 'application/json',
-				Cookie: sessionCookie,
-			},
+			}),
 			body: JSON.stringify({
 				oldPassword: 'wrong-password',
 				newPassword: 'updated-password',
@@ -1114,6 +1763,75 @@ test('avatar proxy returns an image for backends using the /avatar/{username} ro
 	}
 })
 
+test('avatar upload and task attachments enforce route-specific raw body limits', async () => {
+	const uploadStack = await startTestStack({legacyConfigured: false})
+
+	try {
+		const sessionCookie = await loginWithPasswordSession(uploadStack)
+
+		const avatarUpload = createMultipartUploadBody({
+			filename: 'avatar.png',
+			sizeBytes: 1024,
+			contentType: 'image/png',
+		})
+		const avatarResponse = await fetch(new URL('/api/session/settings/avatar/upload', uploadStack.appUrl), {
+			method: 'PUT',
+			headers: sameOriginHeaders(uploadStack, sessionCookie, {
+				'Content-Type': avatarUpload.contentType,
+			}),
+			body: avatarUpload.body,
+		})
+		assert.equal(avatarResponse.status, 200)
+		assert.equal(uploadStack.mock.getState().user.settings.avatar_provider, 'upload')
+
+		const oversizedAvatarUpload = createMultipartUploadBody({
+			filename: 'avatar-too-large.png',
+			sizeBytes: 5 * 1024 * 1024,
+			contentType: 'image/png',
+		})
+		const oversizedAvatarResponse = await fetch(new URL('/api/session/settings/avatar/upload', uploadStack.appUrl), {
+			method: 'PUT',
+			headers: sameOriginHeaders(uploadStack, sessionCookie, {
+				'Content-Type': oversizedAvatarUpload.contentType,
+			}),
+			body: oversizedAvatarUpload.body,
+		})
+		assert.equal(oversizedAvatarResponse.status, 413)
+		assert.equal((await oversizedAvatarResponse.json()).error, 'Request body exceeds the 5 MB limit.')
+
+		const attachmentUpload = createMultipartUploadBody({
+			filename: 'notes.txt',
+			sizeBytes: 1024,
+			contentType: 'text/plain',
+		})
+		const attachmentResponse = await fetch(new URL('/api/tasks/201/attachments', uploadStack.appUrl), {
+			method: 'POST',
+			headers: sameOriginHeaders(uploadStack, sessionCookie, {
+				'Content-Type': attachmentUpload.contentType,
+			}),
+			body: attachmentUpload.body,
+		})
+		assert.equal(attachmentResponse.status, 201)
+		assert.equal((await attachmentResponse.json()).attachments.length, 1)
+
+		const oversizedAttachmentUpload = createMultipartUploadBody({
+			filename: 'too-large.bin',
+			sizeBytes: 20 * 1024 * 1024,
+		})
+		const oversizedAttachmentResponse = await fetch(new URL('/api/tasks/201/attachments', uploadStack.appUrl), {
+			method: 'POST',
+			headers: sameOriginHeaders(uploadStack, sessionCookie, {
+				'Content-Type': oversizedAttachmentUpload.contentType,
+			}),
+			body: oversizedAttachmentUpload.body,
+		})
+		assert.equal(oversizedAttachmentResponse.status, 413)
+		assert.equal((await oversizedAttachmentResponse.json()).error, 'Request body exceeds the 20 MB limit.')
+	} finally {
+		await uploadStack.stop()
+	}
+})
+
 test('instance info and account self-service proxy routes work end-to-end', async () => {
 	const authStack = await startTestStack({
 		legacyConfigured: false,
@@ -1149,10 +1867,9 @@ test('instance info and account self-service proxy routes work end-to-end', asyn
 
 		const emailResponse = await fetch(new URL('/api/session/settings/email', authStack.appUrl), {
 			method: 'POST',
-			headers: {
+			headers: sameOriginHeaders(authStack, sessionCookie, {
 				'Content-Type': 'application/json',
-				Cookie: sessionCookie,
-			},
+			}),
 			body: JSON.stringify({
 				password: 'smoke-password',
 				newEmail: 'updated-smoke@example.test',
@@ -1163,10 +1880,9 @@ test('instance info and account self-service proxy routes work end-to-end', asyn
 
 		const exportRequestResponse = await fetch(new URL('/api/user/export/request', authStack.appUrl), {
 			method: 'POST',
-			headers: {
+			headers: sameOriginHeaders(authStack, sessionCookie, {
 				'Content-Type': 'application/json',
-				Cookie: sessionCookie,
-			},
+			}),
 			body: JSON.stringify({
 				password: 'smoke-password',
 			}),
@@ -1186,10 +1902,9 @@ test('instance info and account self-service proxy routes work end-to-end', asyn
 
 		const exportDownloadResponse = await fetch(new URL('/api/user/export/download', authStack.appUrl), {
 			method: 'POST',
-			headers: {
+			headers: sameOriginHeaders(authStack, sessionCookie, {
 				'Content-Type': 'application/json',
-				Cookie: sessionCookie,
-			},
+			}),
 			body: JSON.stringify({
 				password: 'smoke-password',
 			}),
@@ -1200,10 +1915,9 @@ test('instance info and account self-service proxy routes work end-to-end', asyn
 
 		const deletionRequestResponse = await fetch(new URL('/api/user/deletion/request', authStack.appUrl), {
 			method: 'POST',
-			headers: {
+			headers: sameOriginHeaders(authStack, sessionCookie, {
 				'Content-Type': 'application/json',
-				Cookie: sessionCookie,
-			},
+			}),
 			body: JSON.stringify({
 				password: 'smoke-password',
 			}),
@@ -1213,10 +1927,9 @@ test('instance info and account self-service proxy routes work end-to-end', asyn
 
 		const deletionCancelResponse = await fetch(new URL('/api/user/deletion/cancel', authStack.appUrl), {
 			method: 'POST',
-			headers: {
+			headers: sameOriginHeaders(authStack, sessionCookie, {
 				'Content-Type': 'application/json',
-				Cookie: sessionCookie,
-			},
+			}),
 			body: JSON.stringify({
 				password: 'smoke-password',
 			}),
@@ -1226,10 +1939,9 @@ test('instance info and account self-service proxy routes work end-to-end', asyn
 
 		await fetch(new URL('/api/user/deletion/request', authStack.appUrl), {
 			method: 'POST',
-			headers: {
+			headers: sameOriginHeaders(authStack, sessionCookie, {
 				'Content-Type': 'application/json',
-				Cookie: sessionCookie,
-			},
+			}),
 			body: JSON.stringify({
 				password: 'smoke-password',
 			}),
@@ -1239,10 +1951,9 @@ test('instance info and account self-service proxy routes work end-to-end', asyn
 
 		const deletionConfirmResponse = await fetch(new URL('/api/user/deletion/confirm', authStack.appUrl), {
 			method: 'POST',
-			headers: {
+			headers: sameOriginHeaders(authStack, sessionCookie, {
 				'Content-Type': 'application/json',
-				Cookie: sessionCookie,
-			},
+			}),
 			body: JSON.stringify({
 				token: deletionToken,
 			}),
@@ -1274,9 +1985,7 @@ test('security proxy routes cover totp, caldav tokens, api tokens, and route per
 
 		const enrollResponse = await fetch(new URL('/api/session/totp/enroll', authStack.appUrl), {
 			method: 'POST',
-			headers: {
-				Cookie: sessionCookie,
-			},
+			headers: sameOriginHeaders(authStack, sessionCookie),
 		})
 		assert.equal(enrollResponse.status, 200)
 		const enrollPayload = await enrollResponse.json()
@@ -1293,10 +2002,9 @@ test('security proxy routes cover totp, caldav tokens, api tokens, and route per
 
 		const enableResponse = await fetch(new URL('/api/session/totp/enable', authStack.appUrl), {
 			method: 'POST',
-			headers: {
+			headers: sameOriginHeaders(authStack, sessionCookie, {
 				'Content-Type': 'application/json',
-				Cookie: sessionCookie,
-			},
+			}),
 			body: JSON.stringify({
 				passcode: '123456',
 			}),
@@ -1306,10 +2014,9 @@ test('security proxy routes cover totp, caldav tokens, api tokens, and route per
 
 		const disableResponse = await fetch(new URL('/api/session/totp/disable', authStack.appUrl), {
 			method: 'POST',
-			headers: {
+			headers: sameOriginHeaders(authStack, sessionCookie, {
 				'Content-Type': 'application/json',
-				Cookie: sessionCookie,
-			},
+			}),
 			body: JSON.stringify({
 				password: 'smoke-password',
 			}),
@@ -1327,9 +2034,7 @@ test('security proxy routes cover totp, caldav tokens, api tokens, and route per
 
 		const createCaldavResponse = await fetch(new URL('/api/session/caldav-tokens', authStack.appUrl), {
 			method: 'PUT',
-			headers: {
-				Cookie: sessionCookie,
-			},
+			headers: sameOriginHeaders(authStack, sessionCookie),
 		})
 		assert.equal(createCaldavResponse.status, 200)
 		assert.equal((await createCaldavResponse.json()).token, 'caldav-token-1')
@@ -1343,9 +2048,7 @@ test('security proxy routes cover totp, caldav tokens, api tokens, and route per
 
 		const deleteCaldavResponse = await fetch(new URL('/api/session/caldav-tokens/1', authStack.appUrl), {
 			method: 'DELETE',
-			headers: {
-				Cookie: sessionCookie,
-			},
+			headers: sameOriginHeaders(authStack, sessionCookie),
 		})
 		assert.equal(deleteCaldavResponse.status, 200)
 
@@ -1362,10 +2065,9 @@ test('security proxy routes cover totp, caldav tokens, api tokens, and route per
 
 		const createApiTokenResponse = await fetch(new URL('/api/tokens', authStack.appUrl), {
 			method: 'PUT',
-			headers: {
+			headers: sameOriginHeaders(authStack, sessionCookie, {
 				'Content-Type': 'application/json',
-				Cookie: sessionCookie,
-			},
+			}),
 			body: JSON.stringify({
 				title: 'Smoke API token',
 				permissions: {
@@ -1387,9 +2089,7 @@ test('security proxy routes cover totp, caldav tokens, api tokens, and route per
 
 		const deleteApiTokenResponse = await fetch(new URL('/api/tokens/1', authStack.appUrl), {
 			method: 'DELETE',
-			headers: {
-				Cookie: sessionCookie,
-			},
+			headers: sameOriginHeaders(authStack, sessionCookie),
 		})
 		assert.equal(deleteApiTokenResponse.status, 200)
 		assert.equal(authStack.mock.getState().apiTokens.length, 0)
@@ -1406,10 +2106,9 @@ test('share detail, reactions, and bulk task routes forward correctly', async ()
 
 		const createShareResponse = await fetch(new URL('/api/projects/2/shares', authStack.appUrl), {
 			method: 'POST',
-			headers: {
+			headers: sameOriginHeaders(authStack, sessionCookie, {
 				'Content-Type': 'application/json',
-				Cookie: sessionCookie,
-			},
+			}),
 			body: JSON.stringify({
 				name: 'Proxy share',
 				password: 'secret123',
@@ -1438,10 +2137,9 @@ test('share detail, reactions, and bulk task routes forward correctly', async ()
 
 		const addReactionResponse = await fetch(new URL('/api/comments/1/reactions', authStack.appUrl), {
 			method: 'PUT',
-			headers: {
+			headers: sameOriginHeaders(authStack, sessionCookie, {
 				'Content-Type': 'application/json',
-				Cookie: sessionCookie,
-			},
+			}),
 			body: JSON.stringify({
 				value: '🎉',
 			}),
@@ -1459,10 +2157,9 @@ test('share detail, reactions, and bulk task routes forward correctly', async ()
 
 		const removeReactionResponse = await fetch(new URL('/api/comments/1/reactions/delete', authStack.appUrl), {
 			method: 'POST',
-			headers: {
+			headers: sameOriginHeaders(authStack, sessionCookie, {
 				'Content-Type': 'application/json',
-				Cookie: sessionCookie,
-			},
+			}),
 			body: JSON.stringify({
 				value: '🎉',
 			}),
@@ -1471,10 +2168,9 @@ test('share detail, reactions, and bulk task routes forward correctly', async ()
 
 		const assigneesBulkResponse = await fetch(new URL('/api/tasks/201/assignees/bulk', authStack.appUrl), {
 			method: 'POST',
-			headers: {
+			headers: sameOriginHeaders(authStack, sessionCookie, {
 				'Content-Type': 'application/json',
-				Cookie: sessionCookie,
-			},
+			}),
 			body: JSON.stringify({
 				assignees: [
 					{id: 1, name: 'Smoke User', username: 'smoke-user', email: 'smoke@example.test'},
@@ -1487,10 +2183,9 @@ test('share detail, reactions, and bulk task routes forward correctly', async ()
 
 		const labelsBulkResponse = await fetch(new URL('/api/tasks/201/labels/bulk', authStack.appUrl), {
 			method: 'POST',
-			headers: {
+			headers: sameOriginHeaders(authStack, sessionCookie, {
 				'Content-Type': 'application/json',
-				Cookie: sessionCookie,
-			},
+			}),
 			body: JSON.stringify({
 				labels: [
 					{id: 1, title: 'Urgent'},
@@ -1524,19 +2219,16 @@ test('admin dump, restore, migration, and repair routes work with the mock bridg
 
 		const migrateResponse = await fetch(new URL('/api/admin/migrate', bridgeStack.appUrl), {
 			method: 'POST',
-			headers: {
-				Cookie: sessionCookie,
-			},
+			headers: sameOriginHeaders(bridgeStack, sessionCookie),
 		})
 		assert.equal(migrateResponse.status, 200)
 		assert.ok(bridgeStack.adminBridge.getState().migrations.every(migration => migration.applied === true))
 
 		const rollbackResponse = await fetch(new URL('/api/admin/migrate/rollback', bridgeStack.appUrl), {
 			method: 'POST',
-			headers: {
+			headers: sameOriginHeaders(bridgeStack, sessionCookie, {
 				'Content-Type': 'application/json',
-				Cookie: sessionCookie,
-			},
+			}),
 			body: JSON.stringify({
 				name: '002_add_tokens',
 			}),
@@ -1549,9 +2241,7 @@ test('admin dump, restore, migration, and repair routes work with the mock bridg
 
 		const dumpResponse = await fetch(new URL('/api/admin/dump', bridgeStack.appUrl), {
 			method: 'POST',
-			headers: {
-				Cookie: sessionCookie,
-			},
+			headers: sameOriginHeaders(bridgeStack, sessionCookie),
 		})
 		assert.equal(dumpResponse.status, 200)
 		assert.match(dumpResponse.headers.get('content-type') || '', /application\/zip/)
@@ -1560,20 +2250,27 @@ test('admin dump, restore, migration, and repair routes work with the mock bridg
 
 		const restoreResponse = await fetch(new URL('/api/admin/restore', bridgeStack.appUrl), {
 			method: 'POST',
-			headers: {
+			headers: sameOriginHeaders(bridgeStack, sessionCookie, {
 				'Content-Type': 'application/octet-stream',
-				Cookie: sessionCookie,
-			},
+			}),
 			body: Buffer.from('mock-restore-zip', 'utf8'),
 		})
 		assert.equal(restoreResponse.status, 200)
 		assert.ok(bridgeStack.adminBridge.getState().restore.lastUploadedBase64)
 
+		const largeRestoreResponse = await fetch(new URL('/api/admin/restore', bridgeStack.appUrl), {
+			method: 'POST',
+			headers: sameOriginHeaders(bridgeStack, sessionCookie, {
+				'Content-Type': 'application/octet-stream',
+			}),
+			body: Buffer.alloc((100 * 1024 * 1024) + 1, 0x61),
+		})
+		assert.equal(largeRestoreResponse.status, 413)
+		assert.equal((await largeRestoreResponse.json()).error, 'Request body exceeds the 100 MB limit.')
+
 		const repairResponse = await fetch(new URL('/api/admin/repair/projects', bridgeStack.appUrl), {
 			method: 'POST',
-			headers: {
-				Cookie: sessionCookie,
-			},
+			headers: sameOriginHeaders(bridgeStack, sessionCookie),
 		})
 		assert.equal(repairResponse.status, 200)
 		assert.equal((await repairResponse.json()).success, true)

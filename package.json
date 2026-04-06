@@ -1,6 +1,6 @@
 {
   "name": "vikunja-pwa",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "private": true,
   "description": "Unofficial mobile-first Vikunja PWA client with a Node gateway, offline-ready shell, and self-hosted collaboration tools.",
   "license": "AGPL-3.0-only",
@@ -39,6 +39,7 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
+    "blurhash": "^2.0.5",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.9.6",

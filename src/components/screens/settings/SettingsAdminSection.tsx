@@ -1,14 +1,17 @@
 import DetailSheet from '@/components/common/DetailSheet'
 import type {
+	AdminConfigCapabilityReasonCode,
 	AdminMailDiagnosticsResult,
 	AdminMigration,
 	AdminRepairResult,
 	AdminRuntimeHealth,
 	AdminUser,
-	MailerCapabilityReasonCode,
 	MailerConfig,
 	MailerConfigField,
 	MailerConfigInput,
+	MigrationImporterConfig,
+	MigrationImporterConfigInput,
+	MigrationImporterField,
 } from '@/types'
 import {
 	getProtectedAdminUserMessage,
@@ -38,11 +41,31 @@ const defaultMailerConfigForm: MailerConfigInput = {
 	forceSsl: false,
 }
 
+const defaultMigrationImporterConfigForm: MigrationImporterConfigInput = {
+	todoist: {
+		enabled: false,
+		clientId: '',
+		clientSecret: '',
+		redirectUrl: '',
+	},
+	trello: {
+		enabled: false,
+		key: '',
+		redirectUrl: '',
+	},
+	microsoftTodo: {
+		enabled: false,
+		clientId: '',
+		clientSecret: '',
+		redirectUrl: '',
+	},
+}
+
 export default function SettingsAdminSection({
 	open,
 	onToggle,
 	accountUser,
-	accountIsAdmin,
+	accountCanUseAdminBridge,
 	adminBridgeConfigured,
 	canManageUsers,
 	adminUsers,
@@ -67,6 +90,12 @@ export default function SettingsAdminSection({
 	mailerConfigLoading,
 	mailerConfigSubmitting,
 	mailerConfigRestarting,
+	migrationImporterConfig,
+	migrationImporterConfigLoadAttempted,
+	migrationImporterConfigLoading,
+	migrationImporterConfigSubmitting,
+	migrationImporterConfigRestarting,
+	publicAppOrigin,
 	onReloadRuntimeHealth,
 	onReloadUsers,
 	onLoadMigrations,
@@ -84,6 +113,9 @@ export default function SettingsAdminSection({
 	onLoadMailerConfig,
 	onSaveMailerConfig,
 	onApplyMailerConfig,
+	onLoadMigrationImporterConfig,
+	onSaveMigrationImporterConfig,
+	onApplyMigrationImporterConfig,
 }: {
 	open: boolean
 	onToggle: (section: SettingsSectionId) => void
@@ -92,7 +124,7 @@ export default function SettingsAdminSection({
 		username?: string | null
 		email?: string | null
 	} | null | undefined
-	accountIsAdmin: boolean
+	accountCanUseAdminBridge: boolean
 	adminBridgeConfigured: boolean
 	canManageUsers: boolean
 	adminUsers: AdminUser[]
@@ -117,6 +149,12 @@ export default function SettingsAdminSection({
 	mailerConfigLoading: boolean
 	mailerConfigSubmitting: boolean
 	mailerConfigRestarting: boolean
+	migrationImporterConfig: MigrationImporterConfig | null
+	migrationImporterConfigLoadAttempted: boolean
+	migrationImporterConfigLoading: boolean
+	migrationImporterConfigSubmitting: boolean
+	migrationImporterConfigRestarting: boolean
+	publicAppOrigin: string | null
 	onReloadRuntimeHealth: () => void
 	onReloadUsers: () => void
 	onLoadMigrations: () => Promise<void>
@@ -134,6 +172,9 @@ export default function SettingsAdminSection({
 	onLoadMailerConfig: () => Promise<void>
 	onSaveMailerConfig: (settings: MailerConfigInput) => Promise<boolean>
 	onApplyMailerConfig: () => Promise<boolean>
+	onLoadMigrationImporterConfig: () => Promise<void>
+	onSaveMigrationImporterConfig: (settings: MigrationImporterConfigInput) => Promise<boolean>
+	onApplyMigrationImporterConfig: () => Promise<boolean>
 }) {
 	const [userDialogMode, setUserDialogMode] = useState<'create' | 'edit' | null>(null)
 	const [userDialogForm, setUserDialogForm] = useState({
@@ -145,6 +186,8 @@ export default function SettingsAdminSection({
 	const [selectedAdminUserId, setSelectedAdminUserId] = useState<number | null>(null)
 	const [smtpForm, setSmtpForm] = useState<MailerConfigInput>(defaultMailerConfigForm)
 	const [smtpFormDirty, setSmtpFormDirty] = useState(false)
+	const [migrationImporterForm, setMigrationImporterForm] = useState<MigrationImporterConfigInput>(defaultMigrationImporterConfigForm)
+	const [migrationImporterFormDirty, setMigrationImporterFormDirty] = useState(false)
 	const [testmailEmail, setTestmailEmail] = useState('')
 
 	const adminBridgeReady = Boolean(
@@ -152,12 +195,25 @@ export default function SettingsAdminSection({
 		adminRuntimeHealth?.vikunjaContainerFound &&
 		adminRuntimeHealth?.vikunjaCliReachable,
 	)
-	const showBridgeHealthLoading = !accountIsAdmin && adminBridgeConfigured && adminRuntimeHealthLoading
-	const showBridgeUnavailableMessage = !accountIsAdmin && (
+	const operatorAccountLabel = accountUser?.username || accountUser?.email || 'Authorized operator'
+	const operatorAccountMeta = accountUser?.email
+		? `${accountUser.email}${accountUser?.username ? ` · ${accountUser.username}` : ''}`
+		: accountUser?.username
+			? `Signed in as ${accountUser.username}`
+			: 'Signed-in operator session'
+	const operatorBridgeStatusLabel = adminRuntimeHealthLoading
+		? 'Checking bridge…'
+		: adminBridgeReady
+			? 'Bridge ready'
+			: adminBridgeConfigured
+				? 'Bridge unavailable'
+				: 'Bridge not configured'
+	const showBridgeHealthLoading = !accountCanUseAdminBridge && adminBridgeConfigured && adminRuntimeHealthLoading
+	const showBridgeUnavailableMessage = !accountCanUseAdminBridge && (
 		!adminBridgeConfigured ||
 		Boolean(adminRuntimeHealth && !adminBridgeReady)
 	)
-	const showUnauthorizedOperatorMessage = !accountIsAdmin &&
+	const showUnauthorizedOperatorMessage = !accountCanUseAdminBridge &&
 		adminBridgeConfigured &&
 		!adminRuntimeHealthLoading &&
 		(!adminRuntimeHealth || adminBridgeReady)
@@ -188,6 +244,23 @@ export default function SettingsAdminSection({
 	const mailerApplyBlockedMessage = mailerCapabilities.canWrite && !mailerCapabilities.canApply
 		? getMailerCapabilityMessage(mailerCapabilities.reasonCode, 'apply')
 		: ''
+	const migrationImporterCapabilities = migrationImporterConfig?.capabilities || {
+		canInspect: false,
+		canWrite: false,
+		canApply: false,
+		reasonCode: null,
+	}
+	const showMigrationImporterForm = Boolean(migrationImporterConfig) &&
+		!migrationImporterConfigLoading &&
+		migrationImporterCapabilities.canInspect
+	const migrationImporterUnavailableMessage = getMigrationImporterCapabilityMessage(migrationImporterCapabilities.reasonCode, 'inspect')
+	const migrationImporterReadOnlyMessage = !migrationImporterCapabilities.canWrite
+		? getMigrationImporterCapabilityMessage(migrationImporterCapabilities.reasonCode, 'write')
+		: ''
+	const migrationImporterApplyBlockedMessage = migrationImporterCapabilities.canWrite && !migrationImporterCapabilities.canApply
+		? getMigrationImporterCapabilityMessage(migrationImporterCapabilities.reasonCode, 'apply')
+		: ''
+	const appOrigin = `${publicAppOrigin || (typeof window !== 'undefined' ? window.location.origin : '')}`.trim()
 
 	useEffect(() => {
 		if (!mailerConfig) {
@@ -209,12 +282,60 @@ export default function SettingsAdminSection({
 	}, [mailerConfig])
 
 	useEffect(() => {
+		if (!migrationImporterConfig) {
+			return
+		}
+
+		setMigrationImporterForm({
+			todoist: {
+				enabled: migrationImporterConfig.todoist.enabled,
+				clientId: migrationImporterConfig.todoist.clientId,
+				clientSecret: '',
+				redirectUrl: migrationImporterConfig.todoist.redirectUrl,
+			},
+			trello: {
+				enabled: migrationImporterConfig.trello.enabled,
+				key: migrationImporterConfig.trello.key,
+				redirectUrl: migrationImporterConfig.trello.redirectUrl,
+			},
+			microsoftTodo: {
+				enabled: migrationImporterConfig.microsoftTodo.enabled,
+				clientId: migrationImporterConfig.microsoftTodo.clientId,
+				clientSecret: '',
+				redirectUrl: migrationImporterConfig.microsoftTodo.redirectUrl,
+			},
+		})
+		setMigrationImporterFormDirty(false)
+	}, [migrationImporterConfig])
+
+	useEffect(() => {
 		if (!open || !canManageUsers || mailerConfigLoadAttempted || mailerConfig || mailerConfigLoading) {
 			return
 		}
 
 		void onLoadMailerConfig()
 	}, [canManageUsers, mailerConfig, mailerConfigLoadAttempted, mailerConfigLoading, onLoadMailerConfig, open])
+
+	useEffect(() => {
+		if (
+			!open ||
+			!canManageUsers ||
+			migrationImporterConfigLoadAttempted ||
+			migrationImporterConfig ||
+			migrationImporterConfigLoading
+		) {
+			return
+		}
+
+		void onLoadMigrationImporterConfig()
+	}, [
+		canManageUsers,
+		migrationImporterConfig,
+		migrationImporterConfigLoadAttempted,
+		migrationImporterConfigLoading,
+		onLoadMigrationImporterConfig,
+		open,
+	])
 
 	useEffect(() => {
 		if (!open || !canManageUsers || !adminBridgeReady || adminMigrationsLoaded || adminMigrationsLoading) {
@@ -317,6 +438,38 @@ export default function SettingsAdminSection({
 		return mailerEnvOverrides.has(field)
 	}
 
+	function isMigrationImporterFieldOverridden(provider: 'todoist' | 'trello' | 'microsoftTodo', field: MigrationImporterField) {
+		const overrides = migrationImporterConfig?.[provider]?.envOverrides
+		return Array.isArray(overrides) ? overrides.includes(field) : false
+	}
+
+	function updateMigrationImporterField(
+		provider: keyof MigrationImporterConfigInput,
+		field: MigrationImporterField,
+		value: string | boolean,
+	) {
+		if (!migrationImporterCapabilities.canWrite) {
+			return
+		}
+
+		setMigrationImporterForm(state => ({
+			...state,
+			[provider]: {
+				...state[provider],
+				[field]: value,
+			},
+		}) as MigrationImporterConfigInput)
+		setMigrationImporterFormDirty(true)
+	}
+
+	function fillPwaMigrationRedirectUrl(provider: 'todoist' | 'trello' | 'microsoftTodo', service: 'todoist' | 'trello' | 'microsoft-todo') {
+		if (!appOrigin) {
+			return
+		}
+
+		updateMigrationImporterField(provider, 'redirectUrl', `${appOrigin}/migrate/${service}`)
+	}
+
 	async function handleSubmitMailerConfig(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault()
 		const success = await onSaveMailerConfig(smtpForm)
@@ -332,10 +485,25 @@ export default function SettingsAdminSection({
 		}
 	}
 
+	async function handleSubmitMigrationImporterConfig(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault()
+		const success = await onSaveMigrationImporterConfig(migrationImporterForm)
+		if (success) {
+			setMigrationImporterFormDirty(false)
+		}
+	}
+
+	async function handleApplyMigrationImporterConfig() {
+		const success = await onApplyMigrationImporterConfig()
+		if (success) {
+			setMigrationImporterFormDirty(false)
+		}
+	}
+
 	return (
 		<>
 			<SettingsSection
-				title="User Administration"
+				title="Administration"
 				section="userAdministration"
 				open={open}
 				onToggle={onToggle}
@@ -352,6 +520,7 @@ export default function SettingsAdminSection({
 									onReloadUsers()
 								}
 								void onLoadMailerConfig()
+								void onLoadMigrationImporterConfig()
 							}}
 						>
 							Reload
@@ -384,6 +553,25 @@ export default function SettingsAdminSection({
 				) : null}
 				{canManageUsers ? (
 					<>
+						<div className="detail-core-card settings-subsection">
+							<div className="settings-operator-status" data-admin-operator-status="active">
+								<div className="settings-operator-copy">
+									<div className="panel-label">Operator Access</div>
+									<div className="detail-value">{operatorAccountLabel}</div>
+									<div className="detail-meta">{operatorAccountMeta}</div>
+								</div>
+								<div className="settings-operator-chips">
+									<div className="settings-status-chip is-active">Operator access active</div>
+									<div className={`settings-status-chip ${adminBridgeReady ? 'is-active' : adminRuntimeHealthLoading ? '' : 'is-disabled'}`.trim()}>
+										{operatorBridgeStatusLabel}
+									</div>
+								</div>
+							</div>
+							<div className="detail-helper-text">
+								Instance user roles are not exposed by the current Vikunja CLI bridge. This UI currently supports
+								user lifecycle operations only: create, edit identity, enable or disable, reset password, and delete.
+							</div>
+						</div>
 						{adminRuntimeHealthLoading ? <div className="empty-state compact">Checking bridge health…</div> : null}
 						{adminRuntimeHealth ? (
 							<div className="detail-grid detail-grid-tight">
@@ -844,6 +1032,108 @@ export default function SettingsAdminSection({
 								</div>
 							) : null}
 						</div>
+						<div className="detail-core-card settings-subsection">
+							<div className="panel-label">Migration import providers</div>
+							<div className="empty-state compact">
+								Enable or disable OAuth importers and point their redirect URLs back to this PWA so
+								imports can return here instead of the original Vikunja frontend.
+							</div>
+							{migrationImporterConfigLoadAttempted && !migrationImporterConfigLoading && migrationImporterConfig && !migrationImporterCapabilities.canInspect ? (
+								<div className="detail-helper-text">
+									{migrationImporterUnavailableMessage}
+								</div>
+							) : null}
+							{migrationImporterConfigLoading ? (
+								<div className="empty-state compact">Loading migration importer settings…</div>
+							) : null}
+							{migrationImporterConfigLoadAttempted && !migrationImporterConfigLoading && !migrationImporterConfig ? (
+								<div className="detail-helper-text">
+									Migration importer settings could not be loaded. Use Reload after fixing bridge access or config-file access.
+								</div>
+							) : null}
+							{showMigrationImporterForm ? (
+								<form className="detail-grid settings-form" data-form="migration-importer-config" onSubmit={handleSubmitMigrationImporterConfig}>
+									{migrationImporterReadOnlyMessage ? (
+										<div className="detail-item detail-item-full detail-helper-text">
+											{migrationImporterReadOnlyMessage}
+										</div>
+									) : null}
+									<div className="detail-item detail-item-full settings-provider-list">
+										<MigrationImporterProviderCard
+											providerKey="todoist"
+											serviceId="todoist"
+											label="Todoist"
+											form={migrationImporterForm.todoist}
+											secretConfigured={Boolean(migrationImporterConfig?.todoist.clientSecretConfigured)}
+											submitting={migrationImporterConfigSubmitting}
+											restarting={migrationImporterConfigRestarting}
+											canWrite={migrationImporterCapabilities.canWrite}
+											appOrigin={appOrigin}
+											isOverridden={field => isMigrationImporterFieldOverridden('todoist', field)}
+											onUsePwaCallback={() => fillPwaMigrationRedirectUrl('todoist', 'todoist')}
+											onUpdateField={(field, value) => updateMigrationImporterField('todoist', field, value)}
+										/>
+										<MigrationImporterProviderCard
+											providerKey="trello"
+											serviceId="trello"
+											label="Trello"
+											form={migrationImporterForm.trello}
+											submitting={migrationImporterConfigSubmitting}
+											restarting={migrationImporterConfigRestarting}
+											canWrite={migrationImporterCapabilities.canWrite}
+											appOrigin={appOrigin}
+											isOverridden={field => isMigrationImporterFieldOverridden('trello', field)}
+											onUsePwaCallback={() => fillPwaMigrationRedirectUrl('trello', 'trello')}
+											onUpdateField={(field, value) => updateMigrationImporterField('trello', field, value)}
+										/>
+										<MigrationImporterProviderCard
+											providerKey="microsofttodo"
+											serviceId="microsoft-todo"
+											label="Microsoft To Do"
+											form={migrationImporterForm.microsoftTodo}
+											secretConfigured={Boolean(migrationImporterConfig?.microsoftTodo.clientSecretConfigured)}
+											submitting={migrationImporterConfigSubmitting}
+											restarting={migrationImporterConfigRestarting}
+											canWrite={migrationImporterCapabilities.canWrite}
+											appOrigin={appOrigin}
+											isOverridden={field => isMigrationImporterFieldOverridden('microsoftTodo', field)}
+											onUsePwaCallback={() => fillPwaMigrationRedirectUrl('microsoftTodo', 'microsoft-todo')}
+											onUpdateField={(field, value) => updateMigrationImporterField('microsoftTodo', field, value)}
+										/>
+									</div>
+									<div className="detail-item detail-item-full detail-field">
+										<div className="settings-action-row">
+											{migrationImporterCapabilities.canWrite ? (
+												<button
+													className="composer-submit"
+													data-action="save-migration-importer-config"
+													type="submit"
+													disabled={migrationImporterConfigSubmitting || migrationImporterConfigRestarting || !migrationImporterFormDirty}
+												>
+													{migrationImporterConfigSubmitting ? 'Saving…' : 'Save'}
+												</button>
+											) : null}
+											{migrationImporterCapabilities.canWrite ? (
+												<button
+													className="pill-button subtle"
+													data-action="apply-migration-importer-config"
+													type="button"
+													disabled={migrationImporterConfigSubmitting || migrationImporterConfigRestarting || !migrationImporterCapabilities.canApply || migrationImporterFormDirty}
+													onClick={() => {
+														void handleApplyMigrationImporterConfig()
+													}}
+												>
+													{migrationImporterConfigRestarting ? 'Restarting Vikunja…' : 'Apply & Restart'}
+												</button>
+											) : null}
+										</div>
+										{migrationImporterApplyBlockedMessage ? (
+											<div className="detail-helper-text">{migrationImporterApplyBlockedMessage}</div>
+										) : null}
+									</div>
+								</form>
+							) : null}
+						</div>
 					</>
 				) : null}
 			</SettingsSection>
@@ -854,7 +1144,7 @@ export default function SettingsAdminSection({
 			>
 				<div className="sheet-head">
 					<div>
-						<div className="panel-label">User Administration</div>
+						<div className="panel-label">Administration</div>
 						<div className="panel-title">{userDialogMode === 'create' ? 'Create User' : 'Edit User'}</div>
 					</div>
 				</div>
@@ -937,7 +1227,7 @@ export default function SettingsAdminSection({
 					<>
 						<div className="sheet-head">
 							<div>
-								<div className="panel-label">User Administration</div>
+								<div className="panel-label">Administration</div>
 								<div className="panel-title">{selectedAdminUser.username}</div>
 							</div>
 						</div>
@@ -1013,8 +1303,145 @@ export default function SettingsAdminSection({
 	)
 }
 
+function MigrationImporterProviderCard({
+	providerKey,
+	serviceId,
+	label,
+	form,
+	secretConfigured = false,
+	submitting,
+	restarting,
+	canWrite,
+	appOrigin,
+	isOverridden,
+	onUsePwaCallback,
+	onUpdateField,
+}: {
+	providerKey: string
+	serviceId: string
+	label: string
+	form: MigrationImporterConfigInput['todoist'] | MigrationImporterConfigInput['trello'] | MigrationImporterConfigInput['microsoftTodo']
+	secretConfigured?: boolean
+	submitting: boolean
+	restarting: boolean
+	canWrite: boolean
+	appOrigin: string
+	isOverridden: (field: MigrationImporterField) => boolean
+	onUsePwaCallback: () => void
+	onUpdateField: (field: MigrationImporterField, value: string | boolean) => void
+}) {
+	const recommendedRedirectUrl = `${appOrigin || ''}`.trim()
+		? `${appOrigin}/migrate/${serviceId}`
+		: `/migrate/${serviceId}`
+
+	return (
+		<div className="detail-core-card settings-provider-card" data-migration-importer-provider={providerKey}>
+			<div className="settings-subsection-header">
+				<div>
+					<div className="detail-label">{label}</div>
+					<div className="detail-meta">OAuth importer</div>
+				</div>
+				{appOrigin ? (
+					<button
+						className="pill-button subtle"
+						type="button"
+						disabled={!canWrite}
+						onClick={onUsePwaCallback}
+					>
+						Use PWA callback
+					</button>
+				) : null}
+			</div>
+			<div className="settings-provider-fields">
+				<label className="settings-checkbox-row">
+					<input
+						data-migration-importer-field={`${providerKey}-enabled`}
+						type="checkbox"
+						checked={Boolean(form.enabled)}
+						disabled={submitting || restarting || !canWrite || isOverridden('enabled')}
+						onChange={event => onUpdateField('enabled', event.currentTarget.checked)}
+					/>
+					<span>Enable {label} imports in Vikunja.</span>
+				</label>
+				{isOverridden('enabled') ? (
+					<div className="detail-helper-text">Overridden by environment variable.</div>
+				) : null}
+				{'clientId' in form ? (
+					<label className="detail-field">
+						<div className="detail-label">Client ID</div>
+						<input
+							className="detail-input"
+							data-migration-importer-field={`${providerKey}-client-id`}
+							type="text"
+							value={form.clientId}
+							disabled={submitting || restarting || !canWrite || isOverridden('clientId')}
+							onChange={event => onUpdateField('clientId', event.currentTarget.value)}
+						/>
+						{isOverridden('clientId') ? (
+							<div className="detail-helper-text">Overridden by environment variable.</div>
+						) : null}
+					</label>
+				) : null}
+				{'key' in form ? (
+					<label className="detail-field">
+						<div className="detail-label">API key</div>
+						<input
+							className="detail-input"
+							data-migration-importer-field={`${providerKey}-key`}
+							type="text"
+							value={form.key}
+							disabled={submitting || restarting || !canWrite || isOverridden('key')}
+							onChange={event => onUpdateField('key', event.currentTarget.value)}
+						/>
+						{isOverridden('key') ? (
+							<div className="detail-helper-text">Overridden by environment variable.</div>
+						) : null}
+					</label>
+				) : null}
+				{'clientSecret' in form ? (
+					<label className="detail-field">
+						<div className="detail-label">Client secret</div>
+						<input
+							className="detail-input"
+							data-migration-importer-field={`${providerKey}-client-secret`}
+							type="password"
+							value={form.clientSecret}
+							disabled={submitting || restarting || !canWrite || isOverridden('clientSecret')}
+							placeholder={secretConfigured ? 'Configured already. Leave blank to keep it.' : 'Paste the provider client secret.'}
+							onChange={event => onUpdateField('clientSecret', event.currentTarget.value)}
+						/>
+						{isOverridden('clientSecret') ? (
+							<div className="detail-helper-text">Overridden by environment variable.</div>
+						) : null}
+					</label>
+				) : null}
+				<label className="detail-field">
+					<div className="detail-label">Redirect URL</div>
+					<input
+						className="detail-input"
+						data-migration-importer-field={`${providerKey}-redirect-url`}
+						type="url"
+						value={form.redirectUrl}
+						disabled={submitting || restarting || !canWrite || isOverridden('redirectUrl')}
+						onChange={event => onUpdateField('redirectUrl', event.currentTarget.value)}
+					/>
+					<div className="detail-helper-text">
+						Recommended: <code>{recommendedRedirectUrl}</code>
+					</div>
+					<div className="detail-helper-text">
+						The external {label} developer app must use this exact same OAuth redirect URL, otherwise the browser will return to the old frontend or the provider will reject the auth flow.
+					</div>
+					{isOverridden('redirectUrl') ? (
+						<div className="detail-helper-text">Overridden by environment variable.</div>
+					) : null}
+				</label>
+			</div>
+		</div>
+	)
+}
+
 function getMailerCapabilityMessage(
-	reasonCode: MailerCapabilityReasonCode | null,
+	reasonCode: AdminConfigCapabilityReasonCode | null,
 	context: 'inspect' | 'write' | 'apply',
 ) {
 	switch (reasonCode) {
@@ -1028,6 +1455,26 @@ function getMailerCapabilityMessage(
 			return 'SMTP settings are unavailable because the configured admin-config source is incomplete.'
 		case 'not_authorized':
 			return 'This account is not allowed to manage SMTP settings.'
+		default:
+			return ''
+	}
+}
+
+function getMigrationImporterCapabilityMessage(
+	reasonCode: AdminConfigCapabilityReasonCode | null,
+	context: 'inspect' | 'write' | 'apply',
+) {
+	switch (reasonCode) {
+		case 'no_bridge':
+			return context === 'apply'
+				? 'Apply & Restart requires the Vikunja admin bridge to be configured and reachable.'
+				: 'Migration importer inspection requires the Vikunja admin bridge to be configured and reachable.'
+		case 'no_config_path':
+			return 'Migration importer settings are read-only because no writable deployment config source is configured on the server.'
+		case 'unsupported_source_mode':
+			return 'Migration importer settings are unavailable because the configured admin-config source is incomplete.'
+		case 'not_authorized':
+			return 'This account is not allowed to manage migration importer settings.'
 		default:
 			return ''
 	}

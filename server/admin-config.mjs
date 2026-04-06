@@ -15,6 +15,28 @@ const MAILER_ENV_FIELD_MAP = {
 	VIKUNJA_MAILER_FORCESSL: 'forceSsl',
 }
 
+const MIGRATION_IMPORTER_ENV_FIELD_MAP = {
+	todoist: {
+		VIKUNJA_MIGRATION_TODOIST_ENABLE: 'enabled',
+		VIKUNJA_MIGRATION_TODOIST_CLIENTID: 'clientId',
+		VIKUNJA_MIGRATION_TODOIST_CLIENTSECRET: 'clientSecret',
+		VIKUNJA_MIGRATION_TODOIST_REDIRECTURL: 'redirectUrl',
+	},
+	trello: {
+		VIKUNJA_MIGRATION_TRELLO_ENABLE: 'enabled',
+		VIKUNJA_MIGRATION_TRELLO_KEY: 'key',
+		VIKUNJA_MIGRATION_TRELLO_REDIRECTURL: 'redirectUrl',
+	},
+	microsoftTodo: {
+		VIKUNJA_MIGRATION_MICROSOFTTODO_ENABLE: 'enabled',
+		VIKUNJA_MIGRATION_MICROSOFTTODO_CLIENTID: 'clientId',
+		VIKUNJA_MIGRATION_MICROSOFTTODO_CLIENTSECRET: 'clientSecret',
+		VIKUNJA_MIGRATION_MICROSOFTTODO_REDIRECTURL: 'redirectUrl',
+	},
+}
+
+const MIGRATION_IMPORTER_PROVIDER_KEYS = ['todoist', 'trello', 'microsoftTodo']
+
 export function createAdminConfig({
 	bridgeMode = '',
 	vikunjaContainerName,
@@ -43,30 +65,19 @@ export function createAdminConfig({
 		sourceMode,
 
 		getMailerCapabilities() {
-			if (sourceMode === 'file-backed' || sourceMode === 'compose-env') {
-				if (!transportConfigured) {
-					return {
-						canInspect: false,
-						canWrite: false,
-						canApply: false,
-						reasonCode: 'unsupported_source_mode',
-					}
-				}
+			return buildAdminConfigCapabilities({
+				sourceMode,
+				transportConfigured,
+				dockerAccessConfigured,
+			})
+		},
 
-				return {
-					canInspect: true,
-					canWrite: true,
-					canApply: dockerAccessConfigured,
-					reasonCode: dockerAccessConfigured ? null : 'no_bridge',
-				}
-			}
-
-			return {
-				canInspect: dockerAccessConfigured,
-				canWrite: false,
-				canApply: false,
-				reasonCode: dockerAccessConfigured ? 'no_config_path' : 'no_bridge',
-			}
+		getMigrationImporterCapabilities() {
+			return buildAdminConfigCapabilities({
+				sourceMode,
+				transportConfigured,
+				dockerAccessConfigured,
+			})
 		},
 
 		async readMailerConfig() {
@@ -91,6 +102,30 @@ export function createAdminConfig({
 
 			const envVars = dockerAccessConfigured ? await readContainerEnvVars() : {}
 			return buildMailerConfig({}, envVars, capabilities)
+		},
+
+		async readMigrationImporterConfig() {
+			const capabilities = this.getMigrationImporterCapabilities()
+
+			if (!capabilities.canInspect) {
+				return buildMigrationImporterConfig({}, {}, capabilities)
+			}
+
+			if (sourceMode === 'file-backed') {
+				const envVars = dockerAccessConfigured ? await readContainerEnvVars() : {}
+				const migration = await readMigrationDocument(hostConfigPath)
+				return buildMigrationImporterConfig(migration, envVars, capabilities)
+			}
+
+			if (sourceMode === 'compose-env') {
+				const composeEnvVars = await readComposeMigrationImporterEnv(composePath)
+				return buildMigrationImporterConfig({}, composeEnvVars, capabilities, {
+					markEnvOverrides: false,
+				})
+			}
+
+			const envVars = dockerAccessConfigured ? await readContainerEnvVars() : {}
+			return buildMigrationImporterConfig({}, envVars, capabilities)
 		},
 
 		async writeMailerConfig(settings) {
@@ -151,6 +186,81 @@ export function createAdminConfig({
 			return await this.readMailerConfig()
 		},
 
+		async writeMigrationImporterConfig(settings) {
+			const capabilities = this.getMigrationImporterCapabilities()
+			assertMigrationImporterCapability(capabilities, 'canWrite')
+
+			if (sourceMode === 'compose-env') {
+				const currentDocument = await readComposeDocument(composePath)
+				const {serviceName, serviceConfig} = resolveComposeService(currentDocument, vikunjaContainerName)
+				const environment = normalizeComposeEnvironment(serviceConfig.environment)
+				const nextEnvironment = {
+					...environment,
+					VIKUNJA_MIGRATION_TODOIST_ENABLE: Boolean(settings.todoist?.enabled) ? 'true' : 'false',
+					VIKUNJA_MIGRATION_TODOIST_CLIENTID: `${settings.todoist?.clientId || ''}`.trim(),
+					VIKUNJA_MIGRATION_TODOIST_REDIRECTURL: `${settings.todoist?.redirectUrl || ''}`.trim(),
+					VIKUNJA_MIGRATION_TRELLO_ENABLE: Boolean(settings.trello?.enabled) ? 'true' : 'false',
+					VIKUNJA_MIGRATION_TRELLO_KEY: `${settings.trello?.key || ''}`.trim(),
+					VIKUNJA_MIGRATION_TRELLO_REDIRECTURL: `${settings.trello?.redirectUrl || ''}`.trim(),
+					VIKUNJA_MIGRATION_MICROSOFTTODO_ENABLE: Boolean(settings.microsoftTodo?.enabled) ? 'true' : 'false',
+					VIKUNJA_MIGRATION_MICROSOFTTODO_CLIENTID: `${settings.microsoftTodo?.clientId || ''}`.trim(),
+					VIKUNJA_MIGRATION_MICROSOFTTODO_REDIRECTURL: `${settings.microsoftTodo?.redirectUrl || ''}`.trim(),
+				}
+
+				if (`${settings.todoist?.clientSecret || ''}`.length > 0) {
+					nextEnvironment.VIKUNJA_MIGRATION_TODOIST_CLIENTSECRET = `${settings.todoist.clientSecret}`
+				}
+				if (`${settings.microsoftTodo?.clientSecret || ''}`.length > 0) {
+					nextEnvironment.VIKUNJA_MIGRATION_MICROSOFTTODO_CLIENTSECRET = `${settings.microsoftTodo.clientSecret}`
+				}
+
+				currentDocument.services = {
+					...normalizeServicesDocument(currentDocument.services),
+					[serviceName]: {
+						...serviceConfig,
+						environment: nextEnvironment,
+					},
+				}
+				await writeComposeDocument(composePath, currentDocument)
+				return await this.readMigrationImporterConfig()
+			}
+
+			const currentMigration = await readMigrationDocument(hostConfigPath)
+			const nextMigration = {
+				...normalizeMigrationDocument(currentMigration),
+				todoist: {
+					...normalizeMigrationProviderDocument(currentMigration.todoist),
+					enable: Boolean(settings.todoist?.enabled),
+					clientid: `${settings.todoist?.clientId || ''}`.trim(),
+					redirecturl: `${settings.todoist?.redirectUrl || ''}`.trim(),
+				},
+				trello: {
+					...normalizeMigrationProviderDocument(currentMigration.trello),
+					enable: Boolean(settings.trello?.enabled),
+					key: `${settings.trello?.key || ''}`.trim(),
+					redirecturl: `${settings.trello?.redirectUrl || ''}`.trim(),
+				},
+				microsofttodo: {
+					...normalizeMigrationProviderDocument(currentMigration.microsofttodo),
+					enable: Boolean(settings.microsoftTodo?.enabled),
+					clientid: `${settings.microsoftTodo?.clientId || ''}`.trim(),
+					redirecturl: `${settings.microsoftTodo?.redirectUrl || ''}`.trim(),
+				},
+			}
+
+			if (`${settings.todoist?.clientSecret || ''}`.length > 0) {
+				nextMigration.todoist.clientsecret = `${settings.todoist.clientSecret}`
+			}
+			if (`${settings.microsoftTodo?.clientSecret || ''}`.length > 0) {
+				nextMigration.microsofttodo.clientsecret = `${settings.microsoftTodo.clientSecret}`
+			}
+
+			const currentDocument = await readConfigDocument(hostConfigPath)
+			currentDocument.migration = nextMigration
+			await writeConfigDocument(hostConfigPath, currentDocument)
+			return await this.readMigrationImporterConfig()
+		},
+
 		async restartVikunja() {
 			const capabilities = this.getMailerCapabilities()
 			assertMailerCapability(capabilities, 'canApply')
@@ -209,6 +319,11 @@ export function createAdminConfig({
 		return isRecord(document.mailer) ? document.mailer : {}
 	}
 
+	async function readMigrationDocument(filePath) {
+		const document = await readConfigDocument(filePath)
+		return isRecord(document.migration) ? document.migration : {}
+	}
+
 	async function readComposeDocument(filePath) {
 		const composeYaml = await readSourceFile(filePath, {
 			allowMissing: false,
@@ -228,7 +343,16 @@ export function createAdminConfig({
 	async function readComposeMailerEnv(filePath) {
 		const document = await readComposeDocument(filePath)
 		const {serviceConfig} = resolveComposeService(document, vikunjaContainerName)
-		return extractMailerEnvVars(normalizeComposeEnvironment(serviceConfig.environment))
+		return extractEnvVars(normalizeComposeEnvironment(serviceConfig.environment), Object.keys(MAILER_ENV_FIELD_MAP))
+	}
+
+	async function readComposeMigrationImporterEnv(filePath) {
+		const document = await readComposeDocument(filePath)
+		const {serviceConfig} = resolveComposeService(document, vikunjaContainerName)
+		return extractEnvVars(
+			normalizeComposeEnvironment(serviceConfig.environment),
+			getMigrationImporterEnvKeys(),
+		)
 	}
 
 	async function readSourceFile(filePath, {allowMissing = true, missingMessage = ''} = {}) {
@@ -328,7 +452,7 @@ export function createAdminConfig({
 		}
 
 		return envList.reduce((collected, line) => {
-			const match = `${line || ''}`.match(/^(VIKUNJA_MAILER_[A-Z0-9_]+)=(.*)$/)
+			const match = `${line || ''}`.match(/^(VIKUNJA_[A-Z0-9_]+)=(.*)$/)
 			if (!match) {
 				return collected
 			}
@@ -435,6 +559,124 @@ function buildMailerConfig(mailer, envVars, capabilities, {markEnvOverrides = tr
 	}
 }
 
+function buildMigrationImporterConfig(migration, envVars, capabilities, {markEnvOverrides = true} = {}) {
+	return {
+		todoist: buildMigrationProviderConfig({
+			provider: normalizeMigrationProviderDocument(migration.todoist),
+			envVars,
+			envFieldMap: MIGRATION_IMPORTER_ENV_FIELD_MAP.todoist,
+			yamlFieldMap: {
+				enabled: 'enable',
+				clientId: 'clientid',
+				clientSecret: 'clientsecret',
+				redirectUrl: 'redirecturl',
+			},
+			defaults: {
+				enabled: false,
+				clientId: '',
+				clientSecret: '',
+				redirectUrl: '',
+			},
+			markEnvOverrides,
+		}),
+		trello: buildMigrationProviderConfig({
+			provider: normalizeMigrationProviderDocument(migration.trello),
+			envVars,
+			envFieldMap: MIGRATION_IMPORTER_ENV_FIELD_MAP.trello,
+			yamlFieldMap: {
+				enabled: 'enable',
+				key: 'key',
+				redirectUrl: 'redirecturl',
+			},
+			defaults: {
+				enabled: false,
+				key: '',
+				redirectUrl: '',
+			},
+			markEnvOverrides,
+		}),
+		microsoftTodo: buildMigrationProviderConfig({
+			provider: normalizeMigrationProviderDocument(migration.microsofttodo),
+			envVars,
+			envFieldMap: MIGRATION_IMPORTER_ENV_FIELD_MAP.microsoftTodo,
+			yamlFieldMap: {
+				enabled: 'enable',
+				clientId: 'clientid',
+				clientSecret: 'clientsecret',
+				redirectUrl: 'redirecturl',
+			},
+			defaults: {
+				enabled: false,
+				clientId: '',
+				clientSecret: '',
+				redirectUrl: '',
+			},
+			markEnvOverrides,
+		}),
+		capabilities,
+	}
+}
+
+function buildMigrationProviderConfig({
+	provider,
+	envVars,
+	envFieldMap,
+	yamlFieldMap,
+	defaults,
+	markEnvOverrides,
+}) {
+	const config = {
+		enabled: resolveConfigValue(provider[yamlFieldMap.enabled], envVars, findEnvField(envFieldMap, 'enabled'), defaults.enabled),
+		redirectUrl: resolveConfigValue(provider[yamlFieldMap.redirectUrl], envVars, findEnvField(envFieldMap, 'redirectUrl'), defaults.redirectUrl),
+		envOverrides: markEnvOverrides
+			? Object.entries(envFieldMap)
+				.filter(([envKey]) => Object.prototype.hasOwnProperty.call(envVars, envKey))
+				.map(([, field]) => field)
+			: [],
+	}
+
+	if (Object.prototype.hasOwnProperty.call(defaults, 'clientId')) {
+		config.clientId = resolveConfigValue(provider[yamlFieldMap.clientId], envVars, findEnvField(envFieldMap, 'clientId'), defaults.clientId)
+		config.clientSecretConfigured = Boolean(
+			`${provider[yamlFieldMap.clientSecret] || ''}`.trim() ||
+			`${envVars[findEnvField(envFieldMap, 'clientSecret')] || ''}`.trim(),
+		)
+	}
+
+	if (Object.prototype.hasOwnProperty.call(defaults, 'key')) {
+		config.key = resolveConfigValue(provider[yamlFieldMap.key], envVars, findEnvField(envFieldMap, 'key'), defaults.key)
+	}
+
+	return config
+}
+
+function buildAdminConfigCapabilities({sourceMode, transportConfigured, dockerAccessConfigured}) {
+	if (sourceMode === 'file-backed' || sourceMode === 'compose-env') {
+		if (!transportConfigured) {
+			return {
+				canInspect: false,
+				canWrite: false,
+				canApply: false,
+				reasonCode: 'unsupported_source_mode',
+			}
+		}
+
+		return {
+			canInspect: true,
+			canWrite: true,
+			canApply: dockerAccessConfigured,
+			reasonCode: dockerAccessConfigured ? null : 'no_bridge',
+		}
+	}
+
+	return {
+		canInspect: dockerAccessConfigured,
+		canWrite: false,
+		canApply: false,
+		reasonCode: dockerAccessConfigured ? 'no_config_path' : 'no_bridge',
+	}
+}
+
 function normalizeBridgeMode(value) {
 	const normalized = `${value || ''}`.trim()
 	if (normalized === 'ssh-docker-exec') {
@@ -447,6 +689,14 @@ function normalizeBridgeMode(value) {
 }
 
 function normalizeConfigDocument(value) {
+	return isRecord(value) ? {...value} : {}
+}
+
+function normalizeMigrationDocument(value) {
+	return isRecord(value) ? {...value} : {}
+}
+
+function normalizeMigrationProviderDocument(value) {
 	return isRecord(value) ? {...value} : {}
 }
 
@@ -474,13 +724,21 @@ function normalizeComposeEnvironment(value) {
 	return {}
 }
 
-function extractMailerEnvVars(environment) {
-	return Object.keys(MAILER_ENV_FIELD_MAP).reduce((collected, envKey) => {
+function extractEnvVars(environment, envKeys) {
+	return envKeys.reduce((collected, envKey) => {
 		if (Object.prototype.hasOwnProperty.call(environment, envKey)) {
 			collected[envKey] = `${environment[envKey] ?? ''}`
 		}
 		return collected
 	}, {})
+}
+
+function getMigrationImporterEnvKeys() {
+	return MIGRATION_IMPORTER_PROVIDER_KEYS.flatMap(providerKey => Object.keys(MIGRATION_IMPORTER_ENV_FIELD_MAP[providerKey]))
+}
+
+function findEnvField(envFieldMap, fieldName) {
+	return Object.keys(envFieldMap).find(envKey => envFieldMap[envKey] === fieldName) || ''
 }
 
 function resolveComposeService(document, targetContainerNameInput = '') {
@@ -566,6 +824,20 @@ function assertMailerCapability(capabilities, key) {
 	throw error
 }
 
+function assertMigrationImporterCapability(capabilities, key) {
+	if (capabilities?.[key]) {
+		return
+	}
+
+	const reasonCode = `${capabilities?.reasonCode || ''}`.trim()
+	const error = new Error(resolveMigrationImporterCapabilityMessage(key, reasonCode))
+	error.statusCode = reasonCode === 'no_bridge' ? 503 : 409
+	error.details = {
+		reasonCode: reasonCode || null,
+	}
+	throw error
+}
+
 function resolveMailerCapabilityMessage(key, reasonCode) {
 	if (reasonCode === 'no_bridge') {
 		return key === 'canApply'
@@ -579,6 +851,21 @@ function resolveMailerCapabilityMessage(key, reasonCode) {
 		return 'SMTP settings are unavailable because the configured admin-config source is incomplete.'
 	}
 	return 'SMTP configuration is not available for this deployment.'
+}
+
+function resolveMigrationImporterCapabilityMessage(key, reasonCode) {
+	if (reasonCode === 'no_bridge') {
+		return key === 'canApply'
+			? 'Migration importer changes cannot be applied until the Vikunja admin bridge is configured correctly.'
+			: 'Migration importer settings are unavailable until the Vikunja admin bridge is configured correctly.'
+	}
+	if (reasonCode === 'no_config_path') {
+		return 'Migration importer settings are read-only because no writable deployment config source is configured.'
+	}
+	if (reasonCode === 'unsupported_source_mode') {
+		return 'Migration importer settings are unavailable because the configured admin-config source is incomplete.'
+	}
+	return 'Migration importer settings are not available for this deployment.'
 }
 
 function parseJsonArray(value) {

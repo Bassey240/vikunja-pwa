@@ -1,4 +1,6 @@
 import {formatShortWeekdayLabel, normalizeRepeatAfter} from '@/utils/formatting'
+import {pickLabelTextColor} from '@/utils/color-helpers'
+import {addDays} from '@/utils/date-helpers'
 
 export type TaskDateField = 'due_date' | 'start_date' | 'end_date'
 export type TaskDetailSection =
@@ -34,19 +36,8 @@ export const REPEAT_PRESETS = [
 	{label: 'Monthly', value: 1, unit: 'months'},
 ] as const satisfies ReadonlyArray<{label: string; value: number; unit: RepeatUnit}>
 
-export function pickLabelTextColor(hex: string) {
-	const normalized = hex.replace('#', '')
-	if (normalized.length !== 6) {
-		return '#170f0d'
-	}
-
-	const red = parseInt(normalized.slice(0, 2), 16)
-	const green = parseInt(normalized.slice(2, 4), 16)
-	const blue = parseInt(normalized.slice(4, 6), 16)
-	const brightness = (red * 299 + green * 587 + blue * 114) / 1000
-
-	return brightness > 170 ? '#170f0d' : '#fff7f1'
-}
+export {pickLabelTextColor}
+export {addDays}
 
 export function buildQuickReminderOptions(referenceDate: Date) {
 	return QUICK_REMINDER_OPTIONS.map(option => {
@@ -80,12 +71,6 @@ function resolveQuickReminderDate(
 export function atLocalNoon(value: Date) {
 	const next = new Date(value)
 	next.setHours(12, 0, 0, 0)
-	return next
-}
-
-export function addDays(value: Date, days: number) {
-	const next = new Date(value)
-	next.setDate(next.getDate() + days)
 	return next
 }
 

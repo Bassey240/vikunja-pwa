@@ -16,7 +16,10 @@ export default function SavedFilterCard({filter, active, onOpen}: SavedFilterCar
 			onClick={onOpen}
 		>
 			<div className="saved-filter-card-head">
-				<div className="saved-filter-card-title">{filter.title}</div>
+				<div className="saved-filter-card-title-row">
+					<div className="saved-filter-card-title">{filter.title}</div>
+					<span className="meta-chip filter-project-chip">Filter</span>
+				</div>
 				{filter.isFavorite ? <span className="meta-chip">Fav</span> : null}
 			</div>
 			<div className="saved-filter-card-meta">{filter.description || 'Cross-project saved filter'}</div>

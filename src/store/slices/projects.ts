@@ -1,4 +1,4 @@
-import {api} from '@/api'
+import {api, uploadApi} from '@/api'
 import {
 	defaultProjectFilters,
 	normalizeProjectFilters,
@@ -7,10 +7,12 @@ import {
 	type ProjectFilters,
 } from '@/hooks/useFilters'
 import {storageKeys} from '@/storageKeys'
-import type {MenuAnchor, Project, SavedFilter, Task} from '@/types'
+import type {BackgroundImage, MenuAnchor, Project, SavedFilter, Task} from '@/types'
+import {getBlobFromBlurHash} from '@/utils/blurhash'
 import {markProjectDropTrace} from '@/utils/dragPerf'
 import {formatError} from '@/utils/formatting'
-import {loadNumber, saveNumber} from '@/utils/storage'
+import {getProjectBackgroundBlurHash, getProjectBackgroundInformation, projectHasBackground} from '@/utils/project-background'
+import {loadJson, loadNumber, saveJson, saveNumber} from '@/utils/storage'
 import type {StateCreator} from 'zustand'
 import type {AppStore} from '../index'
 import {enqueueMutation, getNextTempId} from '../offline-queue'
@@ -53,6 +55,11 @@ export interface ProjectsSlice {
 	projectPreviewTasksById: Record<number, Task[]>
 	expandedProjectIds: Set<number>
 	loadingProjectPreviewIds: Set<number>
+	projectBackgroundUrls: Record<number, string | null>
+	projectBackgroundPreviewUrls: Record<number, string | null>
+	uploadingProjectBackground: Record<number, boolean>
+	unsplashSearchResults: BackgroundImage[]
+	unsplashSearchLoading: boolean
 	loadProjects: (options?: {silent?: boolean}) => Promise<void>
 	findDefaultProjectId: () => number | null
 	getDefaultComposeProjectId: () => number | null
@@ -83,10 +90,21 @@ export interface ProjectsSlice {
 		parentProjectId: number,
 		options?: {position?: number | null; traceToken?: string | null},
 	) => Promise<boolean>
+	moveSavedFilterProject: (
+		projectId: number,
+		parentProjectId: number,
+		options?: {position?: number | null; traceToken?: string | null},
+	) => Promise<boolean>
 	duplicateProject: (projectId: number) => Promise<void>
 	deleteProject: (projectId: number) => Promise<boolean>
 	saveProjectDetailPatch: (patch: Partial<Project>) => Promise<boolean>
 	editProject: (projectId: number) => Promise<void>
+	loadProjectBackground: (projectId: number) => Promise<string | null>
+	uploadProjectBackground: (projectId: number, file: File) => Promise<boolean>
+	setUnsplashProjectBackground: (projectId: number, image: BackgroundImage) => Promise<boolean>
+	removeProjectBackground: (projectId: number) => Promise<boolean>
+	searchUnsplashBackgrounds: (query: string) => Promise<BackgroundImage[]>
+	clearProjectBackgroundUrls: () => void
 	resetProjectsState: () => void
 }
 
@@ -131,6 +149,11 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 	projectPreviewTasksById: {},
 	expandedProjectIds: new Set(),
 	loadingProjectPreviewIds: new Set(),
+	projectBackgroundUrls: {},
+	projectBackgroundPreviewUrls: {},
+	uploadingProjectBackground: {},
+	unsplashSearchResults: [],
+	unsplashSearchLoading: false,
 
 	async loadProjects({silent = false} = {}) {
 		if (!get().isOnline && get().offlineReadOnlyMode) {
@@ -146,14 +169,19 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 					api<Project[]>('/api/projects'),
 					api<{filters: SavedFilter[]}>('/api/filters'),
 				])
-				const activeProjects = projects.filter(project => !project.is_archived && project.id > 0)
-				const savedFilters = dedupeSavedFilters(
+				const activeProjects = projects
+					.map(normalizeProjectRecord)
+					.filter(project => !project.is_archived && project.id > 0)
+				const savedFilters = assignSavedFilterProjectPositions(
+					dedupeSavedFilters(
 					filtersResponse.filters
 						.map(filter => ({
 							...filter,
 							projectId: filter.projectId < 0 ? filter.projectId : getSavedFilterProjectId(filter.id),
 						}))
 						.filter(filter => filter.projectId < 0),
+					),
+					activeProjects,
 				)
 
 			const availableProjectIds = new Set(activeProjects.map(project => project.id))
@@ -192,6 +220,14 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 				selectedProjectId,
 				inboxProjectId,
 			})
+			void Promise.allSettled(
+				activeProjects
+					.filter(project => projectHasBackground(project))
+					.map(async project => {
+						await ensureProjectBackgroundPreview(set, get, project)
+						return get().loadProjectBackground(project.id)
+					}),
+			)
 		} catch (error) {
 			set({error: formatError(error as Error)})
 		} finally {
@@ -326,8 +362,13 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 
 		try {
 			const result = await api<{project: Project}>(`/api/projects/${projectId}`)
-			set({projectDetail: result.project})
-			get().setSubscriptionState('project', projectId, result.project.subscription?.subscribed ?? null)
+			const project = normalizeProjectRecord(result.project)
+			set({projectDetail: project})
+			get().setSubscriptionState('project', projectId, project.subscription?.subscribed ?? null)
+			if (projectHasBackground(project)) {
+				void ensureProjectBackgroundPreview(set, get, project)
+				void get().loadProjectBackground(project.id)
+			}
 		} catch (error) {
 			set({error: formatError(error as Error)})
 		} finally {
@@ -455,7 +496,7 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 		if (get().account?.linkShareAuth && !get().projects.some(project => project.id === projectId)) {
 			try {
 				const result = await api<{project: Project}>(`/api/projects/${projectId}`)
-				const sharedProject = result.project
+				const sharedProject = normalizeProjectRecord(result.project)
 				set(state => ({
 					...(() => {
 						const projects = dedupeProjects([sharedProject, ...state.projects]).filter(project => !project.is_archived && project.id > 0)
@@ -704,6 +745,36 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 		}
 	},
 
+	async moveSavedFilterProject(projectId, parentProjectId, options = {}) {
+		if (Number(parentProjectId || 0) !== 0) {
+			return false
+		}
+
+		const nextPosition = Number(options.position)
+		if (!Number.isFinite(nextPosition)) {
+			return false
+		}
+
+		const savedFilter = get().savedFilters.find(entry => entry.projectId === projectId) || null
+		if (!savedFilter) {
+			return false
+		}
+
+		if (Number(savedFilter.position || 0) === nextPosition) {
+			return true
+		}
+
+		set(state => ({
+			openMenu: null,
+			savedFilters: state.savedFilters
+				.map(entry => entry.projectId === projectId ? {...entry, position: nextPosition} : entry)
+				.sort(compareByPositionThenId),
+		}))
+		saveSavedFilterProjectPositions(get().savedFilters)
+		await mergeOfflineSnapshot({savedFilters: get().savedFilters})
+		return true
+	},
+
 	async duplicateProject(projectId) {
 		if (blockOfflineReadOnlyAction(get, set, 'duplicate projects')) {
 			return
@@ -845,10 +916,11 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 					body: queuedBody,
 				},
 			)
-			set({projectDetail: result.project})
+			const project = normalizeProjectRecord(result.project)
+			set({projectDetail: project})
 			await get().loadProjects()
 			await get().refreshCurrentCollections()
-			await get().openProjectDetail(result.project.id)
+			await get().openProjectDetail(project.id)
 			return true
 		} catch (error) {
 			set(state => applyProjectPatchOptimisticUpdate(state, currentProject.id, currentProject))
@@ -862,7 +934,232 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 		await get().openProjectDetail(projectId)
 	},
 
+	async loadProjectBackground(projectId) {
+		const numericProjectId = Number(projectId || 0)
+		if (!numericProjectId || isOfflineReadOnly(get)) {
+			return null
+		}
+
+		try {
+			const response = await fetch(`/api/projects/${numericProjectId}/background`, {
+				credentials: 'same-origin',
+			})
+			if (response.status === 404) {
+				set(state => ({
+					projectBackgroundUrls: {
+						...state.projectBackgroundUrls,
+						[numericProjectId]: null,
+					},
+				}))
+				return null
+			}
+			if (!response.ok) {
+				throw new Error(`Background load failed: ${response.status}`)
+			}
+			const blob = await response.blob()
+			const nextUrl = URL.createObjectURL(blob)
+			set(state => {
+				const previousUrl = state.projectBackgroundUrls[numericProjectId]
+				if (previousUrl) {
+					URL.revokeObjectURL(previousUrl)
+				}
+				return {
+					projectBackgroundUrls: {
+						...state.projectBackgroundUrls,
+						[numericProjectId]: nextUrl,
+					},
+				}
+			})
+			return nextUrl
+		} catch (error) {
+			set({error: formatError(error as Error)})
+			return null
+		}
+	},
+
+	async uploadProjectBackground(projectId, file) {
+		const numericProjectId = Number(projectId || 0)
+		if (!numericProjectId || !file) {
+			return false
+		}
+
+		if (blockOfflineReadOnlyAction(get, set, 'upload project background')) {
+			return false
+		}
+
+		if (!file.type.startsWith('image/')) {
+			set({error: 'Please choose an image file.'})
+			return false
+		}
+
+		if (file.size > 15 * 1024 * 1024) {
+			set({error: 'Background images must be 15 MB or smaller.'})
+			return false
+		}
+
+		set(state => ({
+			uploadingProjectBackground: {
+				...state.uploadingProjectBackground,
+				[numericProjectId]: true,
+			},
+		}))
+
+		try {
+			const formData = new FormData()
+			formData.append('background', file)
+			const result = await uploadApi<{project?: Project}>(`/api/projects/${numericProjectId}/backgrounds/upload`, formData, {
+				method: 'PUT',
+			})
+			const project = result?.project ? normalizeProjectRecord(result.project) : null
+			if (project) {
+				set(state => applyProjectPatchOptimisticUpdate(state, numericProjectId, project))
+				await ensureProjectBackgroundPreview(set, get, project)
+			}
+			await get().loadProjectBackground(numericProjectId)
+			if (!project) {
+				set(state => applyProjectPatchOptimisticUpdate(state, numericProjectId, {has_background: true}))
+			}
+			return true
+		} catch (error) {
+			set({error: formatError(error as Error)})
+			return false
+		} finally {
+			set(state => ({
+				uploadingProjectBackground: {
+					...state.uploadingProjectBackground,
+					[numericProjectId]: false,
+				},
+			}))
+		}
+	},
+
+	async setUnsplashProjectBackground(projectId, image) {
+		const numericProjectId = Number(projectId || 0)
+		if (!numericProjectId || !image?.id) {
+			return false
+		}
+
+		if (blockOfflineReadOnlyAction(get, set, 'set project background')) {
+			return false
+		}
+
+		try {
+			const result = await api<{project?: Project}>(`/api/projects/${numericProjectId}/backgrounds/unsplash`, {
+				method: 'POST',
+				body: image,
+			})
+			const project = result?.project ? normalizeProjectRecord(result.project) : null
+			if (project) {
+				set(state => applyProjectPatchOptimisticUpdate(state, numericProjectId, project))
+				await ensureProjectBackgroundPreview(set, get, project)
+			}
+			await get().loadProjectBackground(numericProjectId)
+			if (!project) {
+				set(state => applyProjectPatchOptimisticUpdate(state, numericProjectId, {has_background: true}))
+			}
+			return true
+		} catch (error) {
+			set({error: formatError(error as Error)})
+			return false
+		}
+	},
+
+	async removeProjectBackground(projectId) {
+		const numericProjectId = Number(projectId || 0)
+		if (!numericProjectId) {
+			return false
+		}
+
+		if (blockOfflineReadOnlyAction(get, set, 'remove project background')) {
+			return false
+		}
+
+		try {
+			await api(`/api/projects/${numericProjectId}/background`, {
+				method: 'DELETE',
+			})
+			set(state => {
+				const previousUrl = state.projectBackgroundUrls[numericProjectId]
+				const previousPreviewUrl = state.projectBackgroundPreviewUrls[numericProjectId]
+				if (previousUrl) {
+					URL.revokeObjectURL(previousUrl)
+				}
+				if (previousPreviewUrl) {
+					URL.revokeObjectURL(previousPreviewUrl)
+				}
+				return {
+					...applyProjectPatchOptimisticUpdate(state, numericProjectId, {
+						has_background: false,
+						background_information: null,
+						backgroundInformation: null,
+						background_blur_hash: null,
+						backgroundBlurHash: null,
+					}),
+					projectBackgroundUrls: {
+						...state.projectBackgroundUrls,
+						[numericProjectId]: null,
+					},
+					projectBackgroundPreviewUrls: {
+						...state.projectBackgroundPreviewUrls,
+						[numericProjectId]: null,
+					},
+				}
+			})
+			return true
+		} catch (error) {
+			set({error: formatError(error as Error)})
+			return false
+		}
+	},
+
+	async searchUnsplashBackgrounds(query) {
+		const trimmedQuery = `${query || ''}`.trim()
+		if (!trimmedQuery) {
+			set({unsplashSearchResults: []})
+			return []
+		}
+
+		set({unsplashSearchLoading: true})
+		try {
+			const payload = await api<{results: BackgroundImage[]}>(`/api/backgrounds/unsplash/search?s=${encodeURIComponent(trimmedQuery)}`)
+			const results = Array.isArray(payload.results) ? payload.results : []
+			set({unsplashSearchResults: results})
+			return results
+		} catch (error) {
+			set({
+				error: formatError(error as Error),
+				unsplashSearchResults: [],
+			})
+			return []
+		} finally {
+			set({unsplashSearchLoading: false})
+		}
+	},
+
+	clearProjectBackgroundUrls() {
+		const projectBackgroundUrls = get().projectBackgroundUrls
+		const projectBackgroundPreviewUrls = get().projectBackgroundPreviewUrls
+		for (const value of Object.values(projectBackgroundUrls)) {
+			if (value) {
+				URL.revokeObjectURL(value)
+			}
+		}
+		for (const value of Object.values(projectBackgroundPreviewUrls)) {
+			if (value) {
+				URL.revokeObjectURL(value)
+			}
+		}
+		set({
+			projectBackgroundUrls: {},
+			projectBackgroundPreviewUrls: {},
+			uploadingProjectBackground: {},
+			unsplashSearchResults: [],
+			unsplashSearchLoading: false,
+		})
+	},
+
 	resetProjectsState() {
+		get().clearProjectBackgroundUrls()
 		saveNumber(storageKeys.selectedProjectId, null)
 		set({
 			projects: [],
@@ -884,6 +1181,11 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 			projectPreviewTasksById: {},
 			expandedProjectIds: new Set(),
 			loadingProjectPreviewIds: new Set(),
+			projectBackgroundUrls: {},
+			projectBackgroundPreviewUrls: {},
+			uploadingProjectBackground: {},
+			unsplashSearchResults: [],
+			unsplashSearchLoading: false,
 		})
 	},
 })
@@ -942,9 +1244,73 @@ function dedupeSavedFilters(filters: SavedFilter[]) {
 	})
 }
 
+function loadSavedFilterProjectPositions() {
+	const raw = loadJson<Record<string, unknown>>(storageKeys.savedFilterProjectPositions, {})
+	return Object.fromEntries(
+		Object.entries(raw).filter(([, value]) => Number.isFinite(Number(value))),
+	) as Record<string, number>
+}
+
+function saveSavedFilterProjectPositions(savedFilters: SavedFilter[]) {
+	const positions = Object.fromEntries(
+		savedFilters
+			.filter(filter => Number.isFinite(Number(filter.position)))
+			.map(filter => [String(filter.projectId), Number(filter.position)]),
+	)
+	saveJson(storageKeys.savedFilterProjectPositions, positions)
+}
+
+function assignSavedFilterProjectPositions(savedFilters: SavedFilter[], projects: Project[]) {
+	const storedPositions = loadSavedFilterProjectPositions()
+	const nextPositions = {...storedPositions}
+	const activeProjectIds = new Set(savedFilters.map(filter => String(filter.projectId)))
+	let changed = false
+	let highestPosition = Math.max(
+		0,
+		...projects
+			.filter(project => Number(project.parent_project_id || 0) === 0)
+			.map(project => Number(project.position || 0))
+			.filter(position => Number.isFinite(position)),
+		...Object.values(nextPositions).filter(position => Number.isFinite(Number(position))).map(position => Number(position)),
+	)
+
+	const positionedFilters = savedFilters
+		.map(filter => {
+			const key = String(filter.projectId)
+			const storedPosition = Number(nextPositions[key])
+			const position = Number.isFinite(storedPosition)
+				? storedPosition
+				: (() => {
+					highestPosition += 100
+					nextPositions[key] = highestPosition
+					changed = true
+					return highestPosition
+				})()
+			highestPosition = Math.max(highestPosition, position)
+			return {...filter, position}
+		})
+		.sort(compareByPositionThenId)
+
+	for (const key of Object.keys(nextPositions)) {
+		if (activeProjectIds.has(key)) {
+			continue
+		}
+		delete nextPositions[key]
+		changed = true
+	}
+
+	if (changed) {
+		saveJson(storageKeys.savedFilterProjectPositions, nextPositions)
+	}
+
+	return positionedFilters
+}
+
 function dedupeProjects(projects: Project[]) {
 	const seen = new Set<number>()
-	return projects.filter(project => {
+	return projects
+		.map(normalizeProjectRecord)
+		.filter(project => {
 		if (!project?.id || seen.has(project.id)) {
 			return false
 		}
@@ -952,6 +1318,79 @@ function dedupeProjects(projects: Project[]) {
 		seen.add(project.id)
 		return true
 	})
+}
+
+async function ensureProjectBackgroundPreview(
+	set: (partial: Partial<AppStore> | ((state: AppStore) => Partial<AppStore>), replace?: false) => void,
+	get: () => AppStore,
+	project: Project | null | undefined,
+) {
+	if (!project || !projectHasBackground(project)) {
+		return null
+	}
+
+	const projectId = Number(project.id || 0)
+	const blurHash = getProjectBackgroundBlurHash(project)
+	if (!projectId || !blurHash) {
+		return null
+	}
+
+	const existingPreviewUrl = get().projectBackgroundPreviewUrls[projectId]
+	if (existingPreviewUrl) {
+		return existingPreviewUrl
+	}
+
+	try {
+		const blob = await getBlobFromBlurHash(blurHash)
+		if (!blob) {
+			return null
+		}
+
+		const nextUrl = URL.createObjectURL(blob)
+		set(state => {
+			const previousUrl = state.projectBackgroundPreviewUrls[projectId]
+			if (previousUrl) {
+				URL.revokeObjectURL(previousUrl)
+			}
+			return {
+				projectBackgroundPreviewUrls: {
+					...state.projectBackgroundPreviewUrls,
+					[projectId]: nextUrl,
+				},
+			}
+		})
+		return nextUrl
+	} catch {
+		return null
+	}
+}
+
+function normalizeProjectRecord(project: Project): Project {
+	const normalizedPermission = normalizeProjectPermission(project.maxPermission ?? project.max_permission)
+	const backgroundInformation = getProjectBackgroundInformation(project)
+	const backgroundBlurHash = getProjectBackgroundBlurHash(project)
+	const hasBackground = projectHasBackground(project)
+	return {
+		...project,
+		has_background: hasBackground,
+		background_information: backgroundInformation,
+		backgroundInformation,
+		background_blur_hash: backgroundBlurHash,
+		backgroundBlurHash: backgroundBlurHash,
+		max_permission: normalizedPermission,
+		maxPermission: normalizedPermission,
+	}
+}
+
+function normalizeProjectPermission(value: unknown) {
+	const permission = Number(value)
+	if (permission === 2) {
+		return 2
+	}
+	if (permission === 1) {
+		return 1
+	}
+	return 0
 }
 
 function cloneProjectSnapshot(project: Project): Project {

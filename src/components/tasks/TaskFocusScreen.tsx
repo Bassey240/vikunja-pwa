@@ -274,7 +274,13 @@ export default function TaskFocusScreen({sourceScreen}: {sourceScreen: Screen}) 
 								{subtasks.length > 0 ? (
 									<div className="task-focus-tree">
 										<div className="project-preview-label">Subtasks</div>
-										<TaskTree taskList={descendantTasks} matcher={visibleTaskMatcher} sortBy={sortBy} bulkMode={bulkMode} />
+										<TaskTree
+											taskList={descendantTasks}
+											matcher={visibleTaskMatcher}
+											sortBy={sortBy}
+											bulkMode={bulkMode}
+											rootParentTaskId={focusedTask.id}
+										/>
 									</div>
 								) : !loadingTasks ? (
 									<div className="empty-state">No subtasks yet. Use the + button to add one.</div>

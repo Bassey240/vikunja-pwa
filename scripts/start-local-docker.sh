@@ -35,7 +35,7 @@ fi
 if [[ -z "$LAN_IP" ]]; then
   echo "Could not detect an active LAN IPv4 address." >&2
   echo "Set APP_LAN_IP manually, for example:" >&2
-  echo "  APP_LAN_IP=192.168.1.223 npm run docker:local" >&2
+  echo "  APP_LAN_IP=<your-lan-ip> npm run docker:local" >&2
   exit 1
 fi
 

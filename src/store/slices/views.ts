@@ -2,10 +2,12 @@ import {api, type ApiError} from '@/api'
 import type {Bucket, ProjectView, Task} from '@/types'
 import {formatError} from '@/utils/formatting'
 import {parseQuickAddMagic} from '@/utils/quickAddMagic'
+import {isMissingRouteError} from '@/utils/type-guards'
 import type {StateCreator} from 'zustand'
 import type {AppStore} from '../index'
 import {persistOfflineBrowseSnapshot} from '../offline-browse-cache'
 import {blockOfflineReadOnlyAction} from '../offline-readonly'
+import {taskFiltersToVikunjaFilter} from '../task-filter-query'
 import {
 	loadPersistedPreferredProjectViewKind,
 	persistPreferredProjectViewKind,
@@ -25,6 +27,11 @@ export interface ViewsSlice {
 	createBucket: (projectId: number, viewId: number, title: string) => Promise<Bucket | null>
 	updateBucket: (projectId: number, viewId: number, bucketId: number, patch: Partial<Bucket>) => Promise<Bucket | null>
 	deleteBucket: (projectId: number, viewId: number, bucketId: number) => Promise<boolean>
+	createProjectView: (
+		projectId: number,
+		params: {title: string; viewKind: string; seedFilterFromDraft?: boolean},
+	) => Promise<ProjectView | null>
+	deleteProjectView: (projectId: number, viewId: number) => Promise<boolean>
 	updateProjectViewConfig: (
 		projectId: number,
 		viewId: number,
@@ -75,6 +82,7 @@ export const createViewsSlice: StateCreator<AppStore, [], [], ViewsSlice> = (set
 					? payload.views
 					: [])
 				.map(normalizeProjectView)
+				.sort((left, right) => Number(left.position || 0) - Number(right.position || 0) || left.id - right.id)
 			set(state => ({
 				projectViewsById: {
 					...state.projectViewsById,
@@ -267,6 +275,118 @@ export const createViewsSlice: StateCreator<AppStore, [], [], ViewsSlice> = (set
 				void get().updateProjectViewConfig(projectId, viewId, patch)
 			}
 			await get().loadProjectBuckets(projectId, viewId, {force: true})
+			return true
+		} catch (error) {
+			set({error: formatError(error as Error)})
+			return false
+		}
+	},
+
+	async createProjectView(projectId, {title, viewKind, seedFilterFromDraft = false}) {
+		const trimmedTitle = `${title || ''}`.trim()
+		if (!projectId || !trimmedTitle) {
+			return null
+		}
+
+		if (trimmedTitle.length > 250) {
+			set({error: 'Title must be 250 characters or fewer.'})
+			return null
+		}
+
+		const allowedKinds = new Set(['list', 'gantt', 'table', 'kanban'])
+		if (!allowedKinds.has(viewKind)) {
+			set({error: 'View kind must be list, kanban, table, or gantt.'})
+			return null
+		}
+
+		if (blockOfflineReadOnlyAction(get, set, 'create project views')) {
+			return null
+		}
+
+		try {
+			const existingViews = get().projectViewsById[projectId] || await get().loadProjectViews(projectId)
+			const nextPosition = existingViews.reduce((max, view) => Math.max(max, Number(view.position || 0)), 0) + 1
+			const filterString = seedFilterFromDraft ? taskFiltersToVikunjaFilter(get().taskFilterDraft) : ''
+			const filterPayload = filterString
+				? {
+					filter: filterString,
+					filter_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+				}
+				: null
+			const payload = await api<ProjectView | {view?: ProjectView}, unknown>(`/api/projects/${projectId}/views`, {
+				method: 'PUT',
+				body: {
+					title: trimmedTitle,
+					view_kind: viewKind,
+					filter: filterPayload,
+					position: nextPosition,
+					bucket_configuration_mode: viewKind === 'kanban' ? 'manual' : 'none',
+					bucket_configuration: [],
+				},
+			})
+			const rawView = 'view' in payload && payload.view ? payload.view : payload
+			const view = normalizeProjectView(rawView)
+			set(state => ({
+				projectViewsById: {
+					...state.projectViewsById,
+					[projectId]: sortProjectViews([...(state.projectViewsById[projectId] || []), view]),
+				},
+			}))
+			persistOfflineBrowseSnapshot(get())
+			await get().selectProjectView(projectId, view.id, 'project')
+			return view
+		} catch (error) {
+			set({error: formatError(error as Error)})
+			return null
+		}
+	},
+
+	async deleteProjectView(projectId, viewId) {
+		if (!projectId || !viewId) {
+			return false
+		}
+
+		if (blockOfflineReadOnlyAction(get, set, 'delete project views')) {
+			return false
+		}
+
+		const existingViews = get().projectViewsById[projectId] || await get().loadProjectViews(projectId)
+		if (existingViews.length <= 1) {
+			set({error: 'A project must have at least one view.'})
+			return false
+		}
+
+		try {
+			await api(`/api/projects/${projectId}/views/${viewId}`, {
+				method: 'DELETE',
+			})
+			const remainingViews = sortProjectViews(existingViews.filter(view => view.id !== viewId))
+			const fallbackViewId = remainingViews[0]?.id || null
+			const isCurrentProjectContext = projectId === Number(get().selectedProjectId || 0) && get().currentProjectViewId === viewId
+			const isInboxContext = projectId === Number(get().inboxProjectId || 0) && get().currentInboxViewId === viewId
+			const isSavedFilterContext = projectId === Number(get().selectedSavedFilterProjectId || 0) && get().currentSavedFilterViewId === viewId
+			set(state => ({
+				projectViewsById: {
+					...state.projectViewsById,
+					[projectId]: remainingViews,
+				},
+				projectBucketsByViewId: Object.fromEntries(
+					Object.entries(state.projectBucketsByViewId).filter(([key]) => Number(key) !== viewId),
+				),
+				currentProjectViewId: isCurrentProjectContext ? fallbackViewId : state.currentProjectViewId,
+				currentInboxViewId: isInboxContext ? fallbackViewId : state.currentInboxViewId,
+				currentSavedFilterViewId: isSavedFilterContext ? fallbackViewId : state.currentSavedFilterViewId,
+			}))
+			persistOfflineBrowseSnapshot(get())
+			if (fallbackViewId && isCurrentProjectContext) {
+				await get().selectProjectView(projectId, fallbackViewId, 'project', {persistPreference: false})
+			}
+			if (fallbackViewId && isInboxContext) {
+				await get().selectProjectView(projectId, fallbackViewId, 'inbox', {persistPreference: false})
+			}
+			if (fallbackViewId && isSavedFilterContext) {
+				await get().selectProjectView(projectId, fallbackViewId, 'savedFilter', {persistPreference: false})
+			}
 			return true
 		} catch (error) {
 			set({error: formatError(error as Error)})
@@ -506,6 +626,7 @@ function normalizeBuckets(bucketList: Bucket[]) {
 function normalizeProjectView(view: ProjectView) {
 	return {
 		...view,
+		position: Number(view.position || 0) || 0,
 		defaultBucketId: Number(view.defaultBucketId ?? view.default_bucket_id ?? 0) || 0,
 		doneBucketId: Number(view.doneBucketId ?? view.done_bucket_id ?? 0) || 0,
 		default_bucket_id: Number(view.default_bucket_id ?? view.defaultBucketId ?? 0) || 0,
@@ -513,15 +634,12 @@ function normalizeProjectView(view: ProjectView) {
 	}
 }
 
-function isMissingRouteError(error: unknown) {
-	const apiError = error as ApiError | null | undefined
-	if (apiError?.statusCode === 404) {
-		return true
-	}
-
-	const message = formatError(apiError).toLowerCase()
-	return message.includes('route not found') || message.includes('not found')
+function sortProjectViews(viewList: ProjectView[]) {
+	return viewList
+		.slice()
+		.sort((left, right) => Number(left.position || 0) - Number(right.position || 0) || left.id - right.id)
 }
+
 
 async function loadTasksForProjectView(
 	projectId: number,

@@ -5,6 +5,7 @@ import type {
 	AccountForm,
 	AuthServerInfo,
 	AuthMode,
+	OidcProvider,
 	ServerConfig,
 	Session,
 	UserProfile,
@@ -331,6 +332,34 @@ function isTotpLoginChallenge(error: ApiError | null | undefined) {
 	return message.includes('totp') || detailsMessage.includes('totp')
 }
 
+function getOidcProviders(info: VikunjaInfo | null) {
+	return info?.auth?.openid?.providers || info?.auth?.openid_connect?.providers || []
+}
+
+async function completeInteractiveSessionBootstrap(
+	get: () => AppStore,
+	set: Parameters<StateCreator<AppStore, [], [], AuthSlice>>[0],
+) {
+	await get().loadAccountStatus()
+	if (!get().connected) {
+		set({oidcPending: false})
+		return false
+	}
+
+	await get().loadCurrentUser()
+	void get().loadVikunjaInfo()
+	if (!get().account?.linkShareAuth) {
+		await get().loadProjects()
+		void get().ensureProjectFilterTasksLoaded()
+		void get().loadNotifications({silent: true})
+	}
+	if (get().account?.sessionsSupported && !get().account?.linkShareAuth) {
+		void get().loadAccountSessions()
+	}
+	set({offlineReadOnlyMode: false, oidcPending: false})
+	return true
+}
+
 export interface AuthSlice {
 	initialized: boolean
 	initializing: boolean
@@ -370,6 +399,7 @@ export interface AuthSlice {
 	totpLoginRequired: boolean
 	authServerInfo: AuthServerInfo | null
 	authServerInfoLoading: boolean
+	oidcPending: boolean
 	vikunjaInfo: VikunjaInfo | null
 	vikunjaInfoLoading: boolean
 	registrationForm: RegistrationForm
@@ -413,6 +443,8 @@ export interface AuthSlice {
 	loadAuthServerInfo: (baseUrl: string) => Promise<void>
 	loadVikunjaInfo: () => Promise<void>
 	probeInstanceInfo: (baseUrl: string) => Promise<VikunjaInfo | null>
+	getOidcAuthUrl: (providerKey: string, baseUrl: string, redirectUri: string) => Promise<string | null>
+	loginWithOidc: (code: string, state: string) => Promise<boolean>
 	setRegistrationField: <K extends keyof RegistrationForm>(field: K, value: RegistrationForm[K]) => void
 	register: () => Promise<boolean>
 	setForgotPasswordEmail: (email: string) => void
@@ -461,6 +493,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 	totpLoginRequired: false,
 	authServerInfo: null,
 	authServerInfoLoading: false,
+	oidcPending: false,
 	vikunjaInfo: null,
 	vikunjaInfoLoading: false,
 	registrationForm: buildRegistrationForm(),
@@ -591,10 +624,13 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 			void clearOfflineSnapshot()
 		}
 		get().clearPendingMutation()
+		get().clearProjectBackgroundUrls()
 		get().resetUsersState()
 		get().resetTeamsState()
 		get().resetProjectSharingState()
 		get().resetSecurityState()
+		get().resetWebhooksState()
+		get().resetMigrationState()
 		get().resetSubscriptionsState()
 		set(state => ({
 			connected: false,
@@ -710,6 +746,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 			bulkSelectedTaskIds: new Set(),
 			pendingUndoMutation: null,
 			totpLoginRequired: false,
+			oidcPending: false,
 			accountForm: {
 				...state.accountForm,
 				password: '',
@@ -1330,6 +1367,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 
 			set(state => ({
 				totpLoginRequired: false,
+				oidcPending: false,
 				accountForm: {
 					...state.accountForm,
 					password: '',
@@ -1338,24 +1376,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 				},
 			}))
 			persistAccountForm(get().accountForm)
-
-			await get().loadAccountStatus()
-			if (!get().connected) {
-				return false
-			}
-
-			await get().loadCurrentUser()
-			void get().loadVikunjaInfo()
-			if (!get().account?.linkShareAuth) {
-				await get().loadProjects()
-				void get().ensureProjectFilterTasksLoaded()
-				void get().loadNotifications({silent: true})
-			}
-			if (get().account?.sessionsSupported && !get().account?.linkShareAuth) {
-				void get().loadAccountSessions()
-			}
-			set({offlineReadOnlyMode: false})
-			return true
+			return await completeInteractiveSessionBootstrap(get, set)
 		} catch (error) {
 			const authError = error as ApiError
 			if (accountForm.authMode === 'password' && isTotpLoginChallenge(authError)) {
@@ -1424,6 +1445,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 	cancelTotpLoginChallenge() {
 		set(state => ({
 			totpLoginRequired: false,
+			oidcPending: false,
 			error: null,
 			accountForm: {
 				...state.accountForm,
@@ -1498,6 +1520,81 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 		}
 	},
 
+	async getOidcAuthUrl(providerKey, baseUrl, redirectUri) {
+		const nextProviderKey = `${providerKey || ''}`.trim()
+		const nextBaseUrl = `${baseUrl || ''}`.trim()
+		const nextRedirectUri = `${redirectUri || ''}`.trim()
+		if (!nextProviderKey || !nextBaseUrl || !nextRedirectUri) {
+			set({error: 'Server URL, provider, and redirect URI are required for single sign-on.'})
+			return null
+		}
+		if (!get().isOnline) {
+			set({error: 'Single sign-on requires a live connection.'})
+			return null
+		}
+
+		const currentProviders = getOidcProviders(await get().probeInstanceInfo(nextBaseUrl))
+		const hasProvider = currentProviders.some((provider: OidcProvider) => `${provider.key || ''}`.trim() === nextProviderKey)
+		if (!hasProvider) {
+			set({error: 'The selected OIDC provider is no longer available for this server.'})
+			return null
+		}
+
+		set({oidcPending: true, settingsSubmitting: true, error: null, settingsNotice: null})
+		try {
+			const result = await api<{authUrl?: string}>(
+				`/api/session/openid/${encodeURIComponent(nextProviderKey)}/auth-url?baseUrl=${encodeURIComponent(nextBaseUrl)}&redirectUri=${encodeURIComponent(nextRedirectUri)}`,
+			)
+			return `${result.authUrl || ''}`.trim() || null
+		} catch (error) {
+			set({error: formatError(error as Error), oidcPending: false})
+			return null
+		} finally {
+			set({settingsSubmitting: false})
+		}
+	},
+
+	async loginWithOidc(code, stateToken) {
+		const nextCode = `${code || ''}`.trim()
+		const nextStateToken = `${stateToken || ''}`.trim()
+		if (!nextCode || !nextStateToken) {
+			set({error: 'Single sign-on requires both a code and state value.'})
+			return false
+		}
+		if (!get().isOnline) {
+			set({error: 'Single sign-on requires a live connection.'})
+			return false
+		}
+
+		set({oidcPending: true, settingsSubmitting: true, error: null, settingsNotice: null})
+		try {
+			await api<SessionPayload, {code: string; state: string}>('/api/session/openid/callback', {
+				method: 'POST',
+				body: {
+					code: nextCode,
+					state: nextStateToken,
+				},
+			})
+
+			set(state => ({
+				totpLoginRequired: false,
+				accountForm: {
+					...state.accountForm,
+					password: '',
+					totpPasscode: '',
+					apiToken: '',
+				},
+			}))
+			persistAccountForm(get().accountForm)
+			return await completeInteractiveSessionBootstrap(get, set)
+		} catch (error) {
+			set({error: formatError(error as Error), oidcPending: false})
+			return false
+		} finally {
+			set({settingsSubmitting: false})
+		}
+	},
+
 	setRegistrationField(field, value) {
 		set(state => ({
 			registrationForm: {
@@ -1554,24 +1651,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 				forgotPasswordForm: defaultForgotPasswordForm,
 				forgotPasswordSent: false,
 			})
-
-			await get().loadAccountStatus()
-			if (!get().connected) {
-				return false
-			}
-
-			await get().loadCurrentUser()
-			void get().loadVikunjaInfo()
-			if (!get().account?.linkShareAuth) {
-				await get().loadProjects()
-				void get().ensureProjectFilterTasksLoaded()
-				void get().loadNotifications({silent: true})
-			}
-			if (get().account?.sessionsSupported && !get().account?.linkShareAuth) {
-				void get().loadAccountSessions()
-			}
-			set({offlineReadOnlyMode: false})
-			return true
+			return await completeInteractiveSessionBootstrap(get, set)
 		} catch (error) {
 			set({registrationError: formatError(error as Error)})
 			return false

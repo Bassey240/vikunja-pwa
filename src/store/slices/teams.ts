@@ -1,6 +1,7 @@
 import {api} from '@/api'
 import type {Team} from '@/types'
 import {formatError} from '@/utils/formatting'
+import {canManageTeam, canManageTeamMember} from '@/utils/settings-helpers'
 import type {StateCreator} from 'zustand'
 import type {AppStore} from '../index'
 
@@ -131,6 +132,9 @@ export const createTeamsSlice: StateCreator<AppStore, [], [], TeamsSlice> = (set
 		if (!get().connected || !teamId) {
 			return false
 		}
+		if (!ensureCanManageTeam(get, set, teamId)) {
+			return false
+		}
 
 		const name = `${payload.name || ''}`.trim()
 		if (!name) {
@@ -164,6 +168,9 @@ export const createTeamsSlice: StateCreator<AppStore, [], [], TeamsSlice> = (set
 		if (!get().connected || !teamId) {
 			return false
 		}
+		if (!ensureCanManageTeam(get, set, teamId)) {
+			return false
+		}
 
 		if (!window.confirm('Delete this team?')) {
 			return false
@@ -188,6 +195,9 @@ export const createTeamsSlice: StateCreator<AppStore, [], [], TeamsSlice> = (set
 
 	async addTeamMember(teamId, username) {
 		if (!get().connected || !teamId) {
+			return false
+		}
+		if (!ensureCanManageTeam(get, set, teamId)) {
 			return false
 		}
 
@@ -224,6 +234,9 @@ export const createTeamsSlice: StateCreator<AppStore, [], [], TeamsSlice> = (set
 		if (!nextUsername) {
 			return false
 		}
+		if (!ensureCanManageTeamMember(get, set, teamId, nextUsername)) {
+			return false
+		}
 
 		if (!window.confirm(`Remove "${nextUsername}" from this team?`)) {
 			return false
@@ -248,6 +261,9 @@ export const createTeamsSlice: StateCreator<AppStore, [], [], TeamsSlice> = (set
 
 	async toggleTeamMemberAdmin(teamId, username) {
 		if (!get().connected || !teamId) {
+			return false
+		}
+		if (!ensureCanManageTeam(get, set, teamId)) {
 			return false
 		}
 
@@ -282,3 +298,36 @@ export const createTeamsSlice: StateCreator<AppStore, [], [], TeamsSlice> = (set
 		})
 	},
 })
+
+function ensureCanManageTeam(
+	get: () => AppStore,
+	set: (partial: Partial<AppStore>) => void,
+	teamId: number,
+) {
+	const state = get()
+	const team = state.teams.find(entry => entry.id === teamId) || null
+	const currentUsername = `${state.account?.user?.username || ''}`.trim()
+	if (team && canManageTeam(team, currentUsername)) {
+		return true
+	}
+
+	set({error: 'Only team admins can manage this team.'})
+	return false
+}
+
+function ensureCanManageTeamMember(
+	get: () => AppStore,
+	set: (partial: Partial<AppStore>) => void,
+	teamId: number,
+	targetUsername: string,
+) {
+	const state = get()
+	const team = state.teams.find(entry => entry.id === teamId) || null
+	const currentUsername = `${state.account?.user?.username || ''}`.trim()
+	if (team && canManageTeamMember(team, currentUsername, targetUsername)) {
+		return true
+	}
+
+	set({error: 'Only team admins can manage other team members.'})
+	return false
+}

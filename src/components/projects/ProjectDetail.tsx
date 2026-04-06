@@ -1,7 +1,18 @@
 import {api} from '@/api'
 import UserAvatar from '@/components/common/UserAvatar'
 import DetailSheet from '@/components/common/DetailSheet'
+import UnsplashBackgroundPicker from '@/components/projects/UnsplashBackgroundPicker'
+import WebhookManager from '@/components/webhooks/WebhookManager'
+import {ACCENT_BLUE} from '@/utils/color-constants'
 import {useAppStore} from '@/store'
+import {
+	canAdminProject,
+	canManageProjectSharePermission,
+	canManageProjectSharing,
+	canWriteProject,
+	getAssignableProjectSharePermissions,
+	getProjectPermission,
+} from '@/store/selectors'
 import type {ProjectLinkShare, SharePermission, TaskAssignee, Team} from '@/types'
 import {
 	formatOptionalLongDate,
@@ -9,6 +20,7 @@ import {
 	getUserDisplayName,
 	normalizeHexColor,
 } from '@/utils/formatting'
+import {projectHasBackground} from '@/utils/project-background'
 import {type ReactNode, useEffect, useState} from 'react'
 
 const SHARE_PERMISSION_OPTIONS: Array<{value: SharePermission; label: string}> = [
@@ -16,6 +28,10 @@ const SHARE_PERMISSION_OPTIONS: Array<{value: SharePermission; label: string}> =
 	{value: 1, label: 'Read & Write'},
 	{value: 2, label: 'Admin'},
 ]
+
+function getSharePermissionLabel(permission: SharePermission) {
+	return SHARE_PERMISSION_OPTIONS.find(option => option.value === permission)?.label || 'Read'
+}
 
 interface UsersPayload {
 	users?: TaskAssignee[]
@@ -25,10 +41,11 @@ interface TeamsPayload {
 	teams?: Team[]
 }
 
-type ProjectDetailSection = 'project' | 'sharedUsers' | 'sharedTeams' | 'linkShares'
+type ProjectDetailSection = 'project' | 'webhooks' | 'sharedUsers' | 'sharedTeams' | 'linkShares'
 
 const DEFAULT_PROJECT_DETAIL_SECTIONS: Record<ProjectDetailSection, boolean> = {
 	project: true,
+	webhooks: false,
 	sharedUsers: false,
 	sharedTeams: false,
 	linkShares: false,
@@ -36,6 +53,7 @@ const DEFAULT_PROJECT_DETAIL_SECTIONS: Record<ProjectDetailSection, boolean> = {
 
 const CLOSED_PROJECT_DETAIL_SECTIONS: Record<ProjectDetailSection, boolean> = {
 	project: false,
+	webhooks: false,
 	sharedUsers: false,
 	sharedTeams: false,
 	linkShares: false,
@@ -44,23 +62,38 @@ const CLOSED_PROJECT_DETAIL_SECTIONS: Record<ProjectDetailSection, boolean> = {
 export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspector'}) {
 	const account = useAppStore(state => state.account)
 	const serverConfig = useAppStore(state => state.serverConfig)
+	const vikunjaInfo = useAppStore(state => state.vikunjaInfo)
 	const projectDetailOpen = useAppStore(state => state.projectDetailOpen)
 	const projectDetailLoading = useAppStore(state => state.projectDetailLoading)
 	const projectDetail = useAppStore(state => state.projectDetail)
 	const projectSharedUsers = useAppStore(state => state.projectSharedUsers)
 	const projectSharedTeams = useAppStore(state => state.projectSharedTeams)
 	const projectLinkShares = useAppStore(state => state.projectLinkShares)
+	const projectBackgroundUrls = useAppStore(state => state.projectBackgroundUrls)
+	const projectBackgroundPreviewUrls = useAppStore(state => state.projectBackgroundPreviewUrls)
+	const uploadingProjectBackground = useAppStore(state => state.uploadingProjectBackground)
 	const selectedShareDetail = useAppStore(state => state.selectedShareDetail)
 	const shareDetailLoading = useAppStore(state => state.shareDetailLoading)
 	const projectSharingLoading = useAppStore(state => state.projectSharingLoading)
 	const projectSharingSubmitting = useAppStore(state => state.projectSharingSubmitting)
+	const projectWebhooks = useAppStore(state => state.projectWebhooks)
+	const projectWebhooksLoadedIds = useAppStore(state => state.projectWebhooksLoadedIds)
+	const projectWebhooksLoadingIds = useAppStore(state => state.projectWebhooksLoadingIds)
+	const projectWebhookEvents = useAppStore(state => state.projectWebhookEvents)
+	const projectWebhookEventsLoaded = useAppStore(state => state.projectWebhookEventsLoaded)
+	const webhookSubmitting = useAppStore(state => state.webhookSubmitting)
 	const subscriptionsByEntity = useAppStore(state => state.subscriptionsByEntity)
 	const subscriptionMutatingKeys = useAppStore(state => state.subscriptionMutatingKeys)
 	const closeProjectDetail = useAppStore(state => state.closeProjectDetail)
 	const getAvailableParentProjects = useAppStore(state => state.getAvailableParentProjects)
 	const getProjectAncestors = useAppStore(state => state.getProjectAncestors)
 	const saveProjectDetailPatch = useAppStore(state => state.saveProjectDetailPatch)
+	const loadProjectBackground = useAppStore(state => state.loadProjectBackground)
+	const uploadProjectBackground = useAppStore(state => state.uploadProjectBackground)
+	const removeProjectBackground = useAppStore(state => state.removeProjectBackground)
 	const loadProjectSharing = useAppStore(state => state.loadProjectSharing)
+	const loadProjectWebhooks = useAppStore(state => state.loadProjectWebhooks)
+	const loadProjectWebhookEvents = useAppStore(state => state.loadProjectWebhookEvents)
 	const loadShareDetail = useAppStore(state => state.loadShareDetail)
 	const clearShareDetail = useAppStore(state => state.clearShareDetail)
 	const toggleSubscription = useAppStore(state => state.toggleSubscription)
@@ -72,10 +105,13 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 	const removeProjectTeamShare = useAppStore(state => state.removeProjectTeamShare)
 	const addProjectLinkShare = useAppStore(state => state.addProjectLinkShare)
 	const removeProjectLinkShare = useAppStore(state => state.removeProjectLinkShare)
+	const createProjectWebhook = useAppStore(state => state.createProjectWebhook)
+	const updateProjectWebhookEvents = useAppStore(state => state.updateProjectWebhookEvents)
+	const deleteProjectWebhook = useAppStore(state => state.deleteProjectWebhook)
 	const [title, setTitle] = useState('')
 	const [identifier, setIdentifier] = useState('')
 	const [description, setDescription] = useState('')
-	const [color, setColor] = useState('#1973ff')
+	const [color, setColor] = useState(ACCENT_BLUE)
 	const [userShareQuery, setUserShareQuery] = useState('')
 	const [userShareResults, setUserShareResults] = useState<TaskAssignee[]>([])
 	const [userShareSearchLoading, setUserShareSearchLoading] = useState(false)
@@ -90,6 +126,58 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 	const [copiedLinkShareId, setCopiedLinkShareId] = useState<number | null>(null)
 	const [expandedLinkShareId, setExpandedLinkShareId] = useState<number | null>(null)
 	const [openSections, setOpenSections] = useState<Record<ProjectDetailSection, boolean>>(DEFAULT_PROJECT_DETAIL_SECTIONS)
+	const [backgroundSheetOpen, setBackgroundSheetOpen] = useState(false)
+	const [backgroundTab, setBackgroundTab] = useState<'upload' | 'unsplash'>('upload')
+	const projectPermissionActor = account?.linkShareAuth
+		? null
+		: {
+			id: Number(account?.user?.id || 0),
+			username: account?.user?.username || '',
+			email: account?.user?.email || '',
+			canUseAdminBridge: account?.canUseAdminBridge,
+		}
+	const canEditProject = canWriteProject(projectDetail, projectPermissionActor)
+	const canManageSharing = !account?.linkShareAuth && canManageProjectSharing(projectDetail, projectPermissionActor)
+	const canManageProjectWebhooks = !account?.linkShareAuth && canEditProject
+	const canGrantAdminShares = canAdminProject(projectDetail, projectPermissionActor)
+	const availableSharePermissions = getAssignableProjectSharePermissions(projectDetail, null, projectPermissionActor)
+	const projectPermissionValue = getProjectPermission(projectDetail, projectPermissionActor) as SharePermission
+	const projectPermissionLabel = account?.linkShareAuth
+		? getSharePermissionLabel(projectPermissionValue)
+		: account?.canUseAdminBridge
+			? 'Operator admin'
+			: getSharePermissionLabel(projectPermissionValue)
+	const projectPermissionMessage = account?.linkShareAuth
+		? 'This session is authenticated through a shared project link. Project sharing stays locked even if the link allows editing.'
+		: account?.canUseAdminBridge
+			? 'Operator access is active for this session, so project editing and all share levels are available from the PWA.'
+			: projectPermissionValue === 2
+				? 'This session can edit the project and manage all project share levels.'
+				: projectPermissionValue === 1
+					? 'This session can edit the project and manage non-admin project shares.'
+					: 'This session can view the project, but it cannot change project settings or shares.'
+	const sharingBlockedMessage = account?.linkShareAuth
+		? 'Shared-link sessions cannot create or manage project shares.'
+		: !canManageSharing
+			? 'Sharing requires Read & Write or Admin permission on this project.'
+			: ''
+	const adminShareRestrictionMessage = canManageSharing && !canGrantAdminShares
+		? 'Admin shares require Admin permission on this project.'
+		: ''
+	const projectWebhookBlockedMessage = account?.linkShareAuth
+		? 'Shared-link sessions cannot create or manage project webhooks.'
+		: !canManageProjectWebhooks
+			? 'Project webhooks require edit access on this project.'
+			: ''
+	const currentProjectId = Number(projectDetail?.id || 0)
+	const currentProjectHasBackground = projectHasBackground(projectDetail)
+	const currentBackgroundUrl = currentProjectId > 0 ? (projectBackgroundUrls[currentProjectId] ?? null) : null
+	const currentBackgroundPreviewUrl = currentProjectId > 0 ? (projectBackgroundPreviewUrls[currentProjectId] ?? null) : null
+	const currentResolvedBackgroundUrl = currentBackgroundUrl || currentBackgroundPreviewUrl
+	const currentBackgroundUploading = currentProjectId > 0 ? Boolean(uploadingProjectBackground[currentProjectId]) : false
+	const unsplashEnabled = (vikunjaInfo?.enabled_background_providers || []).includes('unsplash')
+	const currentProjectWebhooks = currentProjectId > 0 ? projectWebhooks[currentProjectId] || [] : []
+	const currentProjectWebhooksLoading = currentProjectId > 0 ? projectWebhooksLoadingIds.has(currentProjectId) : false
 
 	useEffect(() => {
 		setTitle(projectDetail?.title || '')
@@ -97,6 +185,14 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 		setDescription(projectDetail?.description || '')
 		setColor(getColorInputValue(projectDetail?.hex_color))
 	}, [projectDetail?.description, projectDetail?.hex_color, projectDetail?.id, projectDetail?.identifier, projectDetail?.title])
+
+	useEffect(() => {
+		if (!projectDetail?.id || !currentProjectHasBackground || currentBackgroundUrl) {
+			return
+		}
+
+		void loadProjectBackground(projectDetail.id)
+	}, [currentBackgroundUrl, currentProjectHasBackground, loadProjectBackground, projectDetail?.id])
 
 	useEffect(() => {
 		if (!projectDetailOpen) {
@@ -127,6 +223,16 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 	}, [clearShareDetail, loadProjectSharing, projectDetail?.id])
 
 	useEffect(() => {
+		if (canGrantAdminShares) {
+			return
+		}
+
+		setNextUserPermission(permission => (permission === 2 ? 1 : permission))
+		setNextTeamPermission(permission => (permission === 2 ? 1 : permission))
+		setNextLinkPermission(permission => (permission === 2 ? 1 : permission))
+	}, [canGrantAdminShares])
+
+	useEffect(() => {
 		if (!copiedLinkShareId) {
 			return
 		}
@@ -150,8 +256,28 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 	}, [clearShareDetail, expandedLinkShareId, projectLinkShares])
 
 	useEffect(() => {
+		if (!projectDetail?.id || !openSections.webhooks) {
+			return
+		}
+		if (!projectWebhooksLoadedIds.has(projectDetail.id) && !projectWebhooksLoadingIds.has(projectDetail.id)) {
+			void loadProjectWebhooks(projectDetail.id)
+		}
+		if (!projectWebhookEventsLoaded) {
+			void loadProjectWebhookEvents()
+		}
+	}, [
+		loadProjectWebhookEvents,
+		loadProjectWebhooks,
+		openSections.webhooks,
+		projectDetail?.id,
+		projectWebhookEventsLoaded,
+		projectWebhooksLoadedIds,
+		projectWebhooksLoadingIds,
+	])
+
+	useEffect(() => {
 		const normalizedQuery = `${userShareQuery || ''}`.trim()
-		if (!projectDetail?.id || !normalizedQuery) {
+		if (!projectDetail?.id || !normalizedQuery || !canManageSharing) {
 			setUserShareResults([])
 			setUserShareSearchLoading(false)
 			return
@@ -189,11 +315,11 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 		return () => {
 			cancelled = true
 		}
-	}, [account?.user?.id, projectDetail?.id, projectSharedUsers, userShareQuery])
+	}, [account?.user?.id, canManageSharing, projectDetail?.id, projectSharedUsers, userShareQuery])
 
 	useEffect(() => {
 		const normalizedQuery = `${teamShareQuery || ''}`.trim()
-		if (!projectDetail?.id || !normalizedQuery) {
+		if (!projectDetail?.id || !normalizedQuery || !canManageSharing) {
 			setTeamShareResults([])
 			setTeamShareSearchLoading(false)
 			return
@@ -230,7 +356,7 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 		return () => {
 			cancelled = true
 		}
-	}, [projectDetail?.id, projectSharedTeams, teamShareQuery])
+	}, [canManageSharing, projectDetail?.id, projectSharedTeams, teamShareQuery])
 
 	const parentOptions = projectDetail ? getAvailableParentProjects(projectDetail.id) : []
 	const projectSubscriptionKey = projectDetail ? `project:${projectDetail.id}` : ''
@@ -238,7 +364,7 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 	const projectSubscriptionSubmitting = projectSubscriptionKey ? subscriptionMutatingKeys.has(projectSubscriptionKey) : false
 
 	async function handleTitleBlur() {
-		if (!projectDetail) {
+		if (!projectDetail || !canEditProject) {
 			return
 		}
 
@@ -255,7 +381,7 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 	}
 
 	async function handleIdentifierBlur() {
-		if (!projectDetail) {
+		if (!projectDetail || !canEditProject) {
 			return
 		}
 
@@ -271,7 +397,7 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 	}
 
 	async function handleDescriptionBlur() {
-		if (!projectDetail) {
+		if (!projectDetail || !canEditProject) {
 			return
 		}
 
@@ -287,7 +413,7 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 	}
 
 	async function handleParentChange(parentProjectId: number) {
-		if (!projectDetail) {
+		if (!projectDetail || !canEditProject) {
 			return
 		}
 
@@ -300,7 +426,7 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 	}
 
 	async function handleColorChange(nextValue: string) {
-		if (!projectDetail) {
+		if (!projectDetail || !canEditProject) {
 			return
 		}
 
@@ -397,6 +523,8 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 	function handleCloseProjectDetail() {
 		setOpenSections(DEFAULT_PROJECT_DETAIL_SECTIONS)
 		setExpandedLinkShareId(null)
+		setBackgroundSheetOpen(false)
+		setBackgroundTab('upload')
 		clearShareDetail()
 		closeProjectDetail()
 	}
@@ -437,7 +565,52 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 						open={openSections.project}
 						onToggle={toggleSection}
 					>
+						<div
+							className="project-background-banner"
+							data-project-background-banner="true"
+							data-has-background={currentProjectHasBackground ? 'true' : 'false'}
+						>
+							{currentResolvedBackgroundUrl ? (
+								<img src={currentResolvedBackgroundUrl} alt="" className="project-background-image" />
+							) : (
+								<div className="project-background-placeholder" />
+							)}
+							<div className="project-background-actions">
+								<button
+									className="pill-button"
+									data-action="open-project-background-sheet"
+									type="button"
+									disabled={!canEditProject}
+									onClick={() => {
+										setBackgroundTab('upload')
+										setBackgroundSheetOpen(true)
+									}}
+								>
+									{currentProjectHasBackground ? 'Change background' : 'Add background'}
+								</button>
+								{currentProjectHasBackground ? (
+									<button
+										className="pill-button subtle"
+										data-action="remove-project-background"
+										type="button"
+										disabled={!canEditProject}
+										onClick={() => {
+											if (window.confirm('Remove project background?')) {
+												void removeProjectBackground(projectDetail.id)
+											}
+										}}
+									>
+										Remove
+									</button>
+								) : null}
+							</div>
+						</div>
 						<div className="detail-grid detail-grid-tight project-detail-main-grid">
+							<div className="detail-item detail-item-full detail-field">
+								<div className="detail-label">Your access</div>
+								<div className="detail-value">{projectPermissionLabel}</div>
+								<div className="detail-helper-text">{projectPermissionMessage}</div>
+							</div>
 							<label className="detail-item detail-item-full detail-field">
 								<div className="detail-label">Title</div>
 								<input
@@ -445,6 +618,7 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 									data-project-detail-title
 									type="text"
 									value={title}
+									disabled={!canEditProject}
 									onChange={event => setTitle(event.currentTarget.value)}
 									onBlur={() => void handleTitleBlur()}
 									onKeyDown={event => {
@@ -461,6 +635,7 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 									className="detail-input"
 									data-project-detail-parent
 									value={Number(projectDetail.parent_project_id || 0)}
+									disabled={!canEditProject}
 									onChange={event => void handleParentChange(Number(event.currentTarget.value))}
 								>
 									<option value="0">Top level</option>
@@ -478,6 +653,7 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 									data-project-detail-identifier
 									type="text"
 									value={identifier}
+									disabled={!canEditProject}
 									onChange={event => setIdentifier(event.currentTarget.value)}
 									onBlur={() => void handleIdentifierBlur()}
 								/>
@@ -488,6 +664,7 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 									className="detail-done-toggle"
 									data-action="toggle-project-favorite"
 									type="button"
+									disabled={!canEditProject}
 									onClick={() => void saveProjectDetailPatch({is_favorite: !projectDetail.is_favorite})}
 								>
 									<span className={`checkbox-button ${projectDetail.is_favorite ? 'is-checked' : ''}`.trim()}>
@@ -502,6 +679,7 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 									className="detail-done-toggle"
 									data-action="toggle-project-archived"
 									type="button"
+									disabled={!canEditProject}
 									onClick={() => void saveProjectDetailPatch({is_archived: !projectDetail.is_archived})}
 								>
 									<span className={`checkbox-button ${projectDetail.is_archived ? 'is-checked' : ''}`.trim()}>
@@ -517,6 +695,7 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 									data-project-detail-color
 									type="color"
 									value={color}
+									disabled={!canEditProject}
 									onChange={event => void handleColorChange(event.currentTarget.value)}
 								/>
 							</label>
@@ -527,6 +706,7 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 									data-project-detail-description
 									placeholder="No description"
 									value={description}
+									disabled={!canEditProject}
 									onChange={event => setDescription(event.currentTarget.value)}
 									onBlur={() => void handleDescriptionBlur()}
 								/>
@@ -535,6 +715,28 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 					</CollapsibleProjectSection>
 
 					<div className="detail-section-list project-detail-sharing-sections">
+						<CollapsibleProjectSection
+							title="Webhooks"
+							section="webhooks"
+							open={openSections.webhooks}
+							onToggle={toggleSection}
+						>
+							<div className="project-share-section-content">
+								<WebhookManager
+									scopeLabel="project"
+									hooks={currentProjectWebhooks}
+									eventOptions={projectWebhookEvents}
+									loading={currentProjectWebhooksLoading}
+									submitting={webhookSubmitting}
+									disabled={!canManageProjectWebhooks}
+									blockedMessage={projectWebhookBlockedMessage}
+									onCreate={payload => createProjectWebhook(projectDetail.id, payload)}
+									onUpdateEvents={(hookId, events) => updateProjectWebhookEvents(projectDetail.id, hookId, events)}
+									onDelete={hookId => deleteProjectWebhook(projectDetail.id, hookId)}
+								/>
+							</div>
+						</CollapsibleProjectSection>
+
 						<CollapsibleProjectSection
 							title="Shared Users"
 							section="sharedUsers"
@@ -545,16 +747,20 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 								<div className="detail-helper-text">
 									Add existing Vikunja users directly to this project and manage their permission here.
 								</div>
+								{sharingBlockedMessage ? <div className="detail-helper-text">{sharingBlockedMessage}</div> : null}
+								{adminShareRestrictionMessage ? <div className="detail-helper-text">{adminShareRestrictionMessage}</div> : null}
 								{projectSharingLoading ? <div className="empty-state compact">Loading user shares…</div> : null}
 								<div className="project-share-inline-form">
 									<select
 										className="detail-input project-share-permission-select"
 										value={nextUserPermission}
-										disabled={projectSharingSubmitting}
+										disabled={projectSharingSubmitting || !canManageSharing}
 										onChange={event => setNextUserPermission(Number(event.currentTarget.value) as SharePermission)}
 									>
-										{SHARE_PERMISSION_OPTIONS.map(option => (
-											<option key={option.value} value={option.value}>{option.label}</option>
+										{availableSharePermissions.map(permission => (
+											<option key={permission} value={permission}>
+												{getSharePermissionLabel(permission)}
+											</option>
 										))}
 									</select>
 									<input
@@ -562,7 +768,7 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 										type="text"
 										placeholder="Search users"
 										value={userShareQuery}
-										disabled={projectSharingSubmitting}
+										disabled={projectSharingSubmitting || !canManageSharing}
 										onChange={event => setUserShareQuery(event.currentTarget.value)}
 									/>
 								</div>
@@ -577,7 +783,7 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 												key={user.id}
 												className="detail-assignee-search-result"
 												type="button"
-												disabled={projectSharingSubmitting}
+												disabled={projectSharingSubmitting || !canManageSharing}
 												onClick={() => void handleAddUserShare(user.username)}
 											>
 												<span className="detail-assignee-search-token">
@@ -611,21 +817,29 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 													<select
 														className="detail-input project-share-permission-select"
 														value={user.permission}
-														disabled={projectSharingSubmitting}
+														disabled={
+															projectSharingSubmitting ||
+															!canManageSharing ||
+															!canManageProjectSharePermission(projectDetail, user.permission, projectPermissionActor)
+														}
 														onChange={event => void updateProjectUserShare(
 															projectDetail.id,
 															user.username,
 															Number(event.currentTarget.value) as SharePermission,
 														)}
 													>
-														{SHARE_PERMISSION_OPTIONS.map(option => (
-															<option key={option.value} value={option.value}>{option.label}</option>
+														{getAssignableProjectSharePermissions(projectDetail, user.permission, projectPermissionActor).map(permission => (
+															<option key={permission} value={permission}>{getSharePermissionLabel(permission)}</option>
 														))}
 													</select>
 													<button
 														className="pill-button subtle"
 														type="button"
-														disabled={projectSharingSubmitting}
+														disabled={
+															projectSharingSubmitting ||
+															!canManageSharing ||
+															!canManageProjectSharePermission(projectDetail, user.permission, projectPermissionActor)
+														}
 														onClick={() => void removeProjectUserShare(projectDetail.id, user.username)}
 													>
 														Remove
@@ -648,15 +862,17 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 								<div className="detail-helper-text">
 									Share this project with a whole team and keep team-level access synchronized from Settings.
 								</div>
+								{sharingBlockedMessage ? <div className="detail-helper-text">{sharingBlockedMessage}</div> : null}
+								{adminShareRestrictionMessage ? <div className="detail-helper-text">{adminShareRestrictionMessage}</div> : null}
 								<div className="project-share-inline-form">
 									<select
 										className="detail-input project-share-permission-select"
 										value={nextTeamPermission}
-										disabled={projectSharingSubmitting}
+										disabled={projectSharingSubmitting || !canManageSharing}
 										onChange={event => setNextTeamPermission(Number(event.currentTarget.value) as SharePermission)}
 									>
-										{SHARE_PERMISSION_OPTIONS.map(option => (
-											<option key={option.value} value={option.value}>{option.label}</option>
+										{availableSharePermissions.map(permission => (
+											<option key={permission} value={permission}>{getSharePermissionLabel(permission)}</option>
 										))}
 									</select>
 									<input
@@ -664,7 +880,7 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 										type="text"
 										placeholder="Search teams"
 										value={teamShareQuery}
-										disabled={projectSharingSubmitting}
+										disabled={projectSharingSubmitting || !canManageSharing}
 										onChange={event => setTeamShareQuery(event.currentTarget.value)}
 									/>
 								</div>
@@ -679,7 +895,7 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 												key={team.id}
 												className="detail-assignee-search-result"
 												type="button"
-												disabled={projectSharingSubmitting}
+												disabled={projectSharingSubmitting || !canManageSharing}
 												onClick={() => void handleAddTeamShare(team.id)}
 											>
 												<span className="detail-assignee-search-token">{`${team.name || '?'} `.trim().slice(0, 2).toUpperCase()}</span>
@@ -709,21 +925,29 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 													<select
 														className="detail-input project-share-permission-select"
 														value={team.permission}
-														disabled={projectSharingSubmitting}
+														disabled={
+															projectSharingSubmitting ||
+															!canManageSharing ||
+															!canManageProjectSharePermission(projectDetail, team.permission, projectPermissionActor)
+														}
 														onChange={event => void updateProjectTeamShare(
 															projectDetail.id,
 															team.id,
 															Number(event.currentTarget.value) as SharePermission,
 														)}
 													>
-														{SHARE_PERMISSION_OPTIONS.map(option => (
-															<option key={option.value} value={option.value}>{option.label}</option>
+														{getAssignableProjectSharePermissions(projectDetail, team.permission, projectPermissionActor).map(permission => (
+															<option key={permission} value={permission}>{getSharePermissionLabel(permission)}</option>
 														))}
 													</select>
 													<button
 														className="pill-button subtle"
 														type="button"
-														disabled={projectSharingSubmitting}
+														disabled={
+															projectSharingSubmitting ||
+															!canManageSharing ||
+															!canManageProjectSharePermission(projectDetail, team.permission, projectPermissionActor)
+														}
 														onClick={() => void removeProjectTeamShare(projectDetail.id, team.id)}
 													>
 														Remove
@@ -746,6 +970,8 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 								<div className="detail-helper-text">
 									Create share links for people who should access this project without a named Vikunja account.
 								</div>
+								{sharingBlockedMessage ? <div className="detail-helper-text">{sharingBlockedMessage}</div> : null}
+								{adminShareRestrictionMessage ? <div className="detail-helper-text">{adminShareRestrictionMessage}</div> : null}
 								{!linkSharingEnabled ? (
 									<div className="empty-state compact">Link sharing is disabled on this Vikunja instance.</div>
 								) : (
@@ -754,11 +980,11 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 											<select
 												className="detail-input project-share-permission-select"
 												value={nextLinkPermission}
-												disabled={projectSharingSubmitting}
+												disabled={projectSharingSubmitting || !canManageSharing}
 												onChange={event => setNextLinkPermission(Number(event.currentTarget.value) as SharePermission)}
 											>
-												{SHARE_PERMISSION_OPTIONS.map(option => (
-													<option key={option.value} value={option.value}>{option.label}</option>
+												{availableSharePermissions.map(permission => (
+													<option key={permission} value={permission}>{getSharePermissionLabel(permission)}</option>
 												))}
 											</select>
 											<input
@@ -767,7 +993,7 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 												type="text"
 												placeholder="Link name (optional)"
 												value={linkShareName}
-												disabled={projectSharingSubmitting}
+												disabled={projectSharingSubmitting || !canManageSharing}
 												onChange={event => setLinkShareName(event.currentTarget.value)}
 											/>
 											<input
@@ -776,14 +1002,14 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 												type="password"
 												placeholder="Password (optional)"
 												value={linkSharePassword}
-												disabled={projectSharingSubmitting}
+												disabled={projectSharingSubmitting || !canManageSharing}
 												onChange={event => setLinkSharePassword(event.currentTarget.value)}
 											/>
 											<button
 												className="pill-button"
 												data-action="create-project-link-share"
 												type="button"
-												disabled={projectSharingSubmitting}
+												disabled={projectSharingSubmitting || !canManageSharing}
 												onClick={() => void handleAddLinkShare()}
 											>
 												Create link
@@ -900,7 +1126,11 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 																		data-action="remove-project-link-share"
 																		data-share-id={share.id}
 																		type="button"
-																		disabled={projectSharingSubmitting}
+																		disabled={
+																			projectSharingSubmitting ||
+																			!canManageSharing ||
+																			!canManageProjectSharePermission(projectDetail, share.permission)
+																		}
 																		onClick={() => void removeProjectLinkShare(projectDetail.id, share.id)}
 																	>
 																		Remove
@@ -920,13 +1150,94 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 					</div>
 				</div>
 				) : null}
+				{projectDetail ? (
+					<DetailSheet
+						open={backgroundSheetOpen}
+						closeAction="close-project-background-sheet"
+						onClose={() => {
+							setBackgroundSheetOpen(false)
+							setBackgroundTab('upload')
+						}}
+						mode={mode}
+					>
+						<div className="sheet-head detail-sheet-head">
+							<div>
+								<div className="panel-label">Project Background</div>
+								<div className="panel-title">{projectDetail.title}</div>
+							</div>
+						</div>
+						<div className="detail-core-card background-sheet-card" data-form="project-background">
+							<div className="background-sheet-tabs">
+								<button
+									className={`pill-button ${backgroundTab === 'upload' ? 'is-active' : ''}`.trim()}
+									data-background-tab="upload"
+									type="button"
+									onClick={() => setBackgroundTab('upload')}
+								>
+									Upload
+								</button>
+								{unsplashEnabled ? (
+									<button
+										className={`pill-button ${backgroundTab === 'unsplash' ? 'is-active' : ''}`.trim()}
+										data-background-tab="unsplash"
+										type="button"
+										onClick={() => setBackgroundTab('unsplash')}
+									>
+										Unsplash
+									</button>
+								) : null}
+							</div>
+							{backgroundTab === 'upload' ? (
+								<div className="background-upload-tab">
+									<label className="detail-field">
+										<div className="detail-label">Upload image</div>
+										<input
+											className="detail-input"
+											data-project-background-file="true"
+											type="file"
+											accept="image/*"
+											disabled={!canEditProject || currentBackgroundUploading}
+											onChange={event => {
+												const file = event.currentTarget.files?.[0]
+												if (!projectDetail?.id || !file) {
+													return
+												}
+												void uploadProjectBackground(projectDetail.id, file)
+													.then(() => {
+														setBackgroundSheetOpen(false)
+														setBackgroundTab('upload')
+													})
+													.catch(error => {
+														console.error('Failed to upload project background', error)
+													})
+													.finally(() => {
+														event.currentTarget.value = ''
+													})
+											}}
+										/>
+									</label>
+									<div className="detail-helper-text">JPEG or PNG, max 15 MB.</div>
+									{!canEditProject ? (
+										<div className="detail-helper-text">Edit access is required to change the project background.</div>
+									) : currentBackgroundUploading ? (
+										<div className="detail-helper-text">Uploading background…</div>
+									) : null}
+								</div>
+							) : (
+								<UnsplashBackgroundPicker
+									projectId={projectDetail.id}
+									onSelected={() => {
+										setBackgroundSheetOpen(false)
+										setBackgroundTab('upload')
+									}}
+								/>
+							)}
+						</div>
+					</DetailSheet>
+				) : null}
 			</DetailSheet>
 		</>
 	)
-}
-
-function getSharePermissionLabel(permission: SharePermission) {
-	return SHARE_PERMISSION_OPTIONS.find(option => option.value === permission)?.label || 'Read'
 }
 
 function getProjectLinkShareUrl(hash: string, publicOrigin?: string | null) {

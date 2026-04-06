@@ -1,3 +1,4 @@
+import DetailSheet from '@/components/common/DetailSheet'
 import ContextMenu from '@/components/common/ContextMenu'
 import type {Team} from '@/types'
 import {
@@ -58,6 +59,14 @@ export default function SettingsTeamsSection({
 		username: string
 		anchor: LocalMenuAnchor
 	} | null>(null)
+	const [teamDialogMode, setTeamDialogMode] = useState<'edit' | 'addMember' | null>(null)
+	const [teamDialogForm, setTeamDialogForm] = useState({
+		teamId: 0,
+		teamName: '',
+		name: '',
+		description: '',
+		username: '',
+	})
 
 	useEffect(() => {
 		if (!teamMenuAnchor && !teamMemberMenuAnchor) {
@@ -130,44 +139,71 @@ export default function SettingsTeamsSection({
 		)
 	}
 
-	async function handleEditTeam(teamId: number, currentName: string, currentDescription: string) {
-		const name = window.prompt('Team name', currentName)
-		if (name === null) {
-			return
-		}
-
-		const description = window.prompt('Team description', currentDescription)
-		if (description === null) {
-			return
-		}
-
-		await onEditTeam(teamId, {
-			name,
-			description,
+	function openEditTeamDialog(team: Team) {
+		setTeamDialogForm({
+			teamId: team.id,
+			teamName: team.name || '',
+			name: team.name || '',
+			description: team.description || '',
+			username: '',
 		})
+		setTeamDialogMode('edit')
 	}
 
-	async function handleAddTeamMember(teamId: number) {
-		const username = window.prompt('Username to add to this team')
-		if (username === null) {
+	function openAddTeamMemberDialog(team: Team) {
+		setTeamDialogForm({
+			teamId: team.id,
+			teamName: team.name || '',
+			name: team.name || '',
+			description: team.description || '',
+			username: '',
+		})
+		setTeamDialogMode('addMember')
+	}
+
+	function closeTeamDialog() {
+		if (teamSubmitting) {
 			return
 		}
 
-		await onAddTeamMember(teamId, username)
+		setTeamDialogMode(null)
+	}
+
+	async function handleSubmitTeamDialog(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault()
+
+		if (teamDialogMode === 'edit') {
+			const success = await onEditTeam(teamDialogForm.teamId, {
+				name: teamDialogForm.name,
+				description: teamDialogForm.description,
+			})
+			if (success) {
+				closeTeamDialog()
+			}
+			return
+		}
+
+		if (teamDialogMode === 'addMember') {
+			const success = await onAddTeamMember(teamDialogForm.teamId, teamDialogForm.username)
+			if (success) {
+				closeTeamDialog()
+			}
+		}
 	}
 
 	return (
-		<SettingsSection
-			title="Teams"
-			section="teams"
-			open={open}
-			onToggle={onToggle}
-			actions={
-				<button className="pill-button subtle" type="button" onClick={onReload}>
-					Reload
-				</button>
-			}
-		>
+		<>
+			<SettingsSection
+				title="Teams"
+				section="teams"
+				open={open}
+				onToggle={onToggle}
+				actions={
+					<button className="pill-button subtle" type="button" onClick={onReload}>
+						Reload
+					</button>
+				}
+			>
 			<div className="empty-state compact">
 				Create teams here, manage their members, and then share projects with those teams from project detail.
 				New teams automatically include the creator as the first team admin.
@@ -217,14 +253,19 @@ export default function SettingsTeamsSection({
 			) : null}
 			{teams.length > 0 ? (
 				<div className="settings-team-list">
-					{teams.map(team => {
-						const teamMembers = team.members || []
-						const currentUserIsTeamAdmin = isCurrentUserTeamAdmin(team, currentUsername)
-						const teamAdminCount = getTeamAdminCount(team)
-						const teamHasNoAdmins = teamAdminCount === 0
-						const blockedTeamManagementMessage = getBlockedTeamManagementMessage(
-							currentUserIsTeamAdmin,
-							teamHasNoAdmins,
+						{teams.map(team => {
+							const teamMembers = team.members || []
+							const currentUserIsTeamAdmin = isCurrentUserTeamAdmin(team, currentUsername)
+							const teamAdminCount = getTeamAdminCount(team)
+							const teamHasNoAdmins = teamAdminCount === 0
+							const teamAccessLabel = teamHasNoAdmins
+								? 'No admins'
+								: currentUserIsTeamAdmin
+									? 'Your access: Admin'
+									: 'Your access: Member'
+							const blockedTeamManagementMessage = getBlockedTeamManagementMessage(
+								currentUserIsTeamAdmin,
+								teamHasNoAdmins,
 						)
 
 						return (
@@ -237,6 +278,9 @@ export default function SettingsTeamsSection({
 										</div>
 									</div>
 									<div className="settings-team-actions">
+										<div className={`settings-status-chip ${currentUserIsTeamAdmin ? 'is-active' : teamHasNoAdmins ? 'is-disabled' : ''}`.trim()}>
+											{teamAccessLabel}
+										</div>
 										<button
 											className="menu-button settings-team-overflow"
 											type="button"
@@ -253,26 +297,28 @@ export default function SettingsTeamsSection({
 								{teamMenuAnchor?.teamId === team.id ? (
 									<ContextMenu anchor={teamMenuAnchor.anchor} positionMode="anchor-end">
 										{currentUserIsTeamAdmin ? (
-											<>
-												<button
-													className="menu-item"
-													type="button"
-													onClick={() => {
-														setTeamMenuAnchor(null)
-														void handleEditTeam(team.id, team.name, team.description || '')
-													}}
-												>
-													Edit team
-												</button>
-												<button
-													className="menu-item"
-													type="button"
-													onClick={() => {
-														setTeamMenuAnchor(null)
-														void handleAddTeamMember(team.id)
-													}}
-												>
-													Add member
+												<>
+													<button
+														className="menu-item"
+														data-action="open-edit-team-dialog"
+														type="button"
+														onClick={() => {
+															setTeamMenuAnchor(null)
+															openEditTeamDialog(team)
+														}}
+													>
+														Edit team
+													</button>
+													<button
+														className="menu-item"
+														data-action="open-add-team-member-dialog"
+														type="button"
+														onClick={() => {
+															setTeamMenuAnchor(null)
+															openAddTeamMemberDialog(team)
+														}}
+													>
+														Add member
 												</button>
 												<button
 													className="menu-item danger"
@@ -417,6 +463,96 @@ export default function SettingsTeamsSection({
 					})}
 				</div>
 			) : null}
-		</SettingsSection>
+			</SettingsSection>
+			<DetailSheet
+				open={teamDialogMode !== null}
+				closeAction="close-team-dialog"
+				onClose={closeTeamDialog}
+			>
+			<div className="sheet-head">
+				<div>
+					<div className="panel-label">Teams</div>
+					<div className="panel-title">{teamDialogMode === 'edit' ? 'Edit Team' : 'Add Team Member'}</div>
+				</div>
+			</div>
+			<form className="detail-core-card settings-user-dialog" data-form="team-dialog" onSubmit={handleSubmitTeamDialog}>
+				<div className="detail-helper-text">
+					{teamDialogMode === 'edit'
+						? `Update the details for ${teamDialogForm.teamName || 'this team'}.`
+						: `Add a Vikunja user to ${teamDialogForm.teamName || 'this team'} by username.`}
+				</div>
+				<div className="detail-grid detail-grid-tight">
+					{teamDialogMode === 'edit' ? (
+						<>
+							<label className="detail-item detail-field">
+								<div className="detail-label">Team name</div>
+								<input
+									className="detail-input"
+									data-team-field="name"
+									type="text"
+									value={teamDialogForm.name}
+									disabled={teamSubmitting}
+									onChange={event => {
+										const value = event.currentTarget.value
+										setTeamDialogForm(state => ({
+											...state,
+											name: value,
+										}))
+									}}
+								/>
+							</label>
+							<label className="detail-item detail-field">
+								<div className="detail-label">Description</div>
+								<input
+									className="detail-input"
+									data-team-field="description"
+									type="text"
+									value={teamDialogForm.description}
+									disabled={teamSubmitting}
+									onChange={event => {
+										const value = event.currentTarget.value
+										setTeamDialogForm(state => ({
+											...state,
+											description: value,
+										}))
+									}}
+								/>
+							</label>
+						</>
+					) : (
+						<label className="detail-item detail-item-full detail-field">
+							<div className="detail-label">Username</div>
+							<input
+								className="detail-input"
+								data-team-field="username"
+								type="text"
+								value={teamDialogForm.username}
+								disabled={teamSubmitting}
+								onChange={event => {
+									const value = event.currentTarget.value
+									setTeamDialogForm(state => ({
+										...state,
+										username: value,
+									}))
+								}}
+							/>
+						</label>
+					)}
+				</div>
+				<div className="settings-dialog-actions">
+					<button className="ghost-button" data-action="close-team-dialog" type="button" disabled={teamSubmitting} onClick={closeTeamDialog}>
+						Cancel
+					</button>
+					<button className="composer-submit" data-action="submit-team-dialog" type="submit" disabled={teamSubmitting}>
+						{teamSubmitting
+							? 'Working…'
+							: teamDialogMode === 'edit'
+								? 'Save team'
+								: 'Add member'}
+					</button>
+				</div>
+			</form>
+			</DetailSheet>
+		</>
 	)
 }

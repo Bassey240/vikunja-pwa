@@ -1,6 +1,8 @@
 import {api, type ApiError} from '@/api'
+import {canAdminProject, canManageProjectSharing} from '@/store/selectors'
 import type {ProjectLinkShare, ProjectSharedTeam, ProjectSharedUser, SharePermission, TeamUser} from '@/types'
 import {formatError} from '@/utils/formatting'
+import {isMissingRouteError, isRecord} from '@/utils/type-guards'
 import type {StateCreator} from 'zustand'
 import type {AppStore} from '../index'
 import {blockOfflineReadOnlyAction, isOfflineReadOnly} from '../offline-readonly'
@@ -172,6 +174,9 @@ export const createSharingSlice: StateCreator<AppStore, [], [], SharingSlice> = 
 			set({error: 'A username is required.'})
 			return false
 		}
+		if (!ensureCanManageProjectSharing(get, set, projectId, {targetPermission: permission})) {
+			return false
+		}
 
 		set({projectSharingSubmitting: true, error: null})
 
@@ -206,6 +211,13 @@ export const createSharingSlice: StateCreator<AppStore, [], [], SharingSlice> = 
 		if (!nextUsername) {
 			return false
 		}
+		const existingShare = get().projectSharedUsers.find(entry => entry.username === nextUsername) || null
+		if (!ensureCanManageProjectSharing(get, set, projectId, {
+			currentPermission: existingShare?.permission ?? null,
+			targetPermission: permission,
+		})) {
+			return false
+		}
 
 		set({projectSharingSubmitting: true, error: null})
 
@@ -237,6 +249,12 @@ export const createSharingSlice: StateCreator<AppStore, [], [], SharingSlice> = 
 		if (!nextUsername) {
 			return false
 		}
+		const existingShare = get().projectSharedUsers.find(entry => entry.username === nextUsername) || null
+		if (!ensureCanManageProjectSharing(get, set, projectId, {
+			currentPermission: existingShare?.permission ?? null,
+		})) {
+			return false
+		}
 
 		set({projectSharingSubmitting: true, error: null})
 
@@ -260,6 +278,9 @@ export const createSharingSlice: StateCreator<AppStore, [], [], SharingSlice> = 
 		}
 
 		if (blockOfflineReadOnlyAction(get, set, 'update project sharing')) {
+			return false
+		}
+		if (!ensureCanManageProjectSharing(get, set, projectId, {targetPermission: permission})) {
 			return false
 		}
 
@@ -291,6 +312,13 @@ export const createSharingSlice: StateCreator<AppStore, [], [], SharingSlice> = 
 		if (blockOfflineReadOnlyAction(get, set, 'update project sharing')) {
 			return false
 		}
+		const existingShare = get().projectSharedTeams.find(entry => entry.id === teamId) || null
+		if (!ensureCanManageProjectSharing(get, set, projectId, {
+			currentPermission: existingShare?.permission ?? null,
+			targetPermission: permission,
+		})) {
+			return false
+		}
 
 		set({projectSharingSubmitting: true, error: null})
 
@@ -317,6 +345,12 @@ export const createSharingSlice: StateCreator<AppStore, [], [], SharingSlice> = 
 		if (blockOfflineReadOnlyAction(get, set, 'update project sharing')) {
 			return false
 		}
+		const existingShare = get().projectSharedTeams.find(entry => entry.id === teamId) || null
+		if (!ensureCanManageProjectSharing(get, set, projectId, {
+			currentPermission: existingShare?.permission ?? null,
+		})) {
+			return false
+		}
 
 		set({projectSharingSubmitting: true, error: null})
 
@@ -340,6 +374,9 @@ export const createSharingSlice: StateCreator<AppStore, [], [], SharingSlice> = 
 		}
 
 		if (blockOfflineReadOnlyAction(get, set, 'create share links')) {
+			return false
+		}
+		if (!ensureCanManageProjectSharing(get, set, projectId, {targetPermission: payload.permission})) {
 			return false
 		}
 
@@ -373,6 +410,12 @@ export const createSharingSlice: StateCreator<AppStore, [], [], SharingSlice> = 
 		}
 
 		if (blockOfflineReadOnlyAction(get, set, 'remove share links')) {
+			return false
+		}
+		const existingShare = get().projectLinkShares.find(entry => entry.id === shareId) || null
+		if (!ensureCanManageProjectSharing(get, set, projectId, {
+			currentPermission: existingShare?.permission ?? null,
+		})) {
 			return false
 		}
 
@@ -607,16 +650,44 @@ function normalizeOptionalBoolean(value: unknown) {
 	return null
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null
-}
+function ensureCanManageProjectSharing(
+	get: () => AppStore,
+	set: (partial: Partial<AppStore>) => void,
+	projectId: number,
+	options: {
+		currentPermission?: SharePermission | null
+		targetPermission?: SharePermission | null
+	} = {},
+) {
+	const state = get()
+	if (state.account?.linkShareAuth) {
+		set({error: 'Shared-link sessions cannot create or manage project shares.'})
+		return false
+	}
 
-function isMissingRouteError(error: unknown) {
-	const apiError = error as ApiError | null | undefined
-	if (apiError?.statusCode === 404) {
+	const project =
+		(state.projectDetail?.id === projectId ? state.projectDetail : null) ||
+		state.projects.find(entry => entry.id === projectId) ||
+		null
+	const projectPermissionActor = {
+		id: Number(state.account?.user?.id || 0),
+		username: state.account?.user?.username || '',
+		email: state.account?.user?.email || '',
+		canUseAdminBridge: state.account?.canUseAdminBridge,
+	}
+
+	const requiresAdmin = options.currentPermission === 2 || options.targetPermission === 2
+	if (requiresAdmin && canAdminProject(project, projectPermissionActor)) {
+		return true
+	}
+	if (!requiresAdmin && canManageProjectSharing(project, projectPermissionActor)) {
 		return true
 	}
 
-	const message = formatError(apiError).toLowerCase()
-	return message.includes('route not found') || message.includes('not found')
+	set({
+		error: requiresAdmin
+			? 'Admin permission is required to manage admin project shares.'
+			: 'Read & Write permission is required to manage project sharing.',
+	})
+	return false
 }

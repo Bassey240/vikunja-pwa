@@ -156,7 +156,9 @@ async function dragProjectToSidebarProjectCenter(page, sourceProjectId, targetPr
 
 async function rootProjectIds(page) {
 	return page.locator('.workspace-screen.is-active .screen-body > .project-node[data-project-node-id]').evaluateAll(nodes =>
-		nodes.map(node => Number(node.dataset.projectNodeId || 0)),
+		nodes
+			.map(node => Number(node.dataset.projectNodeId || 0))
+			.filter(projectId => projectId > 0),
 	)
 }
 

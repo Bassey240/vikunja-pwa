@@ -9,6 +9,9 @@ interface TaskTreeProps {
 	matcher?: TaskMatcher
 	sortBy?: TaskSortBy
 	bulkMode?: boolean
+	rootParentTaskId?: number | null
+	focusProjectIdOverride?: number | null
+	savedFilterProjectId?: number | null
 }
 
 export default function TaskTree({
@@ -17,11 +20,18 @@ export default function TaskTree({
 	matcher,
 	sortBy = 'position',
 	bulkMode = false,
+	rootParentTaskId = null,
+	focusProjectIdOverride = null,
+	savedFilterProjectId = null,
 }: TaskTreeProps) {
 	const rootTasks = getVisibleRootTasksFor(taskList, matcher, sortBy)
 
 	return (
-		<div className="task-tree">
+		<div
+			className="task-tree"
+			data-root-parent-task-id={rootParentTaskId || undefined}
+			data-saved-filter-project-id={savedFilterProjectId || undefined}
+		>
 			{rootTasks.map(task => (
 				<TaskBranch
 					key={task.id}
@@ -33,6 +43,7 @@ export default function TaskTree({
 					matcher={matcher}
 					sortBy={sortBy}
 					bulkMode={bulkMode}
+					focusProjectIdOverride={focusProjectIdOverride}
 				/>
 			))}
 		</div>

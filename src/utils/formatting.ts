@@ -102,6 +102,9 @@ export function formatReminderLabel(reminder: TaskReminder) {
 	return formatLongDate(normalizedReminder)
 }
 
+import {ACCENT_BLUE} from '@/utils/color-constants'
+import {pickLabelTextColor} from '@/utils/color-helpers'
+
 export function formatShortWeekdayLabel(value: string | number | Date) {
 	const date = parseValidDate(value)
 	if (!date) {
@@ -349,7 +352,7 @@ export function normalizeHexColor(value: string | null | undefined) {
 }
 
 export function getColorInputValue(value: string | null | undefined) {
-	return normalizeHexColor(value) || '#1973ff'
+	return normalizeHexColor(value) || ACCENT_BLUE
 }
 
 export function renderPriorityOptions(selectedPriority: number) {
@@ -373,20 +376,6 @@ export function renderLabelStyle(label: {hex_color?: string; hexColor?: string})
 
 	const background = hex.startsWith('#') ? hex : `#${hex}`
 	return `background:${background};color:${pickLabelTextColor(background)};`
-}
-
-function pickLabelTextColor(hex: string) {
-	const normalized = hex.replace('#', '')
-	if (normalized.length !== 6) {
-		return '#170f0d'
-	}
-
-	const red = parseInt(normalized.slice(0, 2), 16)
-	const green = parseInt(normalized.slice(2, 4), 16)
-	const blue = parseInt(normalized.slice(4, 6), 16)
-	const brightness = (red * 299 + green * 587 + blue * 114) / 1000
-
-	return brightness > 170 ? '#170f0d' : '#fff7f1'
 }
 
 export function formatSessionTimestamp(value: string | null | undefined) {

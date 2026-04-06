@@ -9,14 +9,17 @@ import SettingsCollaborationSection from '@/components/screens/settings/Settings
 import SettingsNotificationsSection from '@/components/screens/settings/SettingsNotificationsSection'
 import SettingsOfflineSection from '@/components/screens/settings/SettingsOfflineSection'
 import SettingsPreferencesSection from '@/components/screens/settings/SettingsPreferencesSection'
+import SettingsMigrationSection from '@/components/screens/settings/SettingsMigrationSection'
 import SettingsSecuritySection from '@/components/screens/settings/SettingsSecuritySection'
 import SettingsTeamsSection from '@/components/screens/settings/SettingsTeamsSection'
+import SettingsWebhooksSection from '@/components/screens/settings/SettingsWebhooksSection'
 import InlineRootTaskComposer from '@/components/tasks/InlineRootTaskComposer'
 import {useAppStore} from '@/store'
 import {
 	type SettingsSectionId,
 } from '@/utils/settings-helpers'
-import {type FormEvent, useEffect, useState} from 'react'
+import type {MigrationService} from '@/types'
+import {type FormEvent, useEffect, useMemo, useState} from 'react'
 import {useLocation, useNavigate} from 'react-router-dom'
 
 export default function SettingsScreen() {
@@ -82,6 +85,16 @@ export default function SettingsScreen() {
 	const availableRoutes = useAppStore(state => state.availableRoutes)
 	const availableRoutesLoaded = useAppStore(state => state.availableRoutesLoaded)
 	const collaborationSettingsSubmitting = useAppStore(state => state.collaborationSettingsSubmitting)
+	const userWebhooks = useAppStore(state => state.userWebhooks)
+	const userWebhooksLoaded = useAppStore(state => state.userWebhooksLoaded)
+	const userWebhooksLoading = useAppStore(state => state.userWebhooksLoading)
+	const userWebhookEvents = useAppStore(state => state.userWebhookEvents)
+	const userWebhookEventsLoaded = useAppStore(state => state.userWebhookEventsLoaded)
+	const webhookSubmitting = useAppStore(state => state.webhookSubmitting)
+	const migrationStatus = useAppStore(state => state.migrationStatus)
+	const migrationMessages = useAppStore(state => state.migrationMessages)
+	const migrationLoadingServices = useAppStore(state => state.migrationLoadingServices)
+	const migrationSubmittingServices = useAppStore(state => state.migrationSubmittingServices)
 	const adminUsers = useAppStore(state => state.adminUsers)
 	const adminUsersLoading = useAppStore(state => state.adminUsersLoading)
 	const adminUsersLoaded = useAppStore(state => state.adminUsersLoaded)
@@ -103,6 +116,11 @@ export default function SettingsScreen() {
 	const mailerConfigLoading = useAppStore(state => state.mailerConfigLoading)
 	const mailerConfigSubmitting = useAppStore(state => state.mailerConfigSubmitting)
 	const mailerConfigRestarting = useAppStore(state => state.mailerConfigRestarting)
+	const migrationImporterConfig = useAppStore(state => state.migrationImporterConfig)
+	const migrationImporterConfigLoadAttempted = useAppStore(state => state.migrationImporterConfigLoadAttempted)
+	const migrationImporterConfigLoading = useAppStore(state => state.migrationImporterConfigLoading)
+	const migrationImporterConfigSubmitting = useAppStore(state => state.migrationImporterConfigSubmitting)
+	const migrationImporterConfigRestarting = useAppStore(state => state.migrationImporterConfigRestarting)
 	const teams = useAppStore(state => state.teams)
 	const teamsLoaded = useAppStore(state => state.teamsLoaded)
 	const teamsLoading = useAppStore(state => state.teamsLoading)
@@ -148,12 +166,23 @@ export default function SettingsScreen() {
 	const loadMailerConfig = useAppStore(state => state.loadMailerConfig)
 	const saveMailerConfig = useAppStore(state => state.saveMailerConfig)
 	const applyMailerConfig = useAppStore(state => state.applyMailerConfig)
+	const loadMigrationImporterConfig = useAppStore(state => state.loadMigrationImporterConfig)
+	const saveMigrationImporterConfig = useAppStore(state => state.saveMigrationImporterConfig)
+	const applyMigrationImporterConfig = useAppStore(state => state.applyMigrationImporterConfig)
 	const createAdminUser = useAppStore(state => state.createAdminUser)
 	const updateAdminUser = useAppStore(state => state.updateAdminUser)
 	const setAdminUserEnabled = useAppStore(state => state.setAdminUserEnabled)
 	const resetAdminUserPassword = useAppStore(state => state.resetAdminUserPassword)
 	const deleteAdminUser = useAppStore(state => state.deleteAdminUser)
 	const saveCollaborationSettings = useAppStore(state => state.saveCollaborationSettings)
+	const loadUserWebhooks = useAppStore(state => state.loadUserWebhooks)
+	const loadUserWebhookEvents = useAppStore(state => state.loadUserWebhookEvents)
+	const createUserWebhook = useAppStore(state => state.createUserWebhook)
+	const updateUserWebhookEvents = useAppStore(state => state.updateUserWebhookEvents)
+	const deleteUserWebhook = useAppStore(state => state.deleteUserWebhook)
+	const loadMigrationStatus = useAppStore(state => state.loadMigrationStatus)
+	const getMigrationAuthUrl = useAppStore(state => state.getMigrationAuthUrl)
+	const uploadFileMigration = useAppStore(state => state.uploadFileMigration)
 	const notificationPreferencesSubmitting = useAppStore(state => state.notificationPreferencesSubmitting)
 	const avatarProvider = useAppStore(state => state.avatarProvider)
 	const avatarProviderLoaded = useAppStore(state => state.avatarProviderLoaded)
@@ -190,13 +219,15 @@ export default function SettingsScreen() {
 		offline: false,
 		notifications: false,
 		security: false,
+		webhooks: false,
+		migration: false,
 		collaboration: false,
 		userAdministration: false,
 		teams: false,
 		appData: false,
 	})
 
-	const canManageUsers = Boolean(account?.authMode === 'password' && account?.isAdmin)
+	const canManageUsers = Boolean(account?.authMode === 'password' && account?.canUseAdminBridge)
 	const adminBridgeConfigured = Boolean(serverConfig?.features?.adminBridgeMode)
 	const adminBridgeReady = Boolean(
 		adminRuntimeHealth?.dockerReachable &&
@@ -263,13 +294,17 @@ export default function SettingsScreen() {
 
 	useEffect(() => {
 		const params = new URLSearchParams(location.search)
-		if (params.get('section') !== 'offline') {
+		const requestedSection = `${params.get('section') || ''}`.trim()
+		if (!requestedSection) {
+			return
+		}
+		if (!['offline', 'migration', 'webhooks', 'security', 'account', 'preferences', 'notifications', 'collaboration', 'teams', 'appData', 'userAdministration'].includes(requestedSection)) {
 			return
 		}
 
 		setOpenSections(current => ({
 			...current,
-			offline: true,
+			[requestedSection]: true,
 		}))
 	}, [location.search])
 
@@ -290,12 +325,12 @@ export default function SettingsScreen() {
 	}, [account?.authMode, checkDataExportStatus, openSections.account])
 
 	useEffect(() => {
-		if (!openSections.appData || !connected || vikunjaInfo || vikunjaInfoLoading) {
+		if ((!openSections.appData && !openSections.migration) || !connected || vikunjaInfo || vikunjaInfoLoading) {
 			return
 		}
 
 		void loadVikunjaInfo()
-	}, [connected, loadVikunjaInfo, openSections.appData, vikunjaInfo, vikunjaInfoLoading])
+	}, [connected, loadVikunjaInfo, openSections.appData, openSections.migration, vikunjaInfo, vikunjaInfoLoading])
 
 	useEffect(() => {
 		if (!accountDeletionNotice || openSections.account) {
@@ -308,6 +343,8 @@ export default function SettingsScreen() {
 			offline: false,
 			notifications: false,
 			security: false,
+			webhooks: false,
+			migration: false,
 			collaboration: false,
 			userAdministration: false,
 			teams: false,
@@ -364,6 +401,8 @@ export default function SettingsScreen() {
 	const currentTimezone = `${account?.user?.settings?.timezone || ''}`.trim()
 	const canChangePassword = account?.authMode === 'password'
 	const canLogout = account?.source === 'account' && account?.authMode === 'password'
+	const availableMigrationServices = useMemo(() => getAvailableMigrationServices(vikunjaInfo), [vikunjaInfo])
+	const migrationAvailabilityResolved = Boolean(vikunjaInfo)
 
 	return (
 		<div className="surface">
@@ -511,7 +550,7 @@ export default function SettingsScreen() {
 								emailDeliveryAvailable={account.instanceFeatures?.emailRemindersEnabled === true}
 								emailRemindersEnabled={Boolean(account.user?.settings?.email_reminders_enabled)}
 								overdueTasksRemindersEnabled={Boolean(account.user?.settings?.overdue_tasks_reminders_enabled)}
-								accountIsAdmin={Boolean(account.isAdmin)}
+								accountCanUseAdminBridge={Boolean(account.canUseAdminBridge)}
 								pushManagerSupported={pushManagerSupported}
 								isSecureContext={isSecureContext}
 								standaloneWebApp={standaloneDisplayMode}
@@ -570,6 +609,50 @@ export default function SettingsScreen() {
 							/>
 						) : null}
 						{account ? (
+							<SettingsWebhooksSection
+								open={openSections.webhooks}
+								onToggle={toggleSection}
+								userWebhooks={userWebhooks}
+								userWebhooksLoaded={userWebhooksLoaded}
+								userWebhooksLoading={userWebhooksLoading}
+								userWebhookEvents={userWebhookEvents}
+								userWebhookEventsLoaded={userWebhookEventsLoaded}
+								webhookSubmitting={webhookSubmitting}
+								onReload={() => {
+									void loadUserWebhooks({force: true})
+								}}
+								onLoadUserWebhookEvents={() => {
+									void loadUserWebhookEvents()
+								}}
+								onCreateUserWebhook={createUserWebhook}
+								onUpdateUserWebhookEvents={updateUserWebhookEvents}
+								onDeleteUserWebhook={deleteUserWebhook}
+							/>
+						) : null}
+						{account ? (
+							<SettingsMigrationSection
+								open={openSections.migration}
+								onToggle={toggleSection}
+								availableMigrationServices={availableMigrationServices}
+								migrationAvailabilityResolved={migrationAvailabilityResolved}
+								vikunjaInfoLoading={vikunjaInfoLoading}
+								publicAppOrigin={serverConfig?.publicAppOrigin || null}
+								canManageUsers={canManageUsers}
+								migrationStatus={migrationStatus}
+								migrationMessages={migrationMessages}
+								migrationLoadingServices={migrationLoadingServices}
+								migrationSubmittingServices={migrationSubmittingServices}
+								onLoadMigrationStatus={service => {
+									void loadMigrationStatus(service)
+								}}
+								onGetMigrationAuthUrl={getMigrationAuthUrl}
+								onUploadFileMigration={uploadFileMigration}
+								onOpenMigrationProviderSettings={() => {
+									toggleSection('userAdministration')
+								}}
+							/>
+						) : null}
+						{account ? (
 							<SettingsCollaborationSection
 								open={openSections.collaboration}
 								onToggle={toggleSection}
@@ -585,7 +668,7 @@ export default function SettingsScreen() {
 								open={openSections.userAdministration}
 								onToggle={toggleSection}
 								accountUser={account.user}
-								accountIsAdmin={Boolean(account.isAdmin)}
+								accountCanUseAdminBridge={Boolean(account.canUseAdminBridge)}
 								adminBridgeConfigured={adminBridgeConfigured}
 								canManageUsers={canManageUsers}
 								adminUsers={adminUsers}
@@ -610,6 +693,12 @@ export default function SettingsScreen() {
 								mailerConfigLoading={mailerConfigLoading}
 								mailerConfigSubmitting={mailerConfigSubmitting}
 								mailerConfigRestarting={mailerConfigRestarting}
+								migrationImporterConfig={migrationImporterConfig}
+								migrationImporterConfigLoadAttempted={migrationImporterConfigLoadAttempted}
+								migrationImporterConfigLoading={migrationImporterConfigLoading}
+								migrationImporterConfigSubmitting={migrationImporterConfigSubmitting}
+								migrationImporterConfigRestarting={migrationImporterConfigRestarting}
+								publicAppOrigin={serverConfig?.publicAppOrigin || null}
 								onReloadRuntimeHealth={() => {
 									void loadAdminRuntimeHealth()
 								}}
@@ -631,6 +720,9 @@ export default function SettingsScreen() {
 								onLoadMailerConfig={loadMailerConfig}
 								onSaveMailerConfig={saveMailerConfig}
 								onApplyMailerConfig={applyMailerConfig}
+								onLoadMigrationImporterConfig={loadMigrationImporterConfig}
+								onSaveMigrationImporterConfig={saveMigrationImporterConfig}
+								onApplyMigrationImporterConfig={applyMigrationImporterConfig}
 							/>
 						) : null}
 						{account ? (
@@ -670,4 +762,29 @@ export default function SettingsScreen() {
 			</div>
 		</div>
 	)
+}
+
+function getAvailableMigrationServices(vikunjaInfo: {available_migrators?: string[]} | null) {
+	if (!Array.isArray(vikunjaInfo?.available_migrators)) {
+		return null
+	}
+
+	return new Set(
+		vikunjaInfo.available_migrators
+			.map(normalizeMigrationService)
+			.filter((service): service is MigrationService => Boolean(service)),
+	)
+}
+
+function normalizeMigrationService(value: unknown): MigrationService | '' {
+	switch (`${value || ''}`.trim().toLowerCase()) {
+		case 'todoist':
+		case 'trello':
+		case 'microsoft-todo':
+		case 'ticktick':
+		case 'vikunja-file':
+			return `${value || ''}`.trim().toLowerCase() as MigrationService
+		default:
+			return ''
+	}
 }

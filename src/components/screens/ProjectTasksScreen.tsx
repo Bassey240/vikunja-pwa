@@ -17,10 +17,12 @@ import {getTaskFilterUiConfig, hasActiveTaskFilters, taskMatchesFilters} from '@
 import {useShowCompletedTaskFilter} from '@/hooks/useShowCompleted'
 import useWideLayout from '@/hooks/useWideLayout'
 import {getProjectDescendantIds, getVisibleChildProjects, getProjectAggregateCountsMap} from '@/store/project-helpers'
-import {getVisibleRootTasksFor} from '@/store/selectors'
+import {canManageProjectSharing, canWriteProject, getProjectPermission, getVisibleRootTasksFor} from '@/store/selectors'
 import {useAppStore} from '@/store'
 import {getMenuAnchor} from '@/utils/menuPosition'
-import {type MouseEvent, useEffect, useMemo, useState} from 'react'
+import {projectHasBackground} from '@/utils/project-background'
+import {buildSavedFilterProject} from '@/utils/saved-filters'
+import {type FormEvent, type MouseEvent, useEffect, useMemo, useState} from 'react'
 import {useNavigate, useParams} from 'react-router-dom'
 
 function getSharePermissionLabel(permission: number) {
@@ -53,14 +55,22 @@ export default function ProjectTasksScreen({
 	const tasks = useAppStore(state => state.tasks)
 	const projectFilterTasks = useAppStore(state => state.projectFilterTasks)
 	const projectFilterTasksLoaded = useAppStore(state => state.projectFilterTasksLoaded)
+	const projectBackgroundUrls = useAppStore(state => state.projectBackgroundUrls)
+	const projectBackgroundPreviewUrls = useAppStore(state => state.projectBackgroundPreviewUrls)
+	const savedFilters = useAppStore(state => state.savedFilters)
+	const savedFilterTasks = useAppStore(state => state.savedFilterTasks)
 	const taskFilters = useAppStore(state => state.taskFilters)
+	const taskFilterDraft = useAppStore(state => state.taskFilterDraft)
 	const recentlyCompletedTaskIds = useAppStore(state => state.recentlyCompletedTaskIds)
 	const selectedProjectId = useAppStore(state => state.selectedProjectId)
+	const selectedSavedFilterProjectId = useAppStore(state => state.selectedSavedFilterProjectId)
 	const currentTasksProjectId = useAppStore(state => state.currentTasksProjectId)
 	const loadingTasks = useAppStore(state => state.loadingTasks)
+	const loadingSavedFilterTasks = useAppStore(state => state.loadingSavedFilterTasks)
 	const focusedTaskId = useAppStore(state => state.focusedTaskId)
 	const focusedTaskSourceScreen = useAppStore(state => state.focusedTaskSourceScreen)
 	const currentProjectViewId = useAppStore(state => state.currentProjectViewId)
+	const currentSavedFilterViewId = useAppStore(state => state.currentSavedFilterViewId)
 	const projectViewsById = useAppStore(state => state.projectViewsById)
 	const projectBucketsByViewId = useAppStore(state => state.projectBucketsByViewId)
 	const navigateToProject = useAppStore(state => state.navigateToProject)
@@ -70,6 +80,8 @@ export default function ProjectTasksScreen({
 	const ensureProjectFilterTasksLoaded = useAppStore(state => state.ensureProjectFilterTasksLoaded)
 	const loadProjectViews = useAppStore(state => state.loadProjectViews)
 	const selectProjectView = useAppStore(state => state.selectProjectView)
+	const createProjectView = useAppStore(state => state.createProjectView)
+	const deleteProjectView = useAppStore(state => state.deleteProjectView)
 	const syncTaskFilterDraftFromActive = useAppStore(state => state.syncTaskFilterDraftFromActive)
 	const setTaskFilterField = useAppStore(state => state.setTaskFilterField)
 	const applyTaskFilterDraft = useAppStore(state => state.applyTaskFilterDraft)
@@ -82,15 +94,32 @@ export default function ProjectTasksScreen({
 	const openProjectComposer = useAppStore(state => state.openProjectComposer)
 	const expandAllProjects = useAppStore(state => state.expandAllProjects)
 	const collapseAllProjects = useAppStore(state => state.collapseAllProjects)
+	const loadProjectBackground = useAppStore(state => state.loadProjectBackground)
 	const {showingCompleted, label: completedLabel, toggle: toggleShowCompleted} = useShowCompletedTaskFilter(false)
 	const [searchOpen, setSearchOpen] = useState(false)
 	const [filterOpen, setFilterOpen] = useState(false)
 	const [viewAnchor, setViewAnchor] = useState<ReturnType<typeof getMenuAnchor> | null>(null)
 	const [panelAnchor, setPanelAnchor] = useState<ReturnType<typeof getMenuAnchor> | null>(null)
+	const [newViewTitle, setNewViewTitle] = useState('')
+	const [newViewKind, setNewViewKind] = useState<'list' | 'kanban' | 'table' | 'gantt'>('list')
+	const [seedViewFromDraft, setSeedViewFromDraft] = useState(false)
 	const bulkMode = useAppStore(state => state.bulkTaskEditorScope === bulkScopeKey)
+
+	const selectedSavedFilter = savedFilters.find(filter => filter.projectId === projectId) || null
+	const savedFilterProject = selectedSavedFilter ? buildSavedFilterProject(selectedSavedFilter) : null
+	const isSavedFilterRoute = Boolean(savedFilterProject)
 
 	useEffect(() => {
 		if ((!connected && !offlineReadOnlyMode) || !projectId) {
+			return
+		}
+
+		if (isSavedFilterRoute) {
+			if (loadingSavedFilterTasks || selectedSavedFilterProjectId === projectId) {
+				return
+			}
+
+			void loadSavedFilterTasks(projectId)
 			return
 		}
 
@@ -99,7 +128,18 @@ export default function ProjectTasksScreen({
 		}
 
 		void navigateToProject(projectId)
-	}, [connected, currentTasksProjectId, loadingTasks, navigateToProject, offlineReadOnlyMode, projectId])
+	}, [
+		connected,
+		currentTasksProjectId,
+		isSavedFilterRoute,
+		loadSavedFilterTasks,
+		loadingSavedFilterTasks,
+		loadingTasks,
+		navigateToProject,
+		offlineReadOnlyMode,
+		projectId,
+		selectedSavedFilterProjectId,
+	])
 
 	useEffect(() => {
 		if (!connected || projectFilterTasksLoaded) {
@@ -109,23 +149,39 @@ export default function ProjectTasksScreen({
 		void ensureProjectFilterTasksLoaded()
 	}, [connected, ensureProjectFilterTasksLoaded, projectFilterTasksLoaded])
 
-	const projectTasksReady = currentTasksProjectId === projectId
-	const displayProjectId = projectTasksReady ? projectId : (currentTasksProjectId || projectId)
-	const selectedProject = projects.find(project => project.id === projectId) || null
-	const displayProject = projects.find(project => project.id === displayProjectId) || selectedProject
+	const taskCollection = isSavedFilterRoute ? savedFilterTasks : tasks
+	const projectTasksReady = isSavedFilterRoute ? selectedSavedFilterProjectId === projectId : currentTasksProjectId === projectId
+	const displayProjectId = isSavedFilterRoute ? projectId : (projectTasksReady ? projectId : (currentTasksProjectId || projectId))
+	const selectedProject = projects.find(project => project.id === projectId) || savedFilterProject
+	const displayProject = isSavedFilterRoute
+		? savedFilterProject
+		: projects.find(project => project.id === displayProjectId) || selectedProject
+	const displayProjectHasBackground = projectHasBackground(displayProject)
+	const displayProjectBackgroundUrl = !isSavedFilterRoute && displayProjectId > 0 ? (projectBackgroundUrls[displayProjectId] ?? null) : null
+	const displayProjectBackgroundPreviewUrl = !isSavedFilterRoute && displayProjectId > 0 ? (projectBackgroundPreviewUrls[displayProjectId] ?? null) : null
+	const displayProjectResolvedBackgroundUrl = displayProjectBackgroundUrl || displayProjectBackgroundPreviewUrl
 	const parentProject = displayProject?.parent_project_id
 		? projects.find(project => project.id === displayProject.parent_project_id) || null
 		: null
+
+	useEffect(() => {
+		if (!displayProject?.id || !displayProjectHasBackground || displayProjectBackgroundUrl) {
+			return
+		}
+
+		void loadProjectBackground(displayProject.id)
+	}, [displayProject?.id, displayProjectBackgroundUrl, displayProjectHasBackground, loadProjectBackground])
+
 	const childProjects = useMemo(
-		() => (displayProject ? getVisibleChildProjects(displayProject.id, projects) : []),
-		[projects, displayProject],
+		() => (displayProject && !isSavedFilterRoute ? getVisibleChildProjects(displayProject.id, projects) : []),
+		[displayProject, isSavedFilterRoute, projects],
 	)
 	const countsByProjectId = useMemo(
 		() => getProjectAggregateCountsMap(projects, projectFilterTasks, projectFilterTasksLoaded),
 		[projectFilterTasks, projectFilterTasksLoaded, projects],
 	)
 	const projectSubtreeIds = useMemo(() => {
-		if (!selectedProject) {
+		if (!selectedProject || isSavedFilterRoute) {
 			return new Set<number>()
 		}
 
@@ -134,16 +190,19 @@ export default function ProjectTasksScreen({
 			ids.add(descendantId)
 		}
 		return ids
-	}, [projects, selectedProject])
+	}, [isSavedFilterRoute, projects, selectedProject])
 	const taskMatcher = useMemo(
 		() => (task: (typeof tasks)[number]) => taskMatchesFilters(task, taskFilters) || recentlyCompletedTaskIds.has(task.id),
 		[recentlyCompletedTaskIds, taskFilters],
 	)
 	const rootTasks = useMemo(
-		() => getVisibleRootTasksFor(tasks, taskMatcher, taskFilters.sortBy),
-		[taskFilters.sortBy, taskMatcher, tasks],
+		() => getVisibleRootTasksFor(taskCollection, taskMatcher, taskFilters.sortBy),
+		[taskCollection, taskFilters.sortBy, taskMatcher],
 	)
 	const tableTasks = useMemo(() => {
+		if (isSavedFilterRoute) {
+			return taskCollection.slice()
+		}
 		const sourceTasks = projectFilterTasksLoaded ? projectFilterTasks : tasks
 		const seenTaskIds = new Set<number>()
 		return sourceTasks.filter(task => {
@@ -153,21 +212,22 @@ export default function ProjectTasksScreen({
 			seenTaskIds.add(task.id)
 			return true
 		})
-	}, [projectFilterTasks, projectFilterTasksLoaded, projectSubtreeIds, tasks])
+	}, [isSavedFilterRoute, projectFilterTasks, projectFilterTasksLoaded, projectSubtreeIds, taskCollection, tasks])
 	const visibleRootTasks = rootTasks
 	const totalItems = childProjects.length + visibleRootTasks.length
 	const taskFilterConfig = getTaskFilterUiConfig('tasks')
+	const activeViewId = isSavedFilterRoute ? currentSavedFilterViewId : currentProjectViewId
 	const currentViews = selectedProject ? projectViewsById[selectedProject.id] || [] : []
-	const currentViewKind = currentViews.find(view => view.id === currentProjectViewId)?.view_kind || 'list'
+	const currentViewKind = currentViews.find(view => view.id === activeViewId)?.view_kind || 'list'
 	const supportedViewKinds = useMemo(
 		() => (isWideLayout ? new Set(['list', 'kanban', 'table', 'gantt']) : new Set(['list', 'kanban'])),
 		[isWideLayout],
 	)
 	const isSharedLinkPresentation = presentation === 'shared-link' || account?.linkShareAuth === true
 	const hasOfflineKanbanCache = Boolean(
-		currentProjectViewId &&
-		Array.isArray(projectBucketsByViewId[currentProjectViewId]) &&
-		projectBucketsByViewId[currentProjectViewId].length > 0,
+		activeViewId &&
+		Array.isArray(projectBucketsByViewId[activeViewId]) &&
+		projectBucketsByViewId[activeViewId].length > 0,
 	)
 	const effectiveViewKind =
 		offlineReadOnlyMode && currentViewKind === 'kanban' && !hasOfflineKanbanCache
@@ -178,9 +238,24 @@ export default function ProjectTasksScreen({
 	const visibleViews = currentViews.filter(view => supportedViewKinds.has(view.view_kind))
 	const showFocusedTask = Boolean(focusedTaskId && focusedTaskSourceScreen === 'tasks')
 	const sharedRootProjectId = Number(account?.linkShareProjectId || 0)
-	const sharedProjectPermission = Number((selectedProject as unknown as {max_permission?: number | null})?.max_permission || 0)
-	const canUseSharedComposer = sharedProjectPermission > 1
+	const projectPermissionActor = isSharedLinkPresentation
+		? null
+		: {
+			id: Number(account?.user?.id || 0),
+			username: account?.user?.username || '',
+			email: account?.user?.email || '',
+			canUseAdminBridge: account?.canUseAdminBridge,
+		}
+	const sharedProjectPermission = getProjectPermission(selectedProject, projectPermissionActor)
+	const canUseSharedComposer = !isSavedFilterRoute && canWriteProject(selectedProject, projectPermissionActor)
+	const canEditSelectedProject = !isSharedLinkPresentation && !isSavedFilterRoute && canWriteProject(selectedProject, projectPermissionActor)
+	const canShareSelectedProject = !isSharedLinkPresentation && !isSavedFilterRoute && canManageProjectSharing(selectedProject, projectPermissionActor)
 	const sharedPermissionLabel = getSharePermissionLabel(sharedProjectPermission)
+	const canSeedViewFromDraft = hasActiveTaskFilters(taskFilterDraft)
+	const viewContext = isSavedFilterRoute ? 'savedFilter' : 'project'
+	const canManageViewDefinitions = canEditSelectedProject
+	const canCreateRootTask = !isSavedFilterRoute && (!isSharedLinkPresentation || canUseSharedComposer)
+	const focusProjectIdOverride = isSavedFilterRoute ? projectId : null
 	const showSharedBackButton = Boolean(
 		isSharedLinkPresentation &&
 			selectedProject &&
@@ -214,8 +289,9 @@ export default function ProjectTasksScreen({
 	useEffect(() => {
 		if (
 			!selectedProject ||
-			selectedProjectId !== selectedProject.id ||
-			!currentProjectViewId ||
+			(!isSavedFilterRoute && selectedProjectId !== selectedProject.id) ||
+			(isSavedFilterRoute && selectedSavedFilterProjectId !== selectedProject.id) ||
+			!activeViewId ||
 			supportedViewKinds.has(currentViewKind)
 		) {
 			return
@@ -229,8 +305,19 @@ export default function ProjectTasksScreen({
 			return
 		}
 
-		void selectProjectView(selectedProject.id, fallbackView.id, 'project', {persistPreference: false})
-	}, [currentProjectViewId, currentViewKind, currentViews, selectProjectView, selectedProject, selectedProjectId, supportedViewKinds])
+		void selectProjectView(selectedProject.id, fallbackView.id, viewContext, {persistPreference: false})
+	}, [
+		activeViewId,
+		currentViewKind,
+		currentViews,
+		isSavedFilterRoute,
+		selectProjectView,
+		selectedProject,
+		selectedProjectId,
+		selectedSavedFilterProjectId,
+		supportedViewKinds,
+		viewContext,
+	])
 
 	async function handleSearchProjectResult(targetProjectId: number) {
 		clearSearchState()
@@ -249,11 +336,52 @@ export default function ProjectTasksScreen({
 	async function handleSavedFilterSelect(projectId: number | null) {
 		setFilterOpen(false)
 		if (!projectId) {
+			await loadSavedFilterTasks(null)
 			return
 		}
 
 		await loadSavedFilterTasks(projectId)
-		navigate('/filters')
+		navigate(`/projects/${projectId}`)
+	}
+
+	async function handleCreateProjectView(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault()
+		if (!selectedProject) {
+			return
+		}
+		try {
+			await createProjectView(selectedProject.id, {
+				title: newViewTitle.trim(),
+				viewKind: newViewKind,
+				seedFilterFromDraft: seedViewFromDraft && canSeedViewFromDraft,
+			})
+			setNewViewTitle('')
+			setNewViewKind('list')
+			setSeedViewFromDraft(false)
+			setViewAnchor(null)
+		} catch (error) {
+			console.error('Failed to create project view', error)
+		}
+	}
+
+	async function handleDeleteProjectView(viewId: number) {
+		if (!selectedProject) {
+			return
+		}
+		const view = currentViews.find(candidate => candidate.id === viewId)
+		if (!view) {
+			return
+		}
+		const confirmed = window.confirm(`Delete the "${view.title || view.view_kind}" view?`)
+		if (!confirmed) {
+			return
+		}
+		try {
+			await deleteProjectView(selectedProject.id, viewId)
+			setViewAnchor(null)
+		} catch (error) {
+			console.error('Failed to delete project view', error)
+		}
 	}
 
 
@@ -382,8 +510,23 @@ export default function ProjectTasksScreen({
 				}`.trim()}
 			>
 				<div className="shared-project-surface-content">
-					<section className="panel shared-project-header-card">
-						<div className="shared-project-header-main">
+					<section
+						className={`panel shared-project-header-card ${displayProjectHasBackground ? 'has-background' : ''}`.trim()}
+						data-project-background-surface="screen"
+						data-has-background={displayProjectHasBackground ? 'true' : 'false'}
+					>
+						{displayProjectHasBackground ? (
+							<div className="project-surface-background-media" aria-hidden="true">
+								{displayProjectResolvedBackgroundUrl ? (
+									<img src={displayProjectResolvedBackgroundUrl} alt="" className="project-surface-background-image" />
+								) : (
+									<div className="project-surface-background-placeholder" />
+								)}
+								<div className="project-surface-background-overlay project-screen-background-overlay" />
+							</div>
+						) : null}
+						<div className="project-surface-background-content">
+							<div className="shared-project-header-main">
 							<div className="shared-project-title-stack">
 								<div className="detail-label">Shared project</div>
 								<h1 className="shared-project-title">{displayProject?.title || selectedProject.title}</h1>
@@ -456,11 +599,11 @@ export default function ProjectTasksScreen({
 												{visibleViews.map(view => (
 													<button
 														key={view.id}
-														className={`menu-item ${view.id === currentProjectViewId ? 'is-active' : ''}`.trim()}
+														className={`menu-item ${view.id === activeViewId ? 'is-active' : ''}`.trim()}
 														type="button"
 														onClick={() => {
 															setViewAnchor(null)
-															void selectProjectView(selectedProject.id, view.id, 'project')
+															void selectProjectView(selectedProject.id, view.id, viewContext)
 														}}
 													>
 														{view.title || view.view_kind}
@@ -470,12 +613,13 @@ export default function ProjectTasksScreen({
 										) : null}
 									</div>
 								) : null}
-								{canUseSharedComposer ? (
+								{canCreateRootTask ? (
 									<button className="composer-submit" type="button" onClick={() => openRootComposer({placement: rootComposerPlacement})}>
 										Add task
 									</button>
 								) : null}
 							</div>
+						</div>
 						</div>
 					</section>
 					{filterOpen && effectiveViewKind === 'list' ? (
@@ -483,7 +627,7 @@ export default function ProjectTasksScreen({
 							<TaskFilterPanel
 								screen="tasks"
 								allowProject={taskFilterConfig.allowProject}
-								visibleTaskList={tasks}
+								visibleTaskList={taskCollection}
 								showSavedFilters={false}
 								showManageFilters={false}
 								onApply={() => {
@@ -491,7 +635,9 @@ export default function ProjectTasksScreen({
 									setFilterOpen(false)
 								}}
 								onReset={() => {
-									void loadSavedFilterTasks(null)
+									if (!isSavedFilterRoute) {
+										void loadSavedFilterTasks(null)
+									}
 									resetTaskFilterDraft()
 									void applyTaskFilterDraft(taskFilterConfig.allowProject)
 								}}
@@ -506,16 +652,16 @@ export default function ProjectTasksScreen({
 						}`.trim()}
 					>
 						<div className="screen-body">
-							<InlineRootTaskComposer />
-							{effectiveViewKind === 'kanban' && currentProjectViewId ? (
-								<ProjectKanbanView projectId={selectedProject.id} viewId={currentProjectViewId} tasks={tasks} />
+							{canCreateRootTask ? <InlineRootTaskComposer /> : null}
+							{effectiveViewKind === 'kanban' && activeViewId ? (
+								<ProjectKanbanView projectId={selectedProject.id} viewId={activeViewId} tasks={taskCollection} focusProjectIdOverride={focusProjectIdOverride} />
 							) : effectiveViewKind === 'table' ? (
-								<ProjectTableView projectId={selectedProject.id} tasks={tableTasks} />
+								<ProjectTableView projectId={selectedProject.id} tasks={tableTasks} focusProjectIdOverride={focusProjectIdOverride} />
 							) : effectiveViewKind === 'gantt' ? (
-								<ProjectGanttView projectId={selectedProject.id} tasks={tableTasks} />
+								<ProjectGanttView projectId={selectedProject.id} tasks={tableTasks} focusProjectIdOverride={focusProjectIdOverride} />
 							) : (
 								<>
-									{loadingTasks && !projectTasksReady && rootTasks.length === 0 && childProjects.length === 0 ? <div className="empty-state">Loading tasks…</div> : null}
+									{(isSavedFilterRoute ? loadingSavedFilterTasks : loadingTasks) && !projectTasksReady && rootTasks.length === 0 && childProjects.length === 0 ? <div className="empty-state">Loading tasks…</div> : null}
 									{childProjects.length > 0 ? (
 										<ProjectPreview label="Sub-projects" parentProjectId={selectedProject.id}>
 											{childProjects.map(project => (
@@ -526,19 +672,25 @@ export default function ProjectTasksScreen({
 													parentProjectId={selectedProject.id}
 													countsByProjectId={countsByProjectId}
 													previewTaskMatcher={taskMatcher}
-													previewTaskSortBy={taskFilters.sortBy}
-													taskDropEnabled={true}
-												/>
-											))}
-										</ProjectPreview>
-									) : null}
+											previewTaskSortBy={taskFilters.sortBy}
+											taskDropEnabled={true}
+										/>
+									))}
+								</ProjectPreview>
+							) : null}
 									{visibleRootTasks.length > 0 ? (
 										<ProjectPreview label="Tasks" parentProjectId={selectedProject.id}>
-											<TaskTree taskList={tasks} matcher={taskMatcher} sortBy={taskFilters.sortBy} />
+											<TaskTree
+												taskList={taskCollection}
+												matcher={taskMatcher}
+												sortBy={taskFilters.sortBy}
+												focusProjectIdOverride={focusProjectIdOverride}
+												savedFilterProjectId={isSavedFilterRoute ? projectId : null}
+											/>
 										</ProjectPreview>
 									) : null}
-									{!loadingTasks && projectTasksReady && childProjects.length === 0 && visibleRootTasks.length === 0 ? (
-										<div className="empty-state">No tasks or sub-projects are visible in this shared project yet.</div>
+									{!(isSavedFilterRoute ? loadingSavedFilterTasks : loadingTasks) && projectTasksReady && childProjects.length === 0 && visibleRootTasks.length === 0 ? (
+										<div className="empty-state">{isSavedFilterRoute ? 'No tasks currently match this saved filter.' : 'No tasks or sub-projects are visible in this shared project yet.'}</div>
 									) : null}
 								</>
 							)}
@@ -567,7 +719,7 @@ export default function ProjectTasksScreen({
 					setPanelAnchor(null)
 				}}
 				primaryAction={
-					!isSharedLinkPresentation || canUseSharedComposer
+					canCreateRootTask
 						? {
 								action: 'open-root-composer',
 								label: 'Add task',
@@ -582,30 +734,94 @@ export default function ProjectTasksScreen({
 						<div className="inline-menu topbar-action-menu" data-menu-root="true">
 							{visibleViews.length === 0 ? <div className="empty-state compact">No supported project views available.</div> : null}
 							{visibleViews.map(view => (
-								<button
-									key={view.id}
-									className={`menu-item ${view.id === currentProjectViewId ? 'is-active' : ''}`.trim()}
-									data-action="select-project-view"
-									data-project-id={selectedProject.id}
-									data-view-id={view.id}
-									type="button"
-									onClick={() => {
-										setViewAnchor(null)
-										void selectProjectView(selectedProject.id, view.id, 'project')
-									}}
-								>
-									{view.title || view.view_kind}
-								</button>
+								<div key={view.id} className="view-menu-item">
+									<button
+										className={`menu-item view-menu-select ${view.id === activeViewId ? 'is-active' : ''}`.trim()}
+										data-action="select-project-view"
+										data-project-id={selectedProject.id}
+										data-view-id={view.id}
+										type="button"
+										onClick={() => {
+											setViewAnchor(null)
+											void selectProjectView(selectedProject.id, view.id, viewContext)
+										}}
+									>
+										{view.title || view.view_kind}
+									</button>
+									{canManageViewDefinitions && visibleViews.length > 1 ? (
+										<button
+											className="menu-item subtle view-menu-delete"
+											data-action="delete-project-view"
+											data-project-id={selectedProject.id}
+											data-view-id={view.id}
+											type="button"
+											onClick={() => {
+												void handleDeleteProjectView(view.id)
+											}}
+										>
+											Delete
+										</button>
+									) : null}
+								</div>
 							))}
+							{canManageViewDefinitions ? (
+								<form className="view-menu-add" data-form="project-view" onSubmit={handleCreateProjectView}>
+									<label className="inline-field">
+										<span>Name</span>
+										<input
+											data-project-view-title="true"
+											type="text"
+											value={newViewTitle}
+											onChange={event => setNewViewTitle(event.currentTarget.value)}
+											placeholder="New view"
+											maxLength={120}
+										/>
+									</label>
+									<label className="inline-field">
+										<span>Type</span>
+										<select
+											data-project-view-kind="true"
+											value={newViewKind}
+											onChange={event => setNewViewKind(event.currentTarget.value as 'list' | 'kanban' | 'table' | 'gantt')}
+										>
+											<option value="list">List</option>
+											<option value="kanban">Kanban</option>
+											{isWideLayout ? <option value="table">Table</option> : null}
+											{isWideLayout ? <option value="gantt">Gantt</option> : null}
+										</select>
+									</label>
+									{canSeedViewFromDraft ? (
+										<label className="checkbox-row view-menu-seed">
+											<input
+												data-project-view-seed-filter="true"
+												type="checkbox"
+												checked={seedViewFromDraft}
+												onChange={event => setSeedViewFromDraft(event.currentTarget.checked)}
+											/>
+											<span>Seed from current task filters</span>
+										</label>
+									) : null}
+									<button
+										className="button-primary"
+										data-action="create-project-view"
+										type="submit"
+										disabled={!newViewTitle.trim()}
+									>
+										Create view
+									</button>
+								</form>
+							) : null}
 						</div>
 					) : panelAnchor ? (
 						<div className="inline-menu topbar-action-menu" data-menu-root="true">
-							<button className="menu-item" data-action="open-root-composer" data-project-id={selectedProject.id} type="button" onClick={() => {
-								setPanelAnchor(null)
-								openRootComposer({placement: rootComposerPlacement})
-							}}>
-								Add task
-							</button>
+							{canCreateRootTask ? (
+								<button className="menu-item" data-action="open-root-composer" data-project-id={selectedProject.id} type="button" onClick={() => {
+									setPanelAnchor(null)
+									openRootComposer({placement: rootComposerPlacement})
+								}}>
+									Add task
+								</button>
+							) : null}
 							<button
 								className={`menu-item ${showingCompleted ? 'is-active' : ''}`.trim()}
 								data-action="toggle-show-completed"
@@ -617,12 +833,14 @@ export default function ProjectTasksScreen({
 							>
 								{completedLabel}
 							</button>
-							<button className="menu-item" data-action="edit-project" data-project-id={selectedProject.id} type="button" onClick={() => {
-								setPanelAnchor(null)
-								void editProject(selectedProject.id)
-							}}>
-								Edit project
-							</button>
+							{canEditSelectedProject ? (
+								<button className="menu-item" data-action="edit-project" data-project-id={selectedProject.id} type="button" onClick={() => {
+									setPanelAnchor(null)
+									void editProject(selectedProject.id)
+								}}>
+									Edit project
+								</button>
+							) : null}
 							{effectiveViewKind === 'list' ? (
 								<button className="menu-item" data-action="open-bulk-task-editor" type="button" onClick={() => {
 									setPanelAnchor(null)
@@ -631,18 +849,22 @@ export default function ProjectTasksScreen({
 									Bulk edit
 								</button>
 							) : null}
-							<button className="menu-item" data-action="share-project" data-project-id={selectedProject.id} type="button" onClick={() => {
-								setPanelAnchor(null)
-								void openProjectDetail(selectedProject.id)
-							}}>
-								Share project
-							</button>
-							<button className="menu-item" data-action="open-project-composer" data-parent-project-id={selectedProject.id} type="button" onClick={() => {
-								setPanelAnchor(null)
-								openProjectComposer(selectedProject.id)
-							}}>
-								Add sub-project
-							</button>
+							{canShareSelectedProject ? (
+								<button className="menu-item" data-action="share-project" data-project-id={selectedProject.id} type="button" onClick={() => {
+									setPanelAnchor(null)
+									void openProjectDetail(selectedProject.id)
+								}}>
+									Share project
+								</button>
+							) : null}
+							{canEditSelectedProject ? (
+								<button className="menu-item" data-action="open-project-composer" data-parent-project-id={selectedProject.id} type="button" onClick={() => {
+									setPanelAnchor(null)
+									openProjectComposer(selectedProject.id)
+								}}>
+									Add sub-project
+								</button>
+							) : null}
 							<button className="menu-item" data-action="expand-all-projects" type="button" onClick={() => {
 								setPanelAnchor(null)
 								expandAllProjects()
@@ -662,13 +884,43 @@ export default function ProjectTasksScreen({
 			/>
 			<div className="surface-content">
 				<StatusCards />
-				<section className="panel screen-card">
-					<div className="panel-head desktop-promoted-panel-head">
-						<div className="panel-heading-inline">
-							<h2 className="panel-title">{displayProject?.title || selectedProject.title}</h2>
-							<div className="count-chip">{totalItems} item{totalItems === 1 ? '' : 's'}</div>
+						{displayProjectHasBackground ? (
+					<section
+						className="panel project-screen-header-card"
+						data-project-background-surface="screen"
+						data-has-background="true"
+					>
+						<div className="project-surface-background-media" aria-hidden="true">
+							{displayProjectResolvedBackgroundUrl ? (
+								<img src={displayProjectResolvedBackgroundUrl} alt="" className="project-surface-background-image" />
+							) : (
+								<div className="project-surface-background-placeholder" />
+							)}
+							<div className="project-surface-background-overlay project-screen-background-overlay" />
 						</div>
-					</div>
+						<div className="project-surface-background-content project-screen-header-content">
+							<div className="project-screen-title-stack">
+								<div className="detail-label">{isSavedFilterRoute ? 'Saved filter' : 'Project'}</div>
+								<h2 className="project-screen-title">{displayProject?.title || selectedProject.title}</h2>
+								<div className="project-screen-meta-row">
+									<div className="count-chip">{totalItems} item{totalItems === 1 ? '' : 's'}</div>
+									{isSavedFilterRoute ? <div className="meta-chip filter-project-chip">Filter project</div> : null}
+									{parentProject ? <div className="meta-chip">Inside {parentProject.title}</div> : null}
+								</div>
+							</div>
+						</div>
+					</section>
+				) : null}
+				<section className="panel screen-card">
+					{!displayProjectHasBackground ? (
+						<div className="panel-head desktop-promoted-panel-head">
+							<div className="panel-heading-inline">
+								<h2 className="panel-title">{displayProject?.title || selectedProject.title}</h2>
+								<div className="count-chip">{totalItems} item{totalItems === 1 ? '' : 's'}</div>
+								{isSavedFilterRoute ? <div className="meta-chip filter-project-chip">Filter project</div> : null}
+							</div>
+						</div>
+					) : null}
 					<div className="screen-body">
 						{searchOpen ? (
 							<InlineSearchPanel
@@ -680,15 +932,17 @@ export default function ProjectTasksScreen({
 								<TaskFilterPanel
 									screen="tasks"
 									allowProject={taskFilterConfig.allowProject}
-									visibleTaskList={tasks}
+									visibleTaskList={taskCollection}
 									showSavedFilters={true}
 									showManageFilters={true}
-									onApply={() => {
+								onApply={() => {
 										void applyTaskFilterDraft(taskFilterConfig.allowProject)
 										setFilterOpen(false)
 								}}
 								onReset={() => {
-									void loadSavedFilterTasks(null)
+									if (!isSavedFilterRoute) {
+										void loadSavedFilterTasks(null)
+									}
 									resetTaskFilterDraft()
 									void applyTaskFilterDraft(taskFilterConfig.allowProject)
 								}}
@@ -700,17 +954,17 @@ export default function ProjectTasksScreen({
 							/>
 						) : null}
 						{effectiveViewKind === 'list' ? <BulkTaskEditor scopeKey={bulkScopeKey} /> : null}
-						<InlineRootTaskComposer />
-						{effectiveViewKind === 'kanban' && currentProjectViewId ? (
-							<ProjectKanbanView projectId={selectedProject.id} viewId={currentProjectViewId} tasks={tasks} />
+						{canCreateRootTask ? <InlineRootTaskComposer /> : null}
+						{effectiveViewKind === 'kanban' && activeViewId ? (
+							<ProjectKanbanView projectId={selectedProject.id} viewId={activeViewId} tasks={taskCollection} focusProjectIdOverride={focusProjectIdOverride} />
 						) : effectiveViewKind === 'table' ? (
-							<ProjectTableView projectId={selectedProject.id} tasks={tableTasks} />
+							<ProjectTableView projectId={selectedProject.id} tasks={tableTasks} focusProjectIdOverride={focusProjectIdOverride} />
 						) : effectiveViewKind === 'gantt' ? (
-							<ProjectGanttView projectId={selectedProject.id} tasks={tableTasks} />
+							<ProjectGanttView projectId={selectedProject.id} tasks={tableTasks} focusProjectIdOverride={focusProjectIdOverride} />
 						) : (
 							<>
-								<InlineProjectComposer parentProjectId={selectedProject.id} />
-								{loadingTasks && !projectTasksReady && rootTasks.length === 0 && childProjects.length === 0 ? <div className="empty-state">Loading tasks…</div> : null}
+								{!isSavedFilterRoute ? <InlineProjectComposer parentProjectId={selectedProject.id} /> : null}
+								{(isSavedFilterRoute ? loadingSavedFilterTasks : loadingTasks) && !projectTasksReady && rootTasks.length === 0 && childProjects.length === 0 ? <div className="empty-state">Loading tasks…</div> : null}
 								{childProjects.length > 0 ? (
 									<ProjectPreview label="Sub-projects" parentProjectId={selectedProject.id}>
 										{childProjects.map(project => (
@@ -730,11 +984,18 @@ export default function ProjectTasksScreen({
 							) : null}
 							{visibleRootTasks.length > 0 ? (
 								<ProjectPreview label="Tasks" parentProjectId={selectedProject.id}>
-									<TaskTree taskList={tasks} matcher={taskMatcher} sortBy={taskFilters.sortBy} bulkMode={bulkMode} />
-								</ProjectPreview>
-							) : null}
-								{!loadingTasks && projectTasksReady && childProjects.length === 0 && visibleRootTasks.length === 0 ? (
-									<div className="empty-state">No tasks or sub-projects yet. Use the + button to start adding.</div>
+								<TaskTree
+									taskList={taskCollection}
+									matcher={taskMatcher}
+									sortBy={taskFilters.sortBy}
+									bulkMode={bulkMode}
+									focusProjectIdOverride={focusProjectIdOverride}
+									savedFilterProjectId={isSavedFilterRoute ? projectId : null}
+								/>
+							</ProjectPreview>
+						) : null}
+								{!(isSavedFilterRoute ? loadingSavedFilterTasks : loadingTasks) && projectTasksReady && childProjects.length === 0 && visibleRootTasks.length === 0 ? (
+									<div className="empty-state">{isSavedFilterRoute ? 'No tasks currently match this saved filter.' : 'No tasks or sub-projects yet. Use the + button to start adding.'}</div>
 								) : null}
 							</>
 						)}

@@ -17,10 +17,12 @@ export default function ProjectKanbanView({
 	projectId,
 	viewId,
 	tasks,
+	focusProjectIdOverride = null,
 }: {
 	projectId: number
 	viewId: number
 	tasks: Task[]
+	focusProjectIdOverride?: number | null
 }) {
 	const isWideLayout = useWideLayout()
 	const navigate = useNavigate()
@@ -267,7 +269,9 @@ export default function ProjectKanbanView({
 						setFilterOpen(false)
 					}}
 					onReset={() => {
-						void loadSavedFilterTasks(null)
+						if (projectId > 0) {
+							void loadSavedFilterTasks(null)
+						}
 						resetTaskFilterDraft()
 						void applyTaskFilterDraft(taskFilterConfig.allowProject)
 					}}
@@ -275,7 +279,7 @@ export default function ProjectKanbanView({
 						void loadSavedFilterTasks(projectId)
 						setFilterOpen(false)
 						if (projectId) {
-							navigate('/filters')
+							navigate(`/projects/${projectId}`)
 						}
 					}}
 					onManageFilters={() => {
@@ -372,7 +376,7 @@ export default function ProjectKanbanView({
 													if (isWideLayout) {
 														void openTaskDetail(task.id)
 													}
-													openFocusedTask(task.id, task.project_id, screen)
+													openFocusedTask(task.id, focusProjectIdOverride || task.project_id, screen)
 												}}
 											>
 												<TaskCard task={task} childCount={childCount} compact={true} />

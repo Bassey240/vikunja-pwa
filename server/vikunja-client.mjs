@@ -106,17 +106,17 @@ export function createVikunjaClient({
 		},
 	}
 
-	async function request(route, options = {}, attempt = 0) {
-		const response = await requestRaw(route, options, attempt)
-		const rawText = await response.text()
-		const payload = tryParseJson(rawText)
+		async function request(route, options = {}, attempt = 0) {
+			const response = await requestRaw(route, options, attempt)
+			const rawText = await response.text()
+			const payload = tryParseJson(rawText)
 
-		if (!response.ok) {
-			const error = new Error(`Vikunja request failed with ${response.status}`)
-			error.statusCode = response.status
-			error.details = payload || rawText || null
-			throw error
-		}
+			if (!response.ok) {
+				const error = new Error(getVikunjaErrorMessage(payload, rawText, response.status))
+				error.statusCode = response.status
+				error.details = payload || rawText || null
+				throw error
+			}
 
 		return payload
 	}
@@ -354,6 +354,59 @@ export async function createPasswordAccount({baseUrl, username, password, totpPa
 	}
 }
 
+export async function createOidcAccount({baseUrl, provider, code, redirectUrl}) {
+	const response = await fetch(new URL(`auth/openid/${encodeURIComponent(provider)}/callback`, `${baseUrl}/`), {
+		method: 'POST',
+		headers: {
+			Accept: 'application/json',
+			'Content-Type': 'application/json',
+		},
+		body: JSON.stringify({
+			code,
+			redirect_url: redirectUrl,
+		}),
+	})
+
+	const rawText = await response.text()
+	const payload = tryParseJson(rawText)
+
+	if (!response.ok) {
+		const error = new Error(payload?.message || payload?.error || `Vikunja OIDC login failed with ${response.status}`)
+		error.statusCode = response.status
+		error.details = payload || rawText || null
+		throw error
+	}
+
+	const accessToken = `${payload?.token || ''}`.trim()
+	const refreshCookie = extractRefreshCookie(response)
+	if (!accessToken || !refreshCookie) {
+		const error = new Error('Vikunja OIDC login did not return both an access token and a refresh cookie.')
+		error.statusCode = 502
+		throw error
+	}
+
+	const client = createVikunjaClient({
+		baseUrl,
+		authMode: 'password',
+		accessToken,
+		refreshCookie,
+	})
+
+	const [user, instanceFeatures] = await Promise.all([
+		client.request('user'),
+		loadInstanceFeatures(client),
+	])
+
+	return {
+		authMode: 'password',
+		baseUrl,
+		accessToken,
+		refreshCookie,
+		instanceFeatures,
+		user,
+	}
+}
+
 export async function createApiTokenAccount({baseUrl, apiToken}) {
 	const client = createVikunjaClient({
 		baseUrl,
@@ -491,6 +544,27 @@ function tryParseJson(value) {
 	} catch {
 		return null
 	}
+}
+
+function getVikunjaErrorMessage(payload, rawText, statusCode) {
+	const directMessage = `${payload?.message || payload?.error || ''}`.trim()
+	if (directMessage) {
+		return directMessage
+	}
+
+	if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
+		const firstError = `${payload.errors[0]?.message || payload.errors[0]?.error || payload.errors[0] || ''}`.trim()
+		if (firstError) {
+			return firstError
+		}
+	}
+
+	const fallbackText = `${rawText || ''}`.trim()
+	if (fallbackText) {
+		return fallbackText
+	}
+
+	return `Vikunja request failed with ${statusCode}`
 }
 
 function formatParam(value) {

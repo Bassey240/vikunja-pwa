@@ -4,6 +4,7 @@ import {useAppStore, type AppStore} from '@/store'
 import {getProjectDescendantIds} from '@/store/project-helpers'
 import {findTaskInAnyContext, getTaskCollectionForTask, isSameListManualTaskReorderAllowed} from '@/store/selectors'
 import type {Task} from '@/types'
+import {buildSavedFilterProject} from '@/utils/saved-filters'
 import {
 	beginProjectDropTrace,
 	beginTaskDropTrace,
@@ -705,9 +706,12 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 	}
 
 	const releaseProjectTarget =
-		dragContext && dragContext.lastX != null && dragContext.lastY != null
+		(dragContext && dragContext.lastX != null && dragContext.lastY != null
 			? hitTestProjectRows(dragContext, dragContext.lastX, dragContext.lastY)
-			: null
+			: null)
+		|| (dragContext?.dropTargetProjectId
+			? {projectId: dragContext.dropTargetProjectId, element: dragContext.dropTargetProjectElement}
+			: null)
 	// Subtask detection: try hit-testing at the last pointer position first.
 	// Fall back to the dropTargetTaskId tracked during the drag — SortableJS
 	// may have rearranged the DOM before onEnd, making post-drop hit-testing
@@ -724,11 +728,13 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 
 	const kanbanBucketId = Number((event.to instanceof HTMLElement ? event.to.dataset.kanbanBucketId : 0) || 0)
 	const fromBucketId = Number((event.from instanceof HTMLElement ? (event.from as HTMLElement).dataset.kanbanBucketId : 0) || 0)
+	const savedFilterSurfaceProjectId = resolveSavedFilterTaskSurfaceProjectId(event.to, store)
 	debugDragLog('[DnD:end] resolved drop context', {
 		taskId,
 		taskTitle: task.title,
 		releaseProjectTarget: releaseProjectTarget?.projectId || null,
 		releaseTaskTarget: releaseTaskTarget?.taskId || null,
+		savedFilterSurfaceProjectId,
 		kanbanBucketId,
 		fromBucketId,
 		eventToTag: event.to?.tagName,
@@ -741,10 +747,10 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 		lastY: dragContext?.lastY,
 	})
 
-	if (releaseProjectTarget?.projectId) {
+	if (releaseProjectTarget?.projectId && releaseProjectTarget.projectId > 0) {
 		debugDragLog('[DnD:end] project drop', {projectId: releaseProjectTarget.projectId})
 		const targetProjectId = releaseProjectTarget.projectId
-		const visibleTaskList = getVisibleTaskListForTaskDrop(store, taskId, targetProjectId, collections)
+		const visibleTaskList = getVisibleTaskListForTaskDrop(store, taskId, targetProjectId, collections, null)
 		const traceToken = beginTaskDropTrace({
 			taskId,
 			sourceProjectId: task.project_id,
@@ -862,7 +868,12 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 	}
 
 	const parentBranch = event.to.closest('.task-branch[data-task-branch-id]')
-	const parentTaskId = parentBranch instanceof HTMLElement ? Number(parentBranch.dataset.taskBranchId || 0) || null : null
+	const rootTaskTree = event.to.closest('.task-tree[data-root-parent-task-id]')
+	const rootParentTaskId =
+		rootTaskTree instanceof HTMLElement ? Number(rootTaskTree.dataset.rootParentTaskId || 0) || null : null
+	const parentTaskId = parentBranch instanceof HTMLElement
+		? Number(parentBranch.dataset.taskBranchId || 0) || null
+		: rootParentTaskId
 	const siblingIds = getSiblingTaskIdsFromContainer(event.to)
 	const movedIndex = siblingIds.indexOf(taskId)
 	if (movedIndex === -1) {
@@ -871,7 +882,16 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 	}
 
 	const targetProjectId = resolveTaskDropTargetProjectId(event.to, store, task.project_id, parentTaskId)
-	const visibleTaskList = getVisibleTaskListForTaskDrop(store, task.id, targetProjectId, collections)
+	const visibleTaskList = getVisibleTaskListForTaskDrop(
+		store,
+		task.id,
+		targetProjectId,
+		collections,
+		savedFilterSurfaceProjectId,
+	)
+	const savedFilterViewId = savedFilterSurfaceProjectId
+		? await resolveSavedFilterTaskViewId(store, savedFilterSurfaceProjectId)
+		: null
 	const traceToken = beginTaskDropTrace({
 		taskId,
 		sourceProjectId: task.project_id,
@@ -885,6 +905,7 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 			taskId,
 			parentTaskId,
 			targetProjectId,
+			viewId: savedFilterViewId ?? undefined,
 			beforeTaskId: siblingIds[movedIndex - 1] || null,
 			afterTaskId: siblingIds[movedIndex + 1] || null,
 			siblingIds,
@@ -913,13 +934,18 @@ async function handleSortableProjectEnd(event: SortableEvent) {
 	}
 
 	const store = useAppStore.getState()
-	const project = store.projects.find(entry => entry.id === projectId)
+	const project = getProjectLikeEntry(store, projectId)
 	if (!project) {
 		restoreSortableDomPosition(event)
 		return
 	}
+	const savedFilterProject = project.id < 0 || project.is_saved_filter === true
 
 	if (dragContext?.dropTargetProjectId) {
+		if (savedFilterProject) {
+			restoreSortableDomPosition(event)
+			return
+		}
 		const traceToken = beginProjectDropTrace({
 			projectId,
 			sourceParentProjectId: Number(project.parent_project_id || 0),
@@ -942,6 +968,10 @@ async function handleSortableProjectEnd(event: SortableEvent) {
 	const containerParentProjectId = Number((event.to instanceof HTMLElement ? event.to.dataset.parentProjectId || 0 : 0) || 0)
 	const parentNode = event.to.closest('.project-node[data-project-node-id]')
 	const parentProjectId = containerParentProjectId || (parentNode instanceof HTMLElement ? Number(parentNode.dataset.projectNodeId || 0) : 0)
+	if (savedFilterProject && parentProjectId !== 0) {
+		restoreSortableDomPosition(event)
+		return
+	}
 	const siblingIds = getSiblingProjectIdsFromContainer(event.to)
 	const movedIndex = siblingIds.indexOf(projectId)
 	if (movedIndex === -1) {
@@ -949,8 +979,8 @@ async function handleSortableProjectEnd(event: SortableEvent) {
 		return
 	}
 
-	const beforeProject = store.projects.find(project => project.id === (siblingIds[movedIndex - 1] || 0)) || null
-	const afterProject = store.projects.find(project => project.id === (siblingIds[movedIndex + 1] || 0)) || null
+	const beforeProject = getProjectLikeEntry(store, siblingIds[movedIndex - 1] || 0)
+	const afterProject = getProjectLikeEntry(store, siblingIds[movedIndex + 1] || 0)
 	const position = calculateTaskPosition(beforeProject?.position ?? null, afterProject?.position ?? null)
 	const traceToken = beginProjectDropTrace({
 		projectId,
@@ -961,7 +991,9 @@ async function handleSortableProjectEnd(event: SortableEvent) {
 	})
 	await commitProjectDrop(event, {
 		traceToken,
-		commitMove: () => store.moveProjectToParent(projectId, parentProjectId, {position, traceToken}),
+		commitMove: () => savedFilterProject
+			? store.moveSavedFilterProject(projectId, parentProjectId, {position, traceToken})
+			: store.moveProjectToParent(projectId, parentProjectId, {position, traceToken}),
 	})
 }
 
@@ -989,7 +1021,17 @@ function getSiblingTaskIdsFromContainer(container: HTMLElement) {
 function getSiblingProjectIdsFromContainer(container: HTMLElement) {
 	return Array.from(container.children)
 		.map(node => Number(node instanceof HTMLElement && node.classList.contains('project-node') ? node.dataset.projectNodeId || 0 : 0))
-		.filter(projectId => projectId > 0)
+		.filter(projectId => Number.isInteger(projectId) && projectId !== 0)
+}
+
+function getProjectLikeEntry(state: AppStore, projectId: number) {
+	const realProject = state.projects.find(entry => entry.id === projectId) || null
+	if (realProject) {
+		return realProject
+	}
+
+	const savedFilter = state.savedFilters.find(entry => entry.projectId === projectId) || null
+	return savedFilter ? buildSavedFilterProject(savedFilter) : null
 }
 
 function markSortableContainer(container: HTMLElement, kind: SortableKind) {
@@ -1373,7 +1415,19 @@ function getVisibleTaskListForTaskDrop(
 	taskId: number,
 	targetProjectId: number,
 	collections: TaskCollectionsLookup,
+	savedFilterProjectId: number | null,
 ): Task[] | null {
+	if (savedFilterProjectId) {
+		if (state.screen === 'projects') {
+			const previewTasks = collections.projectPreviewTasksById[savedFilterProjectId]
+			return Array.isArray(previewTasks) ? previewTasks : null
+		}
+
+		if (state.screen === 'tasks' && state.selectedSavedFilterProjectId === savedFilterProjectId) {
+			return collections.savedFilterTasks
+		}
+	}
+
 	if (state.screen === 'projects') {
 		const previewTasks = collections.projectPreviewTasksById[targetProjectId]
 		return Array.isArray(previewTasks) ? previewTasks : null
@@ -1406,12 +1460,21 @@ function resolveTaskDropTargetProjectId(
 		return Number(parentTask?.project_id || fallbackProjectId)
 	}
 
+	const savedFilterSurfaceProjectId = resolveSavedFilterTaskSurfaceProjectId(container, state)
+	if (savedFilterSurfaceProjectId) {
+		return fallbackProjectId
+	}
+
 	const projectNode = container.closest('.project-node[data-project-node-id]')
 	if (projectNode instanceof HTMLElement) {
 		const projectId = Number(projectNode.dataset.projectNodeId || 0)
-		if (projectId) {
+		if (projectId > 0) {
 			return projectId
 		}
+	}
+
+	if (state.screen === 'tasks' && state.selectedSavedFilterProjectId) {
+		return fallbackProjectId
 	}
 
 	if (state.screen === 'tasks' && state.selectedProjectId) {
@@ -1423,6 +1486,37 @@ function resolveTaskDropTargetProjectId(
 	}
 
 	return fallbackProjectId
+}
+
+function resolveSavedFilterTaskSurfaceProjectId(
+	container: HTMLElement,
+	_state: AppStore,
+) {
+	const taskTree = container.closest('.task-tree[data-saved-filter-project-id]')
+	if (taskTree instanceof HTMLElement) {
+		const projectId = Number(taskTree.dataset.savedFilterProjectId || 0)
+		return projectId < 0 ? projectId : null
+	}
+
+	return null
+}
+
+async function resolveSavedFilterTaskViewId(
+	state: AppStore,
+	savedFilterProjectId: number,
+) {
+	if (!savedFilterProjectId || savedFilterProjectId >= 0) {
+		return null
+	}
+
+	if (savedFilterProjectId === Number(state.selectedSavedFilterProjectId || 0)) {
+		const currentViewId = Number(state.currentSavedFilterViewId || 0) || null
+		if (currentViewId) {
+			return currentViewId
+		}
+	}
+
+	return state.resolveProjectTaskViewId(savedFilterProjectId)
 }
 
 function resolveKanbanDoneBucketId(
