@@ -332,6 +332,52 @@ function isTotpLoginChallenge(error: ApiError | null | undefined) {
 	return message.includes('totp') || detailsMessage.includes('totp')
 }
 
+function getApiErrorStatusCode(error: unknown) {
+	if (!error || typeof error !== 'object') {
+		return null
+	}
+
+	const value = (error as {statusCode?: unknown}).statusCode
+	return typeof value === 'number' ? value : null
+}
+
+function isOfflineSnapshotRestoreCandidate(error: unknown) {
+	if (getApiErrorStatusCode(error) !== null) {
+		return false
+	}
+
+	if (typeof window !== 'undefined' && window.navigator.onLine === false) {
+		return true
+	}
+
+	const message = formatError(error as Error).trim().toLowerCase()
+	return (
+		message === 'failed to fetch' ||
+		message === 'load failed' ||
+		message.includes('network request failed') ||
+		message.includes('networkerror when attempting to fetch resource') ||
+		message.includes('the internet connection appears to be offline') ||
+		message.includes('the network connection was lost') ||
+		message.includes('fetch failed')
+	)
+}
+
+async function restoreOfflineSnapshotIfPossible(
+	error: unknown,
+	get: () => AppStore,
+	set: Parameters<StateCreator<AppStore, [], [], AuthSlice>>[0],
+) {
+	if (!isOfflineSnapshotRestoreCandidate(error)) {
+		return false
+	}
+
+	const restored = await restoreOfflineSnapshotState(get, set)
+	if (restored) {
+		set({error: null})
+	}
+	return restored
+}
+
 function getOidcProviders(info: VikunjaInfo | null) {
 	return info?.auth?.openid?.providers || info?.auth?.openid_connect?.providers || []
 }
@@ -544,9 +590,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 				}
 			}
 		} catch (error) {
-			if (!get().isOnline && await restoreOfflineSnapshotState(get, set)) {
-				set({error: null})
-			} else {
+			if (!await restoreOfflineSnapshotIfPossible(error, get, set)) {
 				set({error: formatError(error as Error)})
 			}
 		} finally {
@@ -607,9 +651,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 			persistAccountForm(get().accountForm)
 			void persistOfflineAuthSnapshot(get())
 		} catch (error) {
-			if (!get().isOnline && await restoreOfflineSnapshotState(get, set)) {
-				set({error: null})
-			} else {
+			if (!await restoreOfflineSnapshotIfPossible(error, get, set)) {
 				set({error: formatError(error as Error)})
 				get().resetConnectedData()
 			}
