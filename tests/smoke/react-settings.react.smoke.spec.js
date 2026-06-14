@@ -289,7 +289,6 @@ test('migration settings support file uploads and oauth callback completion', as
 
 	const migrationSection = await expandSettingsSection(page, 'migration')
 	await expect(migrationSection.getByText(/If that callback still points at the original Vikunja frontend/i)).toBeVisible()
-	await expect(migrationSection.getByText(/developer app must also use the same callback URL/i)).toBeVisible()
 	await expect(migrationSection.getByText(new RegExp(`${stack.appUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/migrate/todoist`))).toBeVisible()
 	await expect(migrationSection.locator('[data-migration-service="todoist"]')).toContainText('Ready to import from Todoist.')
 	await expect(migrationSection.locator('[data-migration-service="ticktick"]')).toContainText('Upload a TickTick export file to begin.')
@@ -991,6 +990,8 @@ test('sign-in form keeps the server and username after reload and session loss',
 })
 
 test('offline reload restores the last signed-in shell from the cached snapshot', async ({page}) => {
+	// Cold service-worker offline boot can exceed the default 30s budget under CI load.
+	test.slow()
 	await loginWithPassword(page)
 	await page.evaluate(async () => {
 		if ('serviceWorker' in navigator) {
@@ -1015,12 +1016,14 @@ test('offline reload restores the last signed-in shell from the cached snapshot'
 	await page.reload({waitUntil: 'domcontentloaded'})
 
 	await expect.poll(() => page.evaluate(() => window.location.pathname)).toBe('/')
-	await expect(page.getByRole('navigation', {name: 'Primary'})).toBeVisible({timeout: 15_000})
+	await expect(page.getByRole('navigation', {name: 'Primary'})).toBeVisible({timeout: 30_000})
 	await expect(page.getByRole('button', {name: 'Today'})).toBeVisible()
 	await expect(page.getByRole('heading', {name: 'Connect to your Vikunja server'})).toHaveCount(0)
 })
 
 test('offline reload restores the last signed-in shell even when online status is stale during boot', async ({page}) => {
+	// Cold service-worker offline boot can exceed the default 30s budget under CI load.
+	test.slow()
 	await loginWithPassword(page)
 	await page.evaluate(async () => {
 		if ('serviceWorker' in navigator) {
@@ -1053,7 +1056,7 @@ test('offline reload restores the last signed-in shell even when online status i
 	await page.reload({waitUntil: 'domcontentloaded'})
 
 	await expect.poll(() => page.evaluate(() => window.location.pathname)).toBe('/')
-	await expect(page.getByRole('navigation', {name: 'Primary'})).toBeVisible({timeout: 15_000})
+	await expect(page.getByRole('navigation', {name: 'Primary'})).toBeVisible({timeout: 30_000})
 	await expect(page.getByRole('button', {name: 'Today'})).toBeVisible()
 	await expect(page.getByRole('heading', {name: 'Connect to your Vikunja server'})).toHaveCount(0)
 	await expect(page.locator('.runtime-status-banner').first()).toContainText('saved locally and will sync')

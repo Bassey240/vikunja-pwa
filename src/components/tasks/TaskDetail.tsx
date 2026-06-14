@@ -1,4 +1,6 @@
 import {api} from '@/api'
+import AttachmentDownloadLink from '@/components/common/AttachmentDownloadLink'
+import AuthedImage from '@/components/common/AuthedImage'
 import DetailSheet from '@/components/common/DetailSheet'
 import {defaultTaskFilters, taskMatchesProjectFilters} from '@/hooks/useFilters'
 import useWideLayout from '@/hooks/useWideLayout'
@@ -718,12 +720,15 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 	] as TaskRelationKind[]
 
 	return (
-		<DetailSheet open={taskDetailOpen} closeAction="close-task-detail" onClose={closeTaskDetail} mode={mode}>
+		<DetailSheet open={taskDetailOpen} closeAction="close-task-detail" onClose={closeTaskDetail} mode={mode} variant="page" title={taskDetail ? taskDetail.title : 'Task'}>
 			<div className="sheet-head detail-sheet-head">
-				<div>
-					<div className="panel-label">Task Detail</div>
-					<div className="panel-title">{taskDetail ? taskDetail.title : 'Loading…'}</div>
-				</div>
+				{/* Only the inspector lacks a topbar to show the title. */}
+				{mode === 'inspector' ? (
+					<div>
+						<div className="panel-label">Task Detail</div>
+						<div className="panel-title">{taskDetail ? taskDetail.title : 'Loading…'}</div>
+					</div>
+				) : null}
 				<div className="panel-action-row">
 					{taskDetail && taskSubscribed !== null ? (
 						<button
@@ -757,19 +762,19 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 									</button>
 								</div>
 								<div className="detail-media-viewer-body">
-									<img
+									<AuthedImage
 										src={`/api/tasks/${taskDetail.id}/attachments/${previewAttachment.id}`}
 										alt={previewAttachment.file.name || 'Attachment preview'}
 									/>
 								</div>
 								<div className="detail-inline-actions">
-									<a
+									<AttachmentDownloadLink
 										className="composer-submit"
-										href={`/api/tasks/${taskDetail.id}/attachments/${previewAttachment.id}`}
-										download={previewAttachment.file.name || 'attachment'}
+										path={`/api/tasks/${taskDetail.id}/attachments/${previewAttachment.id}`}
+										filename={previewAttachment.file.name || 'attachment'}
 									>
 										Download
-									</a>
+									</AttachmentDownloadLink>
 								</div>
 							</div>
 						</div>

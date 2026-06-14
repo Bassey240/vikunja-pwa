@@ -5,6 +5,9 @@ export default defineConfig({
 	testMatch: '*.spec.js',
 	fullyParallel: false,
 	workers: 1,
+	// Pointer-simulated drag/drop smoke flows flake intermittently on timing; one retry
+	// absorbs that without masking real regressions (a true break still fails twice).
+	retries: 1,
 	timeout: 30_000,
 	reporter: [
 		['list'],

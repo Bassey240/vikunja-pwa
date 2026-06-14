@@ -3,6 +3,7 @@ import ProjectDetail from '@/components/projects/ProjectDetail'
 import ShellOverlays from '@/components/layout/ShellOverlays'
 import WideSidebar from '@/components/layout/WideSidebar'
 import AuthScreen from '@/components/auth/AuthScreen'
+import {getPlatform} from '@/platform/registry'
 import TodayScreen from '@/components/screens/TodayScreen'
 import InboxScreen from '@/components/screens/InboxScreen'
 import UpcomingScreen from '@/components/screens/UpcomingScreen'
@@ -72,6 +73,7 @@ export default function AppShell() {
 	const initialized = useAppStore(state => state.initialized)
 	const initializing = useAppStore(state => state.initializing)
 	const connected = useAppStore(state => state.connected)
+	const {locked: iosLocked} = getPlatform().authGate.useLockState()
 	const account = useAppStore(state => state.account)
 	const isOnline = useAppStore(state => state.isOnline)
 	const offlineReadOnlyMode = useAppStore(state => state.offlineReadOnlyMode)
@@ -203,6 +205,28 @@ export default function AppShell() {
 			}
 
 			await state.loadProjects({silent: true})
+		},
+	})
+
+	// Foreground notification polling → local notifications (opt-in).
+	useCollectionPolling({
+		enabled:
+			getPlatform().notificationSurface.enabled &&
+			initialized &&
+			connected &&
+			!linkShareAuth &&
+			isOnline &&
+			!offlineReadOnlyMode,
+		intervalMs: 60_000,
+		mutationDebounceMs: collectionPollingConfig.mutationDebounceMs,
+		onPoll: async () => {
+			const state = useAppStore.getState()
+			await state.loadNotifications({silent: true})
+			const next = useAppStore.getState()
+			await getPlatform().notificationSurface.surface(
+				next.notifications,
+				next.account?.user || null,
+			)
 		},
 	})
 
@@ -675,8 +699,15 @@ export default function AppShell() {
 		)
 	}
 
+	const {LockScreen, OnboardingScreen} = getPlatform().authGate
+
+	if (LockScreen && iosLocked) {
+		return <LockScreen />
+	}
+
 	if (initialized && !connected) {
-		return <AuthScreen />
+		const Onboarding = OnboardingScreen ?? AuthScreen
+		return <Onboarding />
 	}
 
 	if (connected && linkShareAuth) {

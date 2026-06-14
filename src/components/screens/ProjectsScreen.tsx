@@ -235,7 +235,7 @@ export default function ProjectsScreen() {
 					{
 						action: 'open-projects-menu',
 						label: 'Menu',
-						text: '⋯',
+						text: '⋮',
 						className: 'topbar-overview-menu-button',
 						active: Boolean(panelAnchor),
 						menuToggle: true,

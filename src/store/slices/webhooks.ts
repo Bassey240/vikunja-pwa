@@ -74,7 +74,9 @@ export const createWebhooksSlice: StateCreator<AppStore, [], [], WebhooksSlice> 
 				userWebhooksLoaded: true,
 			})
 		} catch (error) {
-			set({error: formatError(error as Error)})
+			// Mark loaded even on failure so the section's effect stops re-firing
+			// the request every render (infinite loop / flicker otherwise).
+			set({error: formatError(error as Error), userWebhooksLoaded: true})
 		} finally {
 			set({userWebhooksLoading: false})
 		}
@@ -142,7 +144,10 @@ export const createWebhooksSlice: StateCreator<AppStore, [], [], WebhooksSlice> 
 				userWebhookEventsLoaded: true,
 			})
 		} catch (error) {
-			set({error: formatError(error as Error)})
+			// Mark as loaded even on failure — otherwise the consuming effect
+			// keeps re-firing this request every render (the section's callbacks
+			// are unstable), causing an infinite fetch loop / screen flicker.
+			set({error: formatError(error as Error), userWebhookEventsLoaded: true})
 		}
 	},
 

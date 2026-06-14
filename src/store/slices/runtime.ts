@@ -1,4 +1,5 @@
 import {formatError} from '@/utils/formatting'
+import {getPlatform} from '@/platform/registry'
 import type {StateCreator} from 'zustand'
 import type {AppStore} from '../index'
 import type {ConflictEntry} from '../offline-sync'
@@ -218,6 +219,11 @@ export const createRuntimeSlice: StateCreator<AppStore, [], [], RuntimeSlice> = 
 		})
 
 		if (!('serviceWorker' in window.navigator)) {
+			return
+		}
+
+		if (!getPlatform().serviceWorker.shouldRegister) {
+			// The platform opted out of service-worker registration.
 			return
 		}
 

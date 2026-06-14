@@ -334,19 +334,28 @@ export default function ProjectGanttView({
 				</div>
 			</div>
 			<div className="project-gantt-presets">
-				{presets.map(preset => (
-					<button
-						key={preset.label}
-						className="pill-button subtle"
-						type="button"
-						onClick={() => {
-							setRangeFrom(preset.from)
-							setRangeTo(preset.to)
-						}}
-					>
-						{preset.label}
-					</button>
-				))}
+				<select
+					className="gantt-sort-select gantt-preset-select"
+					value=""
+					onChange={event => {
+						const preset = presets.find(candidate => candidate.label === event.currentTarget.value)
+						if (!preset) {
+							return
+						}
+
+						setRangeFrom(preset.from)
+						setRangeTo(preset.to)
+					}}
+				>
+					<option value="" disabled>
+						Jump to range…
+					</option>
+					{presets.map(preset => (
+						<option key={preset.label} value={preset.label}>
+							{preset.label}
+						</option>
+					))}
+				</select>
 			</div>
 			{composerOpen ? (
 				<form
@@ -500,7 +509,7 @@ export default function ProjectGanttView({
 													toggleTaskMenu(entry.task.id, getMenuAnchor(event.currentTarget))
 												}}
 											>
-												⋯
+												⋮
 											</button>
 											{isDragging ? (
 												<div className="gantt-drag-tooltip">

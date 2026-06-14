@@ -1,21 +1,27 @@
 import {storageKeys} from '@/storageKeys'
-import {loadJson, loadString, saveString} from '@/utils/storage'
+import {loadString, saveString} from '@/utils/storage'
+import {DESKTOP_VIEW_KINDS, MOBILE_VIEW_KINDS, type ProjectViewKind} from './view-resolution'
 
-const SUPPORTED_PROJECT_VIEW_KINDS = new Set(['list', 'kanban', 'table', 'gantt'])
+export {DESKTOP_VIEW_KINDS, MOBILE_VIEW_KINDS, resolveTaskViewId} from './view-resolution'
+export type {ProjectViewKind} from './view-resolution'
 
-export function loadPersistedPreferredProjectViewKind() {
-	const preferredKind = loadString(storageKeys.preferredProjectViewKind, '')
-	if (preferredKind && SUPPORTED_PROJECT_VIEW_KINDS.has(preferredKind)) {
-		return preferredKind
-	}
-
-	// One-time compatibility path from the previous per-project storage.
-	// We cannot recover the exact view kind from stored ids alone, but keeping the read here
-	// prevents older malformed values from throwing during upgrades.
-	loadJson<Record<string, number | null | string>>(storageKeys.projectViewIdsByProjectId, {})
-	return null
+function loadKind(key: string, allowed: ProjectViewKind[]): ProjectViewKind {
+	const stored = loadString(key, '') as ProjectViewKind
+	return allowed.includes(stored) ? stored : 'list'
 }
 
-export function persistPreferredProjectViewKind(kind: string | null) {
-	saveString(storageKeys.preferredProjectViewKind, kind || '')
+export function loadDefaultDesktopViewKind(): ProjectViewKind {
+	return loadKind(storageKeys.defaultProjectViewKindDesktop, DESKTOP_VIEW_KINDS)
+}
+
+export function loadDefaultMobileViewKind(): ProjectViewKind {
+	return loadKind(storageKeys.defaultProjectViewKindMobile, MOBILE_VIEW_KINDS)
+}
+
+export function persistDefaultDesktopViewKind(kind: ProjectViewKind) {
+	saveString(storageKeys.defaultProjectViewKindDesktop, kind)
+}
+
+export function persistDefaultMobileViewKind(kind: ProjectViewKind) {
+	saveString(storageKeys.defaultProjectViewKindMobile, kind)
 }

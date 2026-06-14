@@ -1,3 +1,4 @@
+import {apiBlob} from '@/api'
 import type {TaskAssignee} from '@/types'
 import {useAppStore} from '@/store'
 import {getUserDisplayName, getUserInitials} from '@/utils/formatting'
@@ -48,19 +49,10 @@ export default function UserAvatar({
 
 		void (async () => {
 			try {
-				const response = await fetch(avatarSrc, {
-					credentials: 'same-origin',
-					cache: 'no-store',
-				})
-				if (!response.ok) {
-					throw new Error(`Avatar request failed with ${response.status}`)
-				}
-
-				const blob = await response.blob()
+				const blob = await apiBlob(avatarSrc)
 				if (!blob.type.startsWith('image/')) {
 					throw new Error('Avatar response was not an image.')
 				}
-
 				objectUrl = URL.createObjectURL(blob)
 				if (active) {
 					setResolvedSrc(objectUrl)

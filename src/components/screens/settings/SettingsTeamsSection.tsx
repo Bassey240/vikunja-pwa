@@ -290,7 +290,7 @@ export default function SettingsTeamsSection({
 											title={blockedTeamManagementMessage || undefined}
 											onClick={event => openTeamMenu(event, team.id)}
 										>
-											⋯
+											⋮
 										</button>
 									</div>
 								</div>
@@ -408,7 +408,7 @@ export default function SettingsTeamsSection({
 															title={memberMenuDisabled ? blockedMemberMenuMessage : undefined}
 															onClick={event => openTeamMemberMenu(event, team.id, member.username)}
 														>
-															⋯
+															⋮
 														</button>
 													</div>
 													{teamMemberMenuAnchor?.teamId === team.id && teamMemberMenuAnchor?.username === member.username ? (

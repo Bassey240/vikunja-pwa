@@ -22,7 +22,7 @@ admin tooling.
 
 ## Current product state
 
-The current public release target is `0.4.0`. It builds on `0.3.1` and moves
+The current public release target is `0.5`. It builds on `0.3.1` and moves
 the app from a drag-and-drop stabilization hotfix into a broader integration
 and control-plane release: webhooks, migration imports, OpenID Connect login,
 saved-filter workspaces, project views, project backgrounds, background refresh
@@ -40,7 +40,7 @@ release should be treated as fully baked.
 - responsive desktop and tablet shell with sidebar and inspector behavior
 - collaboration flows for users, teams, project sharing, link shares, and shared-project access
 - user and project webhooks with in-app event selection and per-project management
-- migration tools for Todoist, Trello, Microsoft To Do, TickTick, and Vikunja export imports, with OAuth callback completion and file-upload flows
+- migration tools for Todoist, Trello, Microsoft To Do, TickTick, WeKan, generic CSV, and Vikunja export imports, with OAuth callback completion, guided CSV mapping/preview, and file-upload flows
 - OpenID Connect sign-in with provider discovery, redirect initiation, callback completion, and session bootstrap
 - project view management with create/delete flows and seeded views from current filters
 - project background management with upload/remove, Unsplash support, blur-hash previews, and project-surface rendering
@@ -56,9 +56,9 @@ planning, offline resilience, external integrations, auth flexibility, and
 operator-facing configuration now live in the same shell instead of forcing a
 handoff back to the stock Vikunja frontend.
 
-## 0.4.0 scope
+## 0.5 scope
 
-`0.4.0` is the first release where the PWA can cover the main external
+`0.5` is the first release where the PWA can cover the main external
 integration loops directly: subscribe to Vikunja webhooks, start supported
 imports, complete OIDC login, manage project backgrounds, create project views,
 and work from saved filters as first-class project workspaces. It also rolls in
@@ -68,8 +68,10 @@ For release readiness, the remaining caveat is testing depth rather than
 missing implementation: the heaviest remaining manual validation is still on
 real webhook delivery, real OAuth migration providers, and real OIDC providers.
 
-## What's New In 0.4.0
+## What's New In 0.5
 
+- The entire UI was rebuilt around a single flat design language — a tokenized system of surfaces, hairline dividers, squared corners, and no elevation shadows, applied consistently across mobile and desktop, with Geist Sans/Mono as the app typefaces.
+- The header notification panel is now opaque and correctly centered on mobile, and notification read actions are hidden on API-token logins (which Vikunja's backend cannot mark read) instead of surfacing a raw `invalid token` error.
 - User webhooks are now manageable from `Settings`, and project webhooks are now manageable from `Project detail`, including target URL, secret, and event selection.
 - Migration imports are now available inside the PWA for Todoist, Trello, Microsoft To Do, TickTick, and Vikunja export flows, with OAuth callback handling and per-service status reporting.
 - OpenID Connect login is now fully wired end to end: provider discovery, redirect launch, callback completion, and PWA session creation.
@@ -81,7 +83,7 @@ real webhook delivery, real OAuth migration providers, and real OIDC providers.
 - Background refresh polling now keeps task collections and the project tree fresher after external changes, with mutation debounce and visibility-return refresh behavior.
 - The audit remediation pass added raw-body limits on sensitive upload endpoints, stricter cookie-auth origin checks, shared helper cleanup, and missing token definitions.
 
-Included in `0.4.0`:
+Included in `0.5`:
 
 - everything from `0.3.1`
 - user and project webhook management
@@ -94,7 +96,7 @@ Included in `0.4.0`:
 - permission/admin cleanup and access visibility improvements
 - security hardening from the audit remediation plan
 
-Explicitly not in `0.4.0`:
+Explicitly not in `0.5`:
 
 - webhook-driven realtime push invalidation
 - a global instance-user role editor beyond the current CLI bridge surface
@@ -204,39 +206,45 @@ Since `0.2.1`, this repo gained:
 - Expanded account and security surfaces, including 2FA login and management, CalDAV tokens, scoped API tokens, active-session management, password/email changes, export/download flow, and account-deletion scheduling.
 - Server-aware auth gating so registration and password-reset affordances are only shown when the connected Vikunja instance actually supports them.
 - Broader regression coverage and release tooling, including stronger Gantt/offline/Kanban smoke coverage, local Docker LAN startup polish, and a cleaner curated-GitHub release workflow.
+- Migration support now covers Vikunja 2.3.0's new WeKan and generic CSV import flows, including a dedicated CSV detect/map/preview/import screen and gateway compatibility with both older and newer upstream migration route methods.
 
 ## Screenshots
+
+All screenshots are from the `0.5` flat-design release.
 
 ### Demo
 
 [![Watch the demo on YouTube](https://img.youtube.com/vi/NCnS1X4c3dg/maxresdefault.jpg)](https://youtu.be/NCnS1X4c3dg)
 
-### Enhanced Gantt
-
-![Enhanced Gantt view](docs/media/gantt-view.png)
-
-The `0.3.x` Gantt view adds zoom presets, dependency arrows, richer task
-bars, and direct drag/resize planning.
-
 ### Mobile
 
-| Today | Inbox | Quick Add |
+| Today | Projects | Project detail |
 |:---:|:---:|:---:|
-| ![Today screen](docs/media/Mobile%201.PNG) | ![Inbox screen](docs/media/Mobile%202.PNG) | ![Quick add](docs/media/Mobile%203.PNG) |
+| ![Today screen](docs/media/mobile-today-dark.png) | ![Projects list with colour spines](docs/media/mobile-projects.png) | ![Project detail with sub-projects and subtasks](docs/media/mobile-project-detail.png) |
 
-| Projects | Project Detail | Navigation |
+| Task detail | Project background & access | Settings |
 |:---:|:---:|:---:|
-| ![Projects screen](docs/media/Mobile%204.PNG) | ![Project detail with sub-projects](docs/media/Mobile%205.PNG) | ![Navigation menu](docs/media/Mobile%206.PNG) |
+| ![Task detail page](docs/media/mobile-task-detail-dark.png) | ![Project background and session access level](docs/media/mobile-project-background-dark.png) | ![Settings](docs/media/mobile-settings-dark.png) |
 
-| Settings |
-|:---:|
-| ![Settings screen](docs/media/Mobile%207.PNG) |
+#### Light mode
+
+| Today | Project board | Task detail |
+|:---:|:---:|:---:|
+| ![Today in light mode](docs/media/mobile-today-light.png) | ![Project board in light mode](docs/media/mobile-project-board-light.png) | ![Task detail in light mode](docs/media/mobile-task-detail-light.png) |
+
+| Settings | Project background |
+|:---:|:---:|
+| ![Settings in light mode](docs/media/mobile-settings-light.png) | ![Project background in light mode](docs/media/mobile-project-background-light.png) |
 
 ### Desktop
 
-| Today | Projects | Project Detail |
+| Today | Projects | Gantt + inspector |
 |:---:|:---:|:---:|
-| ![Desktop today view](docs/media/Desktop%201.png) | ![Desktop projects with inspector](docs/media/Desktop%202.png) | ![Desktop project detail](docs/media/Desktop%203.png) |
+| ![Desktop today view](docs/media/desktop-today.png) | ![Desktop projects with expanded tree](docs/media/desktop-projects.png) | ![Desktop Gantt with task inspector](docs/media/desktop-gantt.png) |
+
+| Search | Settings |
+|:---:|:---:|
+| ![Desktop search results](docs/media/desktop-search.png) | ![Desktop settings](docs/media/desktop-settings.png) |
 
 ## Prerequisites
 
@@ -486,8 +494,10 @@ kept outside this public repo.
 - The browser never receives your Vikunja API token.
 - The browser now talks to a same-origin Node backend that owns the Vikunja credentials/session.
 - For self-hosted Vikunja, the intended path is `Settings > Accounts` with username/password login.
+- Password login now exposes Vikunja's native `Stay logged in` / `long_token` remembered-session mode.
 - API token mode still exists, but the token is submitted to the backend and kept out of browser storage.
 - Account sessions are now stored server-side in an encrypted local file, so ordinary backend restarts keep interactive sessions.
+- To keep remembered Vikunja sessions valid across upstream restarts, the Vikunja deployment itself still needs a fixed `service.JWTSecret` / `VIKUNJA_SERVICE_JWTSECRET`.
 - Admin user lifecycle actions and bridge-only administration operations run through a backend-only Vikunja CLI bridge; the browser never gets Docker or CLI access.
 - Administration currently exposes operator-gated lifecycle operations plus SMTP and migration-provider config. Instance-level user roles or global permissions are not exposed by the current Vikunja CLI bridge.
 - Deployment-level SMTP/admin config is only written to an explicit host config path. The running Vikunja container filesystem is never treated as the source of truth.
@@ -584,6 +594,7 @@ Not supported:
 - Kanban drag-and-drop across sort, bucket move, subtask drop, menu move, and done-bucket toggle flows
 - offline snapshot restore plus queued supported task/project edits with reconnect replay and visible sync status
 - backend-managed account sessions with `HttpOnly` app cookies and encrypted file-backed persistence
+- Vikunja-native remembered password sessions through `long_token` / `Stay logged in`
 - remote Vikunja session listing/revocation for password-based connections
 - account/security settings for avatars, active sessions, password/email changes, 2FA, CalDAV tokens, API tokens, export, and deletion scheduling
 - instance-aware auth gating for registration and password-reset flows
@@ -625,6 +636,7 @@ Install dependencies and run the local verification suite:
 npm install
 npm run lint
 npm run build
+npm run test:unit
 npm run test:smoke:api
 ```
 

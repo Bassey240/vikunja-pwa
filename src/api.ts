@@ -1,69 +1,38 @@
 import {markCollectionMutationActivity} from '@/utils/collectionPolling'
+import {createGatewayClient} from '@/api/gatewayClient'
+import {getPlatform} from '@/platform/registry'
+import type {ApiOptions, ApiTransport, UploadOptions} from '@/api/transport'
 
-export interface ApiError extends Error {
-	statusCode?: number
-	details?: unknown
-}
+export type {ApiError, ApiOptions, UploadOptions} from '@/api/transport'
 
-interface ApiOptions<TBody> {
-	method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
-	body?: TBody
+// The registry's transport slot is null on PWA; fall back to the gateway here
+// so registry.ts never imports gatewayClient (avoids a registry↔api cycle).
+let cachedGateway: ApiTransport | null = null
+function transport(): ApiTransport {
+	return getPlatform().transport ?? (cachedGateway ??= createGatewayClient())
 }
 
 export async function api<TResponse, TBody = unknown>(
 	path: string,
 	options: ApiOptions<TBody> = {},
 ): Promise<TResponse> {
-	const response = await fetch(path, {
-		method: options.method || 'GET',
-		credentials: 'same-origin',
-		headers: {
-			'Content-Type': 'application/json',
-		},
-		body: options.body ? JSON.stringify(options.body) : undefined,
-	})
-
-	const payload = await response.json().catch(() => ({}))
-	if (!response.ok) {
-		const error = new Error(
-			(payload as {error?: string}).error || 'Request failed.',
-		) as ApiError
-		error.statusCode = response.status
-		error.details = (payload as {details?: unknown}).details || null
-		throw error
-	}
-
+	const result = await transport().request<TResponse, TBody>(path, options)
 	if ((options.method || 'GET') !== 'GET') {
 		markCollectionMutationActivity()
 	}
-
-	return payload as TResponse
+	return result
 }
 
 export async function uploadApi<TResponse>(
 	path: string,
 	formData: FormData,
-	options: {
-		method?: 'POST' | 'PUT'
-	} = {},
+	options: UploadOptions = {},
 ): Promise<TResponse> {
-	const response = await fetch(path, {
-		method: options.method || 'POST',
-		credentials: 'same-origin',
-		body: formData,
-	})
-
-	const payload = await response.json().catch(() => ({}))
-	if (!response.ok) {
-		const error = new Error(
-			(payload as {error?: string}).error || 'Request failed.',
-		) as ApiError
-		error.statusCode = response.status
-		error.details = (payload as {details?: unknown}).details || null
-		throw error
-	}
-
+	const result = await transport().upload<TResponse>(path, formData, options)
 	markCollectionMutationActivity()
+	return result
+}
 
-	return payload as TResponse
+export async function apiBlob(path: string): Promise<Blob> {
+	return transport().requestBlob(path)
 }

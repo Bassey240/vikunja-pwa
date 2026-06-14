@@ -1,6 +1,7 @@
 import MigrationCallbackScreen from '@/components/auth/MigrationCallbackScreen'
 import OpenIdCallbackScreen from '@/components/auth/OpenIdCallbackScreen'
 import ResetPasswordScreen from '@/components/auth/ResetPasswordScreen'
+import CsvMigrationScreen from '@/components/screens/CsvMigrationScreen'
 import FiltersScreen from '@/components/screens/FiltersScreen'
 import AppShell from '@/components/layout/AppShell'
 import LinkShareAuthScreen from '@/components/sharing/LinkShareAuthScreen'
@@ -26,6 +27,10 @@ export const router = createBrowserRouter([
 	{
 		path: '/auth/openid/:provider',
 		element: <OpenIdCallbackScreen />,
+	},
+	{
+		path: '/migrate/csv',
+		element: <CsvMigrationScreen />,
 	},
 	{
 		path: '/migrate/:service',

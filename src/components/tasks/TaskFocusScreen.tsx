@@ -216,7 +216,7 @@ export default function TaskFocusScreen({sourceScreen}: {sourceScreen: Screen}) 
 					{
 						action: 'open-focused-task-menu',
 						label: 'Menu',
-						text: '⋯',
+						text: '⋮',
 						className: 'topbar-overview-menu-button',
 						active: Boolean(panelAnchor),
 						menuToggle: true,

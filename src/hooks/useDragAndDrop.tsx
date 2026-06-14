@@ -1,5 +1,6 @@
 import {useEffect, type ReactNode} from 'react'
 import {flushSync} from 'react-dom'
+import {getPlatform} from '@/platform/registry'
 import {useAppStore, type AppStore} from '@/store'
 import {getProjectDescendantIds} from '@/store/project-helpers'
 import {findTaskInAnyContext, getTaskCollectionForTask, isSameListManualTaskReorderAllowed} from '@/store/selectors'
@@ -160,6 +161,7 @@ export function useSortableBridge() {
 					filter: '.menu-button, .checkbox-button, .task-toggle-end, .add-subtask-inline, .subtask-composer',
 					preventOnFilter: false,
 					onStart(event) {
+						getPlatform().haptics.lift()
 						const taskId = Number(
 							(event.item instanceof HTMLElement ? event.item.dataset.taskRowId || '' : '') ||
 							event.item?.querySelector('[data-task-row-id]')?.getAttribute('data-task-row-id') ||
@@ -171,6 +173,7 @@ export function useSortableBridge() {
 					},
 					onMove: handleSortableOnMove,
 					onEnd(event) {
+						getPlatform().haptics.drop()
 						void handleSortableTaskEnd(event)
 					},
 				})
@@ -206,6 +209,7 @@ export function useSortableBridge() {
 					filter: '.menu-button, .checkbox-button',
 					preventOnFilter: false,
 					onStart(event) {
+						getPlatform().haptics.lift()
 						const taskId = Number(
 							(event.item instanceof HTMLElement ? event.item.dataset.taskRowId || '' : '') ||
 							event.item?.querySelector('[data-task-row-id]')?.getAttribute('data-task-row-id') ||
@@ -217,6 +221,7 @@ export function useSortableBridge() {
 					},
 					onMove: handleSortableOnMove,
 					onEnd(event) {
+						getPlatform().haptics.drop()
 						void handleSortableTaskEnd(event)
 					},
 				})
@@ -257,6 +262,7 @@ export function useSortableBridge() {
 					filter: '.menu-button, .chevron-button, .project-select',
 					preventOnFilter: false,
 					onStart(event) {
+						getPlatform().haptics.lift()
 						const projectId = Number(event.item?.getAttribute('data-project-node-id') || 0)
 						if (projectId) {
 							startDragTracking(app, 'project', projectId, event.item instanceof HTMLElement ? event.item : null, event.from, event.oldIndex)
@@ -264,6 +270,7 @@ export function useSortableBridge() {
 					},
 					onMove: handleSortableOnMove,
 					onEnd(event) {
+						getPlatform().haptics.drop()
 						void handleSortableProjectEnd(event)
 					},
 				})
@@ -889,9 +896,10 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 		collections,
 		savedFilterSurfaceProjectId,
 	)
-	const savedFilterViewId = savedFilterSurfaceProjectId
+	// Manual reorder is a list operation: write to the target project's list view by kind, never a preferred-view fallback.
+	const reorderViewId = savedFilterSurfaceProjectId
 		? await resolveSavedFilterTaskViewId(store, savedFilterSurfaceProjectId)
-		: null
+		: await store.resolveProjectListTaskViewId(targetProjectId)
 	const traceToken = beginTaskDropTrace({
 		taskId,
 		sourceProjectId: task.project_id,
@@ -905,7 +913,7 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 			taskId,
 			parentTaskId,
 			targetProjectId,
-			viewId: savedFilterViewId ?? undefined,
+			viewId: reorderViewId ?? undefined,
 			beforeTaskId: siblingIds[movedIndex - 1] || null,
 			afterTaskId: siblingIds[movedIndex + 1] || null,
 			siblingIds,

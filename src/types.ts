@@ -399,6 +399,8 @@ export type MigrationService =
 	| 'trello'
 	| 'microsoft-todo'
 	| 'ticktick'
+	| 'wekan'
+	| 'csv'
 	| 'vikunja-file'
 
 export type MigrationStatusValue =
@@ -447,6 +449,7 @@ export interface AccountForm {
 	username: string
 	password: string
 	totpPasscode: string
+	rememberSession: boolean
 	apiToken: string
 }
 

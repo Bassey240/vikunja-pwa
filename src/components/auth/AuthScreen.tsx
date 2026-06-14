@@ -133,7 +133,7 @@ export default function AuthScreen() {
 					</div>
 					<div className="auth-identity-slot">
 						<div className="detail-label">Identity-ready shell</div>
-						<div className="auth-identity-card">
+						<div className="auth-identity-card flat-surface">
 							<div className="auth-identity-line auth-identity-line-wide"></div>
 							<div className="auth-identity-line"></div>
 							<div className="auth-identity-chip-row">
@@ -164,7 +164,7 @@ export default function AuthScreen() {
 					) : null}
 					{!showTotpLoginStep && settingsNotice ? <div className="empty-state compact">{settingsNotice}</div> : null}
 
-					<div className="auth-form-card">
+					<div className="auth-form-card flat-surface">
 						{authSubscreen === 'login' ? (
 							<>
 								{showTotpLoginStep ? (
@@ -237,10 +237,10 @@ export default function AuthScreen() {
 													onChange={event => setAccountField('baseUrl', event.currentTarget.value)}
 												/>
 											</label>
-											{showPasswordForm ? (
-												<>
-													<label className="detail-item detail-field">
-														<div className="detail-label">Username</div>
+										{showPasswordForm ? (
+											<>
+												<label className="detail-item detail-field">
+													<div className="detail-label">Username</div>
 														<input
 															className="detail-input"
 															data-account-field="username"
@@ -267,6 +267,22 @@ export default function AuthScreen() {
 															onChange={event => setAccountField('password', event.currentTarget.value)}
 														/>
 													</label>
+													<div className="detail-item detail-item-full detail-field settings-checkbox-field">
+														<label className="settings-checkbox-row">
+															<input
+																data-account-field="rememberSession"
+																name="rememberSession"
+																type="checkbox"
+																checked={accountForm.rememberSession}
+																disabled={connectDisabled}
+																onChange={event => setAccountField('rememberSession', event.currentTarget.checked)}
+															/>
+															<span>Stay logged in</span>
+														</label>
+														<div className="detail-helper-text">
+															Uses Vikunja&apos;s native remembered-session mode for password sign-in.
+														</div>
+													</div>
 												</>
 											) : (
 												<label className="detail-item detail-item-full detail-field">
@@ -356,6 +372,11 @@ export default function AuthScreen() {
 											Password login is recommended for self-hosted Vikunja. API tokens are proxied through this
 											backend and are never stored in browser storage.
 										</div>
+										{showPasswordForm ? (
+											<div className="empty-state compact">
+												Remembered sessions still depend on the upstream Vikunja server keeping a fixed JWT secret across restarts.
+											</div>
+										) : null}
 									</>
 								)}
 							</>

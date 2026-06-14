@@ -1,6 +1,7 @@
 import SubtaskComposer from './SubtaskComposer'
 import TaskCard from './TaskCard'
 import TaskMenu from './TaskMenu'
+import Caret from '@/components/common/Caret'
 import type {TaskSortBy} from '@/hooks/useFilters'
 import useWideLayout from '@/hooks/useWideLayout'
 import {useAppStore} from '@/store'
@@ -148,7 +149,7 @@ export default function TaskBranch({
 								type="button"
 								onClick={() => toggleTaskExpanded(task.id)}
 							>
-								{expanded ? '▾' : '▸'}
+								<Caret expanded={expanded} />
 							</button>
 						) : null}
 						{bulkMode ? (
@@ -220,7 +221,7 @@ export default function TaskBranch({
 							type="button"
 							onClick={event => toggleTaskMenu(task.id, getMenuAnchor(event.currentTarget))}
 						>
-							⋯
+							⋮
 						</button>
 					) : null}
 				</div>

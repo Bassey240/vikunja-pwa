@@ -12,6 +12,8 @@ export type SettingsSectionId =
 	| 'userAdministration'
 	| 'teams'
 	| 'appData'
+	| 'app-lock'
+	| 'reminders'
 
 export function getTeamAdminCount(team: Team) {
 	return (team.members || []).filter(member => member.admin).length

@@ -44,7 +44,7 @@ export default function TaskDetailRelated({
 		emptyLabel: ReactNode = 'None',
 	) {
 		if (relationTasks.length === 0) {
-			return <div className="detail-value">{emptyLabel}</div>
+			return <div className="detail-value detail-relation-empty">{emptyLabel}</div>
 		}
 
 		return (
@@ -138,7 +138,7 @@ export default function TaskDetailRelated({
 								Remove
 							</button>
 						</div>
-					)) : <div className="detail-value">No subtasks</div>}
+					)) : <div className="detail-value detail-relation-empty">No subtasks</div>}
 				</div>
 			</div>
 			{extraRelationGroups.map(group => (

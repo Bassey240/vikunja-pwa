@@ -1,4 +1,5 @@
 import type {ReactNode} from 'react'
+import Caret from '@/components/common/Caret'
 import type {TaskDetailSection} from '@/utils/task-detail-helpers'
 
 export default function CollapsibleSection({
@@ -28,7 +29,7 @@ export default function CollapsibleSection({
 					<span className="detail-label">{title}</span>
 				</span>
 				<span className="detail-section-chevron" aria-hidden="true">
-					{open ? '▾' : '▸'}
+					<Caret expanded={open} />
 				</span>
 			</button>
 			{open ? <div className="detail-section-content">{children}</div> : null}

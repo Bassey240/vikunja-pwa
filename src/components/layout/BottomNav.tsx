@@ -48,6 +48,8 @@ export default function BottomNav() {
 	const setOpenMenu = useAppStore(state => state.setOpenMenu)
 	const toggleNavMenu = useAppStore(state => state.toggleNavMenu)
 	const openRootComposer = useAppStore(state => state.openRootComposer)
+	const closeTaskDetail = useAppStore(state => state.closeTaskDetail)
+	const closeProjectDetail = useAppStore(state => state.closeProjectDetail)
 	const location = useLocation()
 	const navigate = useNavigate()
 
@@ -64,6 +66,8 @@ export default function BottomNav() {
 
 	function goTo(path: string) {
 		setOpenMenu(null)
+		closeTaskDetail()
+		closeProjectDetail()
 		navigate(path)
 	}
 

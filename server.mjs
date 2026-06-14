@@ -64,7 +64,7 @@ const TASK_ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024
 const MIGRATION_UPLOAD_MAX_BYTES = 100 * 1024 * 1024
 const PROJECT_BACKGROUND_MAX_BYTES = 15 * 1024 * 1024
 const OPENID_STATE_TTL_MS = 10 * 60 * 1000
-const FILE_MIGRATION_SERVICES = new Set(['ticktick', 'vikunja-file'])
+const FILE_MIGRATION_SERVICES = new Set(['ticktick', 'wekan', 'vikunja-file'])
 const serverStartedAt = Date.now()
 const sessionStore = createSessionStore({
 	ttlSeconds: appSessionTtlSeconds,
@@ -81,7 +81,7 @@ const sessionMutationRateLimiter = createRateLimiter({
 	max: sessionMutationRateLimitMax,
 })
 const legacyConfigured = Boolean(vikunjaBaseUrl && vikunjaApiToken)
-const buildId = '2026-04-06-release-0.4.0'
+const buildId = '2026-06-11-release-0.5'
 const openIdLoginState = new Map()
 const adminBridge = createAdminBridge({
 	bridgeMode: vikunjaBridgeMode,
@@ -419,6 +419,7 @@ async function handleApi(req, res, url) {
 			const username = `${body.username || ''}`.trim()
 			const password = `${body.password || ''}`
 			const totpPasscode = `${body.totpPasscode || ''}`.trim()
+			const longToken = body.longToken === true || body.long_token === true
 			if (!username || !password) {
 				sendJson(res, 400, {error: 'Username and password are required.'})
 				return
@@ -429,6 +430,7 @@ async function handleApi(req, res, url) {
 				username,
 				password,
 				totpPasscode,
+				longToken,
 			})
 			account = await hydrateOperatorAccountIdentity(account)
 		} else {
@@ -1538,7 +1540,7 @@ async function handleApi(req, res, url) {
 		return
 	}
 
-	const migrationServiceMatch = url.pathname.match(/^\/api\/migration\/([^/]+)\/(auth|migrate|status)$/)
+	const migrationServiceMatch = url.pathname.match(/^\/api\/migration\/([^/]+)\/(auth|detect|preview|migrate|status)$/)
 	if (migrationServiceMatch) {
 		const service = normalizeMigrationService(decodeURIComponent(migrationServiceMatch[1] || ''))
 		const action = migrationServiceMatch[2]
@@ -1571,8 +1573,46 @@ async function handleApi(req, res, url) {
 			return
 		}
 
-		if (action === 'migrate' && req.method === 'POST') {
+		if ((action === 'detect' || action === 'preview') && service === 'csv' && req.method === 'PUT') {
+			const contentType = `${req.headers['content-type'] || ''}`.trim()
+			if (!contentType.toLowerCase().includes('multipart/form-data')) {
+				sendJson(res, 400, {error: 'multipart/form-data is required.'})
+				return
+			}
+
+			const rawBody = await readRawBody(req, {maxBytes: MIGRATION_UPLOAD_MAX_BYTES})
+			const result = await vikunja.request(`migration/${service}/${action}`, {
+				method: 'PUT',
+				rawBody,
+				headers: {
+					'Content-Type': contentType,
+				},
+			})
+			sendJson(res, 200, result)
+			return
+		}
+
+		if (action === 'migrate' && (req.method === 'POST' || req.method === 'PUT')) {
 			if (!enforceRateLimit(req, res, sessionMutationRateLimiter, 'session-mutation')) {
+				return
+			}
+
+			if (service === 'csv' && req.method === 'PUT') {
+				const contentType = `${req.headers['content-type'] || ''}`.trim()
+				if (!contentType.toLowerCase().includes('multipart/form-data')) {
+					sendJson(res, 400, {error: 'multipart/form-data is required.'})
+					return
+				}
+
+				const rawBody = await readRawBody(req, {maxBytes: MIGRATION_UPLOAD_MAX_BYTES})
+				const result = await vikunja.request(`migration/${service}/migrate`, {
+					method: 'PUT',
+					rawBody,
+					headers: {
+						'Content-Type': contentType,
+					},
+				})
+				sendJson(res, 200, normalizeMigrationStatusPayload(service, result))
 				return
 			}
 
@@ -1584,13 +1624,28 @@ async function handleApi(req, res, url) {
 				}
 
 				const rawBody = await readRawBody(req, {maxBytes: MIGRATION_UPLOAD_MAX_BYTES})
-				const result = await vikunja.request(`migration/${service}/migrate`, {
-					method: 'POST',
-					rawBody,
-					headers: {
-						'Content-Type': contentType,
-					},
-				})
+				let result
+				try {
+					result = await vikunja.request(`migration/${service}/migrate`, {
+						method: 'PUT',
+						rawBody,
+						headers: {
+							'Content-Type': contentType,
+						},
+					})
+				} catch (error) {
+					if (Number(error?.statusCode || 0) !== 404 && Number(error?.statusCode || 0) !== 405) {
+						throw error
+					}
+
+					result = await vikunja.request(`migration/${service}/migrate`, {
+						method: 'POST',
+						rawBody,
+						headers: {
+							'Content-Type': contentType,
+						},
+					})
+				}
 				sendJson(res, 200, normalizeMigrationStatusPayload(service, result))
 				return
 			}
@@ -3399,6 +3454,8 @@ function normalizeMigrationService(value) {
 		case 'trello':
 		case 'microsoft-todo':
 		case 'ticktick':
+		case 'wekan':
+		case 'csv':
 		case 'vikunja-file':
 			return normalized
 		default:
@@ -3441,6 +3498,20 @@ function normalizeMigrationStatusPayload(service, payload) {
 		}
 	}
 	if (payload?.running === true || rawStatus === 'pending') {
+		return {
+			service: normalizedService,
+			status: 'running',
+			message,
+		}
+	}
+	if (payload?.started_at && payload?.finished_at) {
+		return {
+			service: normalizedService,
+			status: 'done',
+			message,
+		}
+	}
+	if (payload?.started_at && !payload?.finished_at) {
 		return {
 			service: normalizedService,
 			status: 'running',

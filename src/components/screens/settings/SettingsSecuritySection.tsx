@@ -1,4 +1,5 @@
 import type {ApiRouteGroups, ApiToken, CalDavToken, TotpSettings, VikunjaInfo} from '@/types'
+import Caret from '@/components/common/Caret'
 import CompactDatePicker from '@/components/common/CompactDatePicker'
 import {formatLongDate} from '@/utils/formatting'
 import type {SettingsSectionId} from '@/utils/settings-helpers'
@@ -635,7 +636,7 @@ function SecuritySubsection({
 				<div className="settings-subsection-header">
 					<span className="panel-label">{title}</span>
 					<span className="detail-section-chevron" aria-hidden="true">
-						{open ? '▾' : '▸'}
+						<Caret expanded={open} />
 					</span>
 				</div>
 			</button>

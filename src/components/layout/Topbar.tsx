@@ -1,9 +1,11 @@
+import UserAvatar from '@/components/common/UserAvatar'
 import NotificationTray from '@/components/layout/NotificationTray'
 import useWideLayout from '@/hooks/useWideLayout'
 import {useAppStore} from '@/store'
 import {isNotificationRead} from '@/utils/formatting'
 import {getVisibleNotifications, normalizeNotificationPreferences} from '@/utils/notificationPreferences'
 import {useEffect} from 'react'
+import {useNavigate} from 'react-router-dom'
 import type {MouseEvent, ReactNode} from 'react'
 
 interface TopbarAction {
@@ -48,6 +50,7 @@ export default function Topbar({
 	onDismissTray,
 }: TopbarProps) {
 	const isWideLayout = useWideLayout()
+	const navigate = useNavigate()
 	const account = useAppStore(state => state.account)
 	const connected = useAppStore(state => state.connected)
 	const isOnline = useAppStore(state => state.isOnline)
@@ -58,25 +61,7 @@ export default function Topbar({
 	const loadNotifications = useAppStore(state => state.loadNotifications)
 	const openMenu = useAppStore(state => state.openMenu)
 	const toggleNotificationsMenu = useAppStore(state => state.toggleNotificationsMenu)
-	const taskDetailOpen = useAppStore(state => state.taskDetailOpen)
-	const projectDetailOpen = useAppStore(state => state.projectDetailOpen)
-	const closeTaskDetail = useAppStore(state => state.closeTaskDetail)
-	const closeProjectDetail = useAppStore(state => state.closeProjectDetail)
-	const detailOverlayOpen = !isWideLayout && (taskDetailOpen || projectDetailOpen)
-	const effectiveBackAction = detailOverlayOpen ? 'close-detail-overlay' : backAction
-	const effectiveOnBack = detailOverlayOpen
-		? () => {
-				if (taskDetailOpen) {
-					closeTaskDetail()
-					return
-				}
-
-				if (projectDetailOpen) {
-					closeProjectDetail()
-				}
-			}
-		: onBack
-	const hasBackButton = detailOverlayOpen || (includeBackButton && backAction)
+	const hasBackButton = includeBackButton && Boolean(backAction)
 	const hasExplicitTitle = Boolean(title)
 	const accountLabel = title || account?.user?.name || account?.user?.username || 'Vikunja'
 	const notificationsOpen = openMenu?.kind === 'notifications'
@@ -151,10 +136,22 @@ export default function Topbar({
 					hasExplicitTitle ? 'has-screen-title' : 'has-account-label'
 				}`.trim()}
 			>
-				<div className={`topbar-title-block topbar-title-pill ${hasExplicitTitle ? 'is-screen-title' : 'is-account-label'}`.trim()}>
-					{eyebrow ? <div className="eyebrow">{eyebrow}</div> : null}
-					<h1>{accountLabel}</h1>
-				</div>
+				{hasExplicitTitle ? (
+					<div className="topbar-title-block topbar-title-pill is-screen-title">
+						{eyebrow ? <div className="eyebrow">{eyebrow}</div> : null}
+						<h1>{accountLabel}</h1>
+					</div>
+				) : (
+					<button
+						className="topbar-avatar-block"
+						type="button"
+						data-action="open-account"
+						aria-label={`${accountLabel} — account & settings`}
+						onClick={() => navigate('/settings?section=account')}
+					>
+						<UserAvatar user={account?.user} size={30} />
+					</button>
+				)}
 				{desktopHeadingTitle ? (
 					<div className="topbar-screen-heading">
 						<h2 className="panel-title">{desktopHeadingTitle}</h2>
@@ -182,11 +179,11 @@ export default function Topbar({
 						{hasBackButton ? (
 							<button
 								className="topbar-nav-button topbar-back-button"
-								data-action={effectiveBackAction}
+								data-action={backAction}
 								data-menu-toggle="true"
 								aria-label="Back"
 								type="button"
-								onClick={effectiveOnBack}
+								onClick={onBack}
 							>
 								<span className="chevron-icon" aria-hidden="true"></span>
 							</button>
@@ -359,7 +356,7 @@ export default function Topbar({
 function isOverflowMenuAction(action: TopbarAction) {
 	return (
 		action.label === 'Menu' ||
-		action.text === '⋯' ||
+		action.text === '⋮' ||
 		`${action.className || ''}`.split(/\s+/).includes('topbar-overview-menu-button')
 	)
 }

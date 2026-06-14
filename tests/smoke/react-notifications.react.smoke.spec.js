@@ -6,7 +6,7 @@ let stack
 test.describe.configure({mode: 'serial'})
 
 test.beforeAll(async () => {
-	stack = await startTestStack()
+	stack = await startTestStack({legacyConfigured: false})
 })
 
 test.afterAll(async () => {
@@ -15,7 +15,15 @@ test.afterAll(async () => {
 
 test.beforeEach(async ({page}) => {
 	stack.reset()
+	// Narrow shell: the wide layout shows the active view in the sidebar and hides the
+	// screen-title heading, so pin the narrow width to keep the 'Today' heading present.
+	await page.setViewportSize({width: 900, height: 900})
 	await page.goto(stack.appUrl)
+	// Marking notifications read requires a password session (API-token sessions can't).
+	await page.locator('[data-account-field="baseUrl"]').fill(`${stack.mock.origin}/api/v1`)
+	await page.locator('[data-account-field="username"]').fill('smoke-user')
+	await page.locator('[data-account-field="password"]').fill('smoke-password')
+	await page.getByRole('button', {name: 'Connect'}).click()
 	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
 })
 

@@ -105,7 +105,7 @@ export default function CollectionScreen({
 					{
 						action: menuAction,
 						label: 'Menu',
-						text: '⋯',
+						text: '⋮',
 						className: 'topbar-overview-menu-button',
 						active: Boolean(panelAnchor),
 						menuToggle: true,

@@ -24,7 +24,7 @@ export default function LabelListItem({label}: {label: Label}) {
 					type="button"
 					onClick={event => toggleLabelMenu(label.id, getMenuAnchor(event.currentTarget))}
 				>
-					⋯
+					⋮
 				</button>
 			</div>
 			{menuOpen && openMenu.kind === 'label' ? (

@@ -18,7 +18,7 @@ export interface MigrationSlice {
 	resetMigrationState: () => void
 }
 
-const FILE_MIGRATION_SERVICES = new Set<MigrationService>(['ticktick', 'vikunja-file'])
+const FILE_MIGRATION_SERVICES = new Set<MigrationService>(['ticktick', 'wekan', 'vikunja-file'])
 
 export const createMigrationSlice: StateCreator<AppStore, [], [], MigrationSlice> = (set, get) => ({
 	migrationStatus: {},

@@ -1,4 +1,5 @@
 import {api, type ApiError} from '@/api'
+import {getPlatform} from '@/platform/registry'
 import {defaultProjectFilters, defaultTaskFilters} from '@/hooks/useFilters'
 import type {
 	Account,
@@ -18,11 +19,21 @@ import type {StateCreator} from 'zustand'
 import type {AppStore} from '../index'
 import {persistOfflineBrowseSnapshot} from '../offline-browse-cache'
 import {clearOfflineSnapshot, loadOfflineSnapshot, mergeOfflineSnapshot} from '../offline-snapshot'
-import {loadPersistedPreferredProjectViewKind} from '../view-selections'
+import {loadDefaultDesktopViewKind, loadDefaultMobileViewKind} from '../view-selections'
 
 interface SessionPayload {
 	connected: boolean
 	account: Account | null
+}
+
+interface LoginPayload {
+	authMode: AuthMode
+	baseUrl: string
+	username?: string
+	password?: string
+	totpPasscode?: string
+	longToken?: boolean
+	apiToken?: string
 }
 
 interface ChangePasswordForm {
@@ -89,6 +100,7 @@ const defaultAccountForm: AccountForm = {
 	username: '',
 	password: '',
 	totpPasscode: '',
+	rememberSession: false,
 	apiToken: '',
 }
 
@@ -575,13 +587,21 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 				if (get().offlineReadOnlyMode || !get().isOnline) {
 					return
 				}
-				await get().loadCurrentUser()
+				void get().loadVikunjaInfo()
+				// loadCurrentUser (account refinement) and loadProjects (the
+				// tree) are independent — run them concurrently to cut a
+				// round-trip off cold start. Anything that depends on the
+				// project tree waits for this to settle.
+				const bootLoads: Array<Promise<unknown>> = [get().loadCurrentUser()]
+				const linkShareAuth = get().account?.linkShareAuth
+				if (!linkShareAuth) {
+					bootLoads.push(get().loadProjects())
+				}
+				await Promise.all(bootLoads)
 				if (!get().connected) {
 					return
 				}
-				void get().loadVikunjaInfo()
 				if (!get().account?.linkShareAuth) {
-					await get().loadProjects()
 					void get().ensureProjectFilterTasksLoaded()
 					void get().loadNotifications({silent: true})
 				}
@@ -624,7 +644,10 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 		set({accountLoading: true, error: null})
 
 		try {
-			const payload = await api<SessionPayload>('/api/session')
+			const loader = getPlatform().sessionLoader
+			const payload: SessionPayload = loader
+				? await loader()
+				: await api<SessionPayload>('/api/session')
 			if (!payload.connected || !payload.account) {
 				get().resetConnectedData({clearOfflineSnapshot: true})
 				set(state => ({
@@ -730,7 +753,9 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 			expandedProjectIds: new Set(),
 			loadingProjectPreviewIds: new Set(),
 			projectViewsById: {},
-			preferredProjectViewKind: loadPersistedPreferredProjectViewKind(),
+			defaultDesktopViewKind: loadDefaultDesktopViewKind(),
+				defaultMobileViewKind: loadDefaultMobileViewKind(),
+				sessionProjectViewKindById: {},
 			currentProjectViewId: null,
 			currentInboxViewId: null,
 			currentSavedFilterViewId: null,
@@ -1387,7 +1412,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 		set({settingsSubmitting: true, error: null, settingsNotice: null})
 
 		try {
-			const payload: Record<string, string> = {
+			const payload: LoginPayload = {
 				authMode: accountForm.authMode,
 				baseUrl: accountForm.baseUrl.trim(),
 			}
@@ -1395,6 +1420,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 			if (accountForm.authMode === 'password') {
 				payload.username = accountForm.username.trim()
 				payload.password = accountForm.password
+				payload.longToken = accountForm.rememberSession
 				if (accountForm.totpPasscode.trim()) {
 					payload.totpPasscode = accountForm.totpPasscode.trim()
 				}
@@ -1402,7 +1428,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 				payload.apiToken = accountForm.apiToken.trim()
 			}
 
-			await api<SessionPayload, Record<string, string>>('/api/session/login', {
+			await api<SessionPayload, LoginPayload>('/api/session/login', {
 				method: 'POST',
 				body: payload,
 			})

@@ -24,6 +24,7 @@ export interface TaskComposersSlice {
 	rootComposerOpen: boolean
 	rootComposerPlacement: 'sheet' | 'center' | 'project-preview'
 	composerDueDate: string | null
+	composerInitialTitle: string | null
 	rootSubmitting: boolean
 	composerParentTaskId: number | null
 	activeSubtaskParentId: number | null
@@ -34,7 +35,9 @@ export interface TaskComposersSlice {
 		projectId?: number | null
 		placement?: 'sheet' | 'center' | 'project-preview'
 		defaultDueToday?: boolean
+		initialTitle?: string
 	}) => void
+	consumeComposerInitialTitle: () => string | null
 	closeRootComposer: () => void
 	setComposerProjectId: (projectId: number) => void
 	submitRootTask: (title: string) => Promise<boolean>
@@ -47,13 +50,28 @@ export const createTaskComposersSlice: StateCreator<AppStore, [], [], TaskCompos
 	rootComposerOpen: false,
 	rootComposerPlacement: 'sheet',
 	composerDueDate: null,
+	composerInitialTitle: null,
 	rootSubmitting: false,
 	composerParentTaskId: null,
 	activeSubtaskParentId: null,
 	activeSubtaskSource: null,
 	subtaskSubmittingParentId: null,
 
-	openRootComposer({parentTaskId = null, projectId = null, placement = 'sheet', defaultDueToday = false} = {}) {
+	consumeComposerInitialTitle() {
+		const initial = get().composerInitialTitle
+		if (initial) {
+			set({composerInitialTitle: null})
+		}
+		return initial
+	},
+
+	openRootComposer({
+		parentTaskId = null,
+		projectId = null,
+		placement = 'sheet',
+		defaultDueToday = false,
+		initialTitle = undefined,
+	} = {}) {
 		const composerProjectId = projectId || getCurrentComposeProjectId(get())
 		const nextParentTaskId = parentTaskId ?? getCurrentComposeParentTaskId(get())
 		const composerDueDate =
@@ -75,6 +93,7 @@ export const createTaskComposersSlice: StateCreator<AppStore, [], [], TaskCompos
 			openMenu: null,
 			composerProjectId,
 			composerDueDate,
+			composerInitialTitle: typeof initialTitle === 'string' ? initialTitle : null,
 			composerParentTaskId: nextParentTaskId,
 			bulkTaskEditorScope: null,
 			bulkTaskAction: 'complete',

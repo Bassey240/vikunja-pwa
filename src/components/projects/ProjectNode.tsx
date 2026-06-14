@@ -1,6 +1,7 @@
 import ProjectMenu from './ProjectMenu'
 import ProjectPreview from './ProjectPreview'
 import SavedFilterProjectMenu from './SavedFilterProjectMenu'
+import Caret from '@/components/common/Caret'
 import InlineProjectComposer from './InlineProjectComposer'
 import useWideLayout from '@/hooks/useWideLayout'
 import InlineRootTaskComposer from '@/components/tasks/InlineRootTaskComposer'
@@ -11,7 +12,7 @@ import {type ProjectAggregateCounts, getVisibleChildProjects} from '@/store/proj
 import {useAppStore} from '@/store'
 import {type TaskMatcher} from '@/store/selectors'
 import type {Project, SavedFilter, Task} from '@/types'
-import {formatError} from '@/utils/formatting'
+import {formatError, normalizeHexColor} from '@/utils/formatting'
 import {isProjectDropTraceTarget, markProjectDropTrace} from '@/utils/dragPerf'
 import {getMenuAnchor} from '@/utils/menuPosition'
 import {projectHasBackground} from '@/utils/project-background'
@@ -92,6 +93,7 @@ export default function ProjectNode({
 		taskCount: 0,
 		taskCountLoaded: false,
 	}
+	const projectColor = normalizeHexColor(project.hex_color)
 	const hasProjectBackground = projectHasBackground(project)
 	const resolvedProjectBackgroundUrl = projectBackgroundUrl || projectBackgroundPreviewUrl
 	const summaryParts = savedFilterProject
@@ -186,6 +188,7 @@ export default function ProjectNode({
 			<div
 				ref={rowRef}
 				className={`project-node-row ${hasProjectBackground ? 'has-background' : ''}`.trim()}
+				style={projectColor ? ({'--proj-color': projectColor} as CSSProperties) : undefined}
 				data-project-background-surface="node"
 				data-has-background={hasProjectBackground ? 'true' : 'false'}
 			>
@@ -206,7 +209,7 @@ export default function ProjectNode({
 					type="button"
 					onClick={() => void toggleProjectExpanded(project.id)}
 				>
-					{expanded ? '▾' : '▸'}
+					<Caret expanded={expanded} />
 				</button>
 				<button
 					className="project-select"
@@ -254,7 +257,7 @@ export default function ProjectNode({
 						type="button"
 						onClick={event => toggleProjectMenu(project.id, getMenuAnchor(event.currentTarget))}
 					>
-						⋯
+						⋮
 					</button>
 				</>
 			</div>
@@ -302,7 +305,7 @@ export default function ProjectNode({
 							))}
 						</ProjectPreview>
 					) : null}
-					{!loadingPreview && (inlineTaskComposerOpen || previewTasks.length > 0) ? (
+					{!loadingPreview && previewTasks.length > 0 ? (
 									<ProjectPreview label="Tasks" parentProjectId={project.id}>
 										<InlineRootTaskComposer placement="project-preview" projectId={project.id} />
 										<TaskTree

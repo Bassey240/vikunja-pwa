@@ -39,6 +39,9 @@ export default function NotificationTray() {
 	const visibleUnreadNotificationIds = visibleNotifications
 		.filter(notification => !isNotificationRead(notification))
 		.map(notification => notification.id)
+	// Vikunja rejects notification read-writes from API tokens (backend bug go-vikunja#2977);
+	// only password (JWT) logins can mark read, so gate the actions on auth mode.
+	const canMarkNotificationsRead = account?.authMode === 'password'
 
 	async function handleNotificationClick(notification: AppNotification) {
 		const target = getNotificationTarget(notification)
@@ -46,7 +49,7 @@ export default function NotificationTray() {
 			return
 		}
 
-		if (!isNotificationRead(notification)) {
+		if (canMarkNotificationsRead && !isNotificationRead(notification)) {
 			await markNotificationRead(notification.id, true)
 		}
 
@@ -72,7 +75,7 @@ export default function NotificationTray() {
 					) : null}
 					{unreadCount > 0 ? <span className="count-chip compact">{unreadCount}</span> : null}
 				</div>
-				{unreadCount > 0 ? (
+				{unreadCount > 0 && canMarkNotificationsRead ? (
 					<button
 						className="pill-button ghost-button compact"
 						data-action="mark-all-notifications-read"
@@ -83,6 +86,11 @@ export default function NotificationTray() {
 					</button>
 				) : null}
 			</div>
+			{unreadCount > 0 && !canMarkNotificationsRead ? (
+				<div className="topbar-notification-token-hint">
+					Sign in with a password to mark notifications read — API-token logins can’t change read state.
+				</div>
+			) : null}
 			<div className="topbar-notification-list">
 				{loadingNotifications && visibleNotifications.length === 0 ? (
 					<div className="empty-state compact">Loading notifications…</div>
@@ -142,7 +150,7 @@ export default function NotificationTray() {
 									) : null}
 								</div>
 							</div>
-							{!read ? (
+							{!read && canMarkNotificationsRead ? (
 								<button
 									className="notification-mark-button"
 									data-action="mark-notification-read"

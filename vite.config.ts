@@ -7,6 +7,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 export default defineConfig({
 	plugins: [react()],
+	// The project-root `.env` is a symlink to a private-local file outside the
+	// repo (backend secrets read by scripts/start-server.mjs). Sandboxed runners
+	// can't follow that symlink out of the project dir, so Vite's loadEnv() dies
+	// with EPERM. Point envDir at an in-repo dir with no `.env` — the frontend
+	// has no VITE_* vars in that file anyway, and VITE_TARGET still arrives via
+	// process.env. See vite-env/README.md.
+	envDir: path.resolve(__dirname, 'vite-env'),
 	build: {
 		rollupOptions: {
 			output: {
@@ -39,6 +46,7 @@ export default defineConfig({
 		},
 	},
 	server: {
+		host: true,
 		proxy: {
 			'/api': {
 				target: 'http://localhost:4300',

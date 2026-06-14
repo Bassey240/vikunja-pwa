@@ -1,5 +1,13 @@
 import type {SettingsSectionId} from '@/utils/settings-helpers'
+import {DESKTOP_VIEW_KINDS, MOBILE_VIEW_KINDS, type ProjectViewKind} from '@/store/view-selections'
 import SettingsSection from './SettingsSection'
+
+const VIEW_KIND_LABELS: Record<ProjectViewKind, string> = {
+	list: 'List',
+	kanban: 'Kanban',
+	table: 'Table',
+	gantt: 'Gantt',
+}
 
 export default function SettingsPreferencesSection({
 	open,
@@ -7,6 +15,10 @@ export default function SettingsPreferencesSection({
 	accountAuthMode,
 	theme,
 	onSetTheme,
+	defaultDesktopViewKind,
+	defaultMobileViewKind,
+	onSetDefaultDesktopViewKind,
+	onSetDefaultMobileViewKind,
 	timezoneOptionsLoading,
 	currentTimezone,
 	timezoneSubmitting,
@@ -19,6 +31,10 @@ export default function SettingsPreferencesSection({
 	accountAuthMode: 'password' | 'apiToken' | null | undefined
 	theme: 'dark' | 'light'
 	onSetTheme: (theme: 'dark' | 'light') => void
+	defaultDesktopViewKind: ProjectViewKind
+	defaultMobileViewKind: ProjectViewKind
+	onSetDefaultDesktopViewKind: (kind: ProjectViewKind) => void
+	onSetDefaultMobileViewKind: (kind: ProjectViewKind) => void
 	timezoneOptionsLoading: boolean
 	currentTimezone: string
 	timezoneSubmitting: boolean
@@ -51,6 +67,35 @@ export default function SettingsPreferencesSection({
 							Light
 						</button>
 					</div>
+				</div>
+				<div className="detail-core-card settings-subsection">
+					<div className="panel-label">Default project view</div>
+					<label className="detail-item detail-item-full detail-field">
+						<div className="detail-label">Desktop</div>
+						<select
+							className="detail-input"
+							data-setting-field="default-view-desktop"
+							value={defaultDesktopViewKind}
+							onChange={event => onSetDefaultDesktopViewKind(event.currentTarget.value as ProjectViewKind)}
+						>
+							{DESKTOP_VIEW_KINDS.map(kind => (
+								<option key={kind} value={kind}>{VIEW_KIND_LABELS[kind]}</option>
+							))}
+						</select>
+					</label>
+					<label className="detail-item detail-item-full detail-field">
+						<div className="detail-label">Mobile</div>
+						<select
+							className="detail-input"
+							data-setting-field="default-view-mobile"
+							value={defaultMobileViewKind}
+							onChange={event => onSetDefaultMobileViewKind(event.currentTarget.value as ProjectViewKind)}
+						>
+							{MOBILE_VIEW_KINDS.map(kind => (
+								<option key={kind} value={kind}>{VIEW_KIND_LABELS[kind]}</option>
+							))}
+						</select>
+					</label>
 				</div>
 				{accountAuthMode === 'password' ? (
 					<div className="detail-core-card settings-subsection">

@@ -25,6 +25,7 @@ async function loginWithPasswordSession(targetStack, {
 	username = 'smoke-user',
 	password = 'smoke-password',
 	totpPasscode = '',
+	rememberSession = false,
 } = {}) {
 	const response = await fetch(new URL('/api/session/login', targetStack.appUrl), {
 		method: 'POST',
@@ -37,6 +38,7 @@ async function loginWithPasswordSession(targetStack, {
 			username,
 			password,
 			...(totpPasscode ? {totpPasscode} : {}),
+			...(rememberSession ? {longToken: true} : {}),
 		}),
 	})
 
@@ -46,6 +48,15 @@ async function loginWithPasswordSession(targetStack, {
 	assert.ok(sessionCookie)
 	return sessionCookie
 }
+
+test('password login forwards Vikunja long_token for remembered sessions', async () => {
+	const sessionCookie = await loginWithPasswordSession(stack, {
+		rememberSession: true,
+	})
+
+	assert.ok(sessionCookie)
+	assert.equal(stack.mock.getState().lastLogin?.long_token, true)
+})
 
 test('password login forwards TOTP passcodes when a user has 2FA enabled', async () => {
 	const authStack = await startTestStack({

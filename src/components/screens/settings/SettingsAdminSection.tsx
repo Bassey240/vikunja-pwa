@@ -765,7 +765,7 @@ export default function SettingsAdminSection({
 													aria-label={`Manage ${user.username}`}
 													onClick={() => setSelectedAdminUserId(user.id)}
 												>
-													⋯
+													⋮
 												</button>
 											</div>
 										</div>

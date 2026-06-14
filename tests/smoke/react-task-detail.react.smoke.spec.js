@@ -79,7 +79,7 @@ test('task detail edits title, priority, favorite state, and labels', async ({pa
 	const titleInput = page.locator('[data-detail-title]')
 	await titleInput.fill('Prepare daily summary updated')
 	await titleInput.blur()
-	await expect(page.locator('.panel-title').filter({hasText: 'Prepare daily summary updated'})).toBeVisible()
+	await expect(page.getByRole('heading', {name: 'Prepare daily summary updated'})).toBeVisible()
 
 	await openTaskDetailSection(page, 'planning')
 	await expect(page.locator('[data-detail-percent-done-value]')).toHaveText('35%')
@@ -254,7 +254,7 @@ test('task detail edits title, priority, favorite state, and labels', async ({pa
 
 	await page.locator('.label-chip').filter({hasText: 'Personal'}).locator('[data-action="remove-label"]').click()
 	await expect(page.locator('.label-chip').filter({hasText: 'Personal'})).toHaveCount(0)
-	await page.locator('.workspace-screen.is-active .topbar [data-action="close-detail-overlay"]').click()
+	await page.locator('[data-action="close-task-detail"]').click()
 	await expect(page.locator('[data-detail-title]')).toHaveCount(0)
 	expect(pageErrors).toEqual([])
 })
@@ -268,7 +268,7 @@ test('root composer creates tasks and inline subtask composer creates subtasks',
 	await page.locator('[data-root-input]').fill('Composer created task')
 	await page.locator('[data-form="root-task"]').getByRole('button', {name: 'Add'}).click()
 	await expect(page.locator('[data-root-input]')).toHaveValue('')
-	await page.locator('[data-action="close-root-composer"]').click({position: {x: 10, y: 10}})
+	await page.locator('[data-action="close-root-composer-button"]').click()
 	await expect(page.locator('.workspace-screen.is-active .task-row').filter({hasText: 'Composer created task'})).toHaveCount(1)
 
 	const summaryBranch = page.locator('.workspace-screen.is-active .task-branch').filter({hasText: 'Prepare daily summary'})

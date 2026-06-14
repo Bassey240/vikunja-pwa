@@ -1,7 +1,7 @@
 import {useAppStore} from '@/store'
 import {sortProjectsAlphabeticallyByPath} from '@/store/project-helpers'
 import {findTaskInAnyContext} from '@/store/selectors'
-import {type FormEvent, useMemo, useRef, useState} from 'react'
+import {type FormEvent, useEffect, useMemo, useRef, useState} from 'react'
 
 export function useRootComposerState() {
 	const rootComposerOpen = useAppStore(state => state.rootComposerOpen)
@@ -22,8 +22,19 @@ export function useRootComposerState() {
 	const closeRootComposer = useAppStore(state => state.closeRootComposer)
 	const setComposerProjectId = useAppStore(state => state.setComposerProjectId)
 	const submitRootTask = useAppStore(state => state.submitRootTask)
+	const consumeComposerInitialTitle = useAppStore(state => state.consumeComposerInitialTitle)
 	const [title, setTitle] = useState('')
 	const inputRef = useRef<HTMLInputElement | null>(null)
+
+	useEffect(() => {
+		if (!rootComposerOpen) {
+			return
+		}
+		const seed = consumeComposerInitialTitle()
+		if (seed) {
+			setTitle(seed)
+		}
+	}, [rootComposerOpen, consumeComposerInitialTitle])
 
 	const parentTask = useMemo(() => {
 		if (!composerParentTaskId) {

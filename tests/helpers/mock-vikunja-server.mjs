@@ -160,6 +160,7 @@ export async function createMockVikunjaServer({
 				const username = `${body?.username || ''}`.trim()
 				const password = `${body?.password || ''}`.trim()
 				const totpPasscode = `${body?.totp_passcode || body?.totpPasscode || ''}`.trim()
+				const longToken = body?.long_token === true || body?.longToken === true
 				if (!username || !password) {
 					sendJson(res, 400, {error: 'Username and password are required.'})
 					return
@@ -172,6 +173,11 @@ export async function createMockVikunjaServer({
 				if (state.totp?.enabled && totpPasscode !== '123456') {
 					sendJson(res, 401, {error: 'Invalid totp passcode.'})
 					return
+				}
+
+				state.lastLogin = {
+					username,
+					long_token: longToken,
 				}
 
 				sendJson(

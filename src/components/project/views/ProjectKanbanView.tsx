@@ -338,7 +338,7 @@ export default function ProjectKanbanView({
 										setBucketMenu(current => (current?.bucketId === bucket.id ? null : {bucketId: bucket.id, anchor}))
 									}}
 								>
-									⋯
+									⋮
 								</button>
 							</div>
 						</header>
@@ -402,7 +402,7 @@ export default function ProjectKanbanView({
 													toggleTaskMenu(task.id, getMenuAnchor(event.currentTarget))
 												}}
 											>
-												⋯
+												⋮
 											</button>
 										</div>
 										{menuOpen && openMenu.kind === 'task' ? (

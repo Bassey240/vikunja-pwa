@@ -63,11 +63,12 @@ export default function GanttDependencyArrows({
 						const startY = sourceRect.top - gridRect.top + sourceRect.height / 2
 						const endX = targetRect.left - gridRect.left
 						const endY = targetRect.top - gridRect.top + targetRect.height / 2
-						const controlOffset = Math.max(28, Math.abs(endX - startX) / 2)
+						// Orthogonal elbow with sharp corners; stub keeps the turn off the bar edge.
+						const midX = Math.max((startX + endX) / 2, startX + 16)
 
 						nextPaths.push({
 							key: `${entry.task.id}-${kind}-${targetRef.id}`,
-							d: `M ${startX} ${startY} C ${startX + controlOffset} ${startY}, ${endX - controlOffset} ${endY}, ${endX} ${endY}`,
+							d: `M ${startX} ${startY} H ${midX} V ${endY} H ${endX}`,
 							kind,
 						})
 					})

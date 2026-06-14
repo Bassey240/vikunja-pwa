@@ -1,4 +1,5 @@
 import type {ReactNode} from 'react'
+import Caret from '@/components/common/Caret'
 import type {SettingsSectionId} from '@/utils/settings-helpers'
 
 export default function SettingsSection({
@@ -40,7 +41,7 @@ export default function SettingsSection({
 					onClick={() => onToggle(section)}
 				>
 					<span className="detail-section-chevron" aria-hidden="true">
-						{open ? '▾' : '▸'}
+						<Caret expanded={open} />
 					</span>
 				</button>
 			</div>

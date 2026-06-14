@@ -1,3 +1,4 @@
+import {getPlatform} from '@/platform/registry'
 import type {OfflineMutationEntry} from '@/store/offline-queue'
 import {
 	isAppleMobileWeb,
@@ -39,24 +40,32 @@ export default function SettingsOfflineSection({
 }) {
 	const appleMobileWeb = isAppleMobileWeb()
 	const [queueEntries, setQueueEntries] = useState<OfflineMutationEntry[]>([])
-	const offlineShellStatusLabel = !serviceWorkerSupported
-		? 'Unsupported'
-		: serviceWorkerRegistered
-			? serviceWorkerUpdateAvailable
-				? 'Update ready'
-				: 'Ready'
-			: 'Preparing'
-	const offlineSupportMessage = !serviceWorkerSupported
-		? appleMobileWeb
-			? isSecureContext
-				? 'Offline shell is unavailable in this browser context. On iPhone and iPad, install the HTTPS app to the Home Screen to use the real PWA runtime.'
-				: standaloneWebApp
-					? 'The installed iPhone/iPad app is detected, but this origin is not secure. Offline support still requires the app to be served over trusted HTTPS.'
-					: 'Offline shell is unavailable here because this page is not running in a secure HTTPS context. On phone, offline support requires HTTPS.'
-			: isSecureContext
-				? 'This browser context does not expose service workers, so the app shell cannot be cached here.'
-				: 'Offline shell is unavailable because this page is not running in a secure context. Use HTTPS to enable service workers.'
-		: 'Offline mode keeps the app shell, cached browse state, and previously loaded project/task screens available after one successful online load.'
+	// When the platform reports a bundled app shell it is always available
+	// offline regardless of service-worker support. Browse-state caching + the
+	// mutation queue still apply.
+	const bundledShell = getPlatform().capabilities.offlineShellMode === 'bundled'
+	const offlineShellStatusLabel = bundledShell
+		? 'Bundled'
+		: !serviceWorkerSupported
+			? 'Unsupported'
+			: serviceWorkerRegistered
+				? serviceWorkerUpdateAvailable
+					? 'Update ready'
+					: 'Ready'
+				: 'Preparing'
+	const offlineSupportMessage = bundledShell
+		? 'The app shell is bundled in the installed app, so it always opens offline. Changes you make while offline are queued and sync automatically when you reconnect. File uploads and sharing changes still require a connection.'
+		: !serviceWorkerSupported
+			? appleMobileWeb
+				? isSecureContext
+					? 'Offline shell is unavailable in this browser context. On iPhone and iPad, install the HTTPS app to the Home Screen to use the real PWA runtime.'
+					: standaloneWebApp
+						? 'The installed iPhone/iPad app is detected, but this origin is not secure. Offline support still requires the app to be served over trusted HTTPS.'
+						: 'Offline shell is unavailable here because this page is not running in a secure HTTPS context. On phone, offline support requires HTTPS.'
+				: isSecureContext
+					? 'This browser context does not expose service workers, so the app shell cannot be cached here.'
+					: 'Offline shell is unavailable because this page is not running in a secure context. Use HTTPS to enable service workers.'
+			: 'Offline mode keeps the app shell, cached browse state, and previously loaded project/task screens available after one successful online load.'
 
 	useEffect(() => {
 		if (!open) {

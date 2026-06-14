@@ -938,29 +938,15 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 			return false
 		}
 
-		try {
-			set({openMenu: null})
-			const currentParentRefs = [...(task.related_tasks?.parenttask || [])]
-			for (const parentRef of currentParentRefs) {
-				await api(`/api/tasks/${parentRef.id}/relations/subtask/${taskId}`, {
-					method: 'DELETE',
-				})
-			}
-
-			await api(`/api/tasks/${taskId}`, {
-				method: 'POST',
-				body: buildTaskProjectMovePayload(task, nextProjectId),
-			})
-
-			await get().refreshCurrentCollections()
-			if (get().taskDetailOpen && get().taskDetail?.id === taskId) {
-				await get().openTaskDetail(taskId)
-			}
-			return true
-		} catch (error) {
-			set({error: formatError(error as Error)})
-			return false
-		}
+		// Delegate to the optimistic DnD engine instead of awaiting the network
+		// then reloading. parentTaskId:null detaches the task to the target
+		// project's root, matching the old behavior (which deleted parent
+		// relations before moving) but with instant UI + rollback.
+		return get().moveTask({
+			taskId,
+			targetProjectId: nextProjectId,
+			parentTaskId: null,
+		})
 	},
 
 	async makeTaskSubtask(taskId, parentTaskId) {

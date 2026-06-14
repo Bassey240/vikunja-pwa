@@ -1,3 +1,4 @@
+import Topbar from '@/components/layout/Topbar'
 import {type ReactNode, useRef} from 'react'
 
 interface DetailSheetProps {
@@ -6,6 +7,10 @@ interface DetailSheetProps {
 	onClose: () => void
 	children: ReactNode
 	mode?: 'sheet' | 'inspector'
+	/* 'modal' closes on backdrop tap; 'page' only via its own topbar Back. */
+	variant?: 'page' | 'modal'
+	/* Page-variant topbar title. */
+	title?: string
 }
 
 export default function DetailSheet({
@@ -14,6 +19,8 @@ export default function DetailSheet({
 	onClose,
 	children,
 	mode = 'sheet',
+	variant = 'modal',
+	title = '',
 }: DetailSheetProps) {
 	const backdropPressStartedRef = useRef(false)
 
@@ -26,6 +33,18 @@ export default function DetailSheet({
 			<aside className="detail-sheet detail-sheet-inspector" aria-hidden="false">
 				{children}
 			</aside>
+		)
+	}
+
+	if (variant === 'page') {
+		return (
+			<div className="surface detail-page-surface" data-detail-page>
+				<Topbar title={title} backAction={closeAction} onBack={onClose} />
+				<div className="surface-content">
+					{/* .detail-sheet carries the --detail-density-* props the rows read. */}
+					<div className="detail-sheet">{children}</div>
+				</div>
+			</div>
 		)
 	}
 

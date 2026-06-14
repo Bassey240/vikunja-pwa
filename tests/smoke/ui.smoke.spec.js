@@ -15,19 +15,30 @@ test.afterAll(async () => {
 
 test.beforeEach(async ({page}) => {
 	stack.reset()
+	// Narrow shell by default: the bottom-nav tests and the screen-title heading both
+	// require narrow width. Desktop-specific tests opt into a wider viewport themselves.
+	await page.setViewportSize({width: 900, height: 900})
 	await page.goto(stack.appUrl)
 	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
 })
 
 async function openProjects(page) {
 	await page.getByRole('navigation', {name: 'Primary'}).getByRole('button', {name: 'Projects'}).click()
-	await expect(page.getByRole('heading', {name: 'Projects'})).toBeVisible()
+	// Wide layout hides the screen-title heading (the sidebar shows the active view),
+	// so assert the active projects screen, which exists in both layouts.
+	await expect(page.locator('.workspace-screen.is-active[data-screen="projects"]')).toBeVisible()
 }
 
 async function openProject(page, projectId, projectTitle) {
 	await openProjects(page)
 	await page.locator(`.workspace-screen.is-active [data-action="select-project"][data-project-id="${projectId}"]`).click()
-	await expect(page.getByRole('heading', {name: projectTitle})).toBeVisible()
+	// Narrow navigates into the project (title heading); wide opens the inspector instead.
+	// Both layouts keep the other element in the DOM (hidden), so intersect with :visible
+	// to match only the rendered one and avoid a strict-mode two-element resolution.
+	await expect(
+		page.getByRole('heading', {name: projectTitle}).and(page.locator(':visible'))
+			.or(page.locator('.shell-inspector-region').getByText('Project Detail').and(page.locator(':visible'))),
+	).toBeVisible()
 }
 
 async function applyTaskSort(page, sortBy, sortOrder = 'asc') {
@@ -403,7 +414,8 @@ test('narrow desktop inspector wraps comment reactions without horizontal overfl
 		window.localStorage.setItem('vikunja-mobile-poc:wide-inspector-width', '296')
 	})
 	await page.reload()
-	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
+	// Wide layout hides the screen-title heading; the active today screen confirms the shell booted.
+	await expect(page.locator('.workspace-screen.is-active[data-screen="today"]')).toBeVisible()
 
 	await openProject(page, 2, 'Work')
 	await page.locator('[data-action="open-task-focus"][data-task-id="201"]').click()

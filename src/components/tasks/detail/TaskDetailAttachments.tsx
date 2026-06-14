@@ -1,4 +1,6 @@
 import type {FormEvent, RefObject} from 'react'
+import AttachmentDownloadLink from '@/components/common/AttachmentDownloadLink'
+import AuthedImage from '@/components/common/AuthedImage'
 import type {TaskAttachment} from '@/types'
 import {
 	canPreviewAttachment,
@@ -64,7 +66,7 @@ export default function TaskDetailAttachments({
 										data-task-attachment-id={attachment.id}
 										onClick={() => onOpenAttachmentPreview(attachment)}
 									>
-										<img
+										<AuthedImage
 											src={`/api/tasks/${taskId}/attachments/${attachment.id}`}
 											alt={attachment.file.name || 'Attachment preview'}
 											loading="lazy"
@@ -82,13 +84,13 @@ export default function TaskDetailAttachments({
 											{attachment.file.name || 'Unnamed attachment'}
 										</button>
 									) : (
-										<a
+										<AttachmentDownloadLink
 											className="detail-attachment-name"
-											href={`/api/tasks/${taskId}/attachments/${attachment.id}`}
-											download={attachment.file.name || 'attachment'}
+											path={`/api/tasks/${taskId}/attachments/${attachment.id}`}
+											filename={attachment.file.name || 'attachment'}
 										>
 											{attachment.file.name || 'Unnamed attachment'}
-										</a>
+										</AttachmentDownloadLink>
 									)}
 									<div className="detail-meta">
 										{formatAttachmentSize(attachment.file.size)}
@@ -106,13 +108,13 @@ export default function TaskDetailAttachments({
 											Preview
 										</button>
 									) : null}
-									<a
+									<AttachmentDownloadLink
 										className="ghost-button detail-comment-action"
-										href={`/api/tasks/${taskId}/attachments/${attachment.id}`}
-										download={attachment.file.name || 'attachment'}
+										path={`/api/tasks/${taskId}/attachments/${attachment.id}`}
+										filename={attachment.file.name || 'attachment'}
 									>
 										Download
-									</a>
+									</AttachmentDownloadLink>
 									<button
 										className="ghost-button detail-comment-action"
 										type="button"

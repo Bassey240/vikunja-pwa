@@ -114,7 +114,7 @@ export default function SettingsAccountSection({
 	onDisconnect: () => void
 	onLogout: () => void
 	onSetAccountAuthMode: (mode: AccountForm['authMode']) => void
-	onSetAccountField: (field: keyof AccountForm, value: string) => void
+	onSetAccountField: <K extends keyof AccountForm>(field: K, value: AccountForm[K]) => void
 	onSubmit: (event: FormEvent<HTMLFormElement>) => void
 	onReloadSessions: () => void
 	onRevokeAccountSession: (sessionId: string) => void
@@ -343,6 +343,22 @@ export default function SettingsAccountSection({
 										onChange={event => onSetAccountField('password', event.currentTarget.value)}
 									/>
 								</label>
+								<div className="detail-item detail-item-full detail-field settings-checkbox-field">
+									<label className="settings-checkbox-row">
+										<input
+											data-account-field="rememberSession"
+											name="rememberSession"
+											type="checkbox"
+											checked={accountForm.rememberSession}
+											disabled={settingsSubmitting}
+											onChange={event => onSetAccountField('rememberSession', event.currentTarget.checked)}
+										/>
+										<span>Stay logged in</span>
+									</label>
+									<div className="detail-helper-text">
+										Uses Vikunja&apos;s native remembered-session mode for password sign-in.
+									</div>
+								</div>
 							</>
 						) : (
 							<label className="detail-item detail-item-full detail-field">
@@ -370,6 +386,11 @@ export default function SettingsAccountSection({
 					<div className="empty-state compact">
 						Password login is recommended for self-hosted Vikunja. API tokens are sent only to this backend and are never stored in browser storage.
 					</div>
+					{showPasswordForm ? (
+						<div className="empty-state compact">
+							Remembered sessions still depend on the upstream Vikunja server keeping a fixed JWT secret across restarts.
+						</div>
+					) : null}
 				</div>
 				{account?.sessionsSupported ? (
 					<div className="detail-core-card settings-subsection">

@@ -827,6 +827,17 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 			return false
 		}
 
+		// Notification preferences live in Vikunja user settings, which API
+		// tokens cannot write. Don't attempt the save (it would 401) — explain
+		// instead of failing.
+		if (get().account?.authMode === 'apiToken') {
+			set({
+				settingsNotice:
+					'Notification preferences sync requires signing in with your Vikunja account. With an API token they can only be changed in the Vikunja web app.',
+			})
+			return false
+		}
+
 		const existingSettings = (get().account?.user?.settings || {}) as Record<string, unknown>
 		const existingFrontendSettings = normalizeFrontendSettings(existingSettings.frontend_settings)
 
@@ -870,6 +881,19 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 			return
 		}
 
+		// Vikunja API tokens cannot access user/settings/* routes (avatar,
+		// email, password, TOTP) — those require a real session, regardless of
+		// the token's checked permissions. So with an API token, skip the call
+		// and default the provider rather than surfacing a 401.
+		if (get().account?.authMode === 'apiToken') {
+			set({
+				avatarProvider: normalizeAvatarProvider(null),
+				avatarProviderLoaded: true,
+				avatarProviderLoading: false,
+			})
+			return
+		}
+
 		set({avatarProviderLoading: true, error: null})
 
 		try {
@@ -879,10 +903,14 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 				avatarProviderLoaded: true,
 			})
 		} catch (error) {
+			// Avatar provider is cosmetic — never block Settings with a global
+			// error if it can't be read (e.g. token-scoped instances).
 			set({
-				error: formatError(error as Error),
+				avatarProvider: normalizeAvatarProvider(null),
 				avatarProviderLoaded: true,
 			})
+			// eslint-disable-next-line no-console
+			console.warn('Avatar provider unavailable:', formatError(error as Error))
 		} finally {
 			set({avatarProviderLoading: false})
 		}

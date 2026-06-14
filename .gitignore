@@ -20,3 +20,7 @@ tmp
 tmp/
 deploy/*
 !deploy/.gitkeep
+
+
+# Prototype/design scratch — not part of the app
+/Vikunja PWA CSS re-design/

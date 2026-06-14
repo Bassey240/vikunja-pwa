@@ -7,7 +7,8 @@ const MIGRATION_SERVICES: Array<{
 	service: MigrationService
 	label: string
 	description: string
-	mode: 'oauth' | 'file'
+	mode: 'oauth' | 'file' | 'csv'
+	accept?: string
 }> = [
 	{
 		service: 'todoist',
@@ -32,12 +33,27 @@ const MIGRATION_SERVICES: Array<{
 		label: 'TickTick',
 		description: 'Upload a TickTick export file and let Vikunja import it in the background.',
 		mode: 'file',
+		accept: '.csv,.txt,text/csv,text/plain',
+	},
+	{
+		service: 'wekan',
+		label: 'WeKan',
+		description: 'Upload a WeKan board export and let Vikunja import projects, tasks, buckets, labels, and attachments.',
+		mode: 'file',
+		accept: '.json,application/json',
+	},
+	{
+		service: 'csv',
+		label: 'CSV',
+		description: 'Analyze a CSV file, map columns to Vikunja fields, preview the result, and import tasks in one pass.',
+		mode: 'csv',
 	},
 	{
 		service: 'vikunja-file',
 		label: 'Vikunja File',
 		description: 'Upload a Vikunja export archive and restore it as an import inside your connected account.',
 		mode: 'file',
+		accept: '.zip,application/zip,application/x-zip-compressed',
 	},
 ]
 
@@ -56,6 +72,7 @@ export default function SettingsMigrationSection({
 	onLoadMigrationStatus,
 	onGetMigrationAuthUrl,
 	onUploadFileMigration,
+	onOpenCsvImporter,
 	onOpenMigrationProviderSettings,
 }: {
 	open: boolean
@@ -72,6 +89,7 @@ export default function SettingsMigrationSection({
 	onLoadMigrationStatus: (service: MigrationService) => void
 	onGetMigrationAuthUrl: (service: MigrationService) => Promise<string | null>
 	onUploadFileMigration: (service: MigrationService, file: File) => Promise<boolean>
+	onOpenCsvImporter: () => void
 	onOpenMigrationProviderSettings: () => void
 }) {
 	const [selectedFiles, setSelectedFiles] = useState<Partial<Record<MigrationService, File | null>>>({})
@@ -110,8 +128,7 @@ export default function SettingsMigrationSection({
 		<SettingsSection title="Migration" section="migration" open={open} onToggle={onToggle}>
 			<div className="empty-state compact">
 				Start one-time imports from other services here. OAuth-based imports redirect through the service and then return to the redirect URL configured on the Vikunja server.
-				If that callback still points at the original Vikunja frontend, finish the import there or update the migration provider redirect URL in Administration.
-				The external Todoist, Trello, or Microsoft developer app must also use the same callback URL.
+				If that callback still points at the original Vikunja frontend, finish the import there or update the migration provider redirect URL in Administration. CSV imports stay in this PWA and use a detect, preview, and import flow instead.
 			</div>
 			{vikunjaInfoLoading && !migrationAvailabilityResolved ? (
 				<div className="empty-state compact">Checking which importers are enabled on this Vikunja instance…</div>
@@ -130,7 +147,7 @@ export default function SettingsMigrationSection({
 							<div className="migration-service-row">
 								<div>
 									<div className="detail-label">{entry.label}</div>
-									<div className="detail-value">{entry.mode === 'oauth' ? 'OAuth import' : 'File import'}</div>
+									<div className="detail-value">{entry.mode === 'oauth' ? 'OAuth import' : entry.mode === 'csv' ? 'Guided CSV import' : 'File import'}</div>
 								</div>
 								<div className={`count-chip migration-status-chip status-${status}`.trim()}>
 									{loading ? 'Checking…' : formatMigrationStatus(status)}
@@ -170,12 +187,31 @@ export default function SettingsMigrationSection({
 										</button>
 									</div>
 								</>
+							) : entry.mode === 'csv' ? (
+								<div className="detail-inline-actions">
+									<button
+										className="pill-button"
+										type="button"
+										onClick={onOpenCsvImporter}
+									>
+										Open CSV Importer
+									</button>
+									<button
+										className="pill-button subtle"
+										type="button"
+										disabled={loading}
+										onClick={() => onLoadMigrationStatus(entry.service)}
+									>
+										Refresh status
+									</button>
+								</div>
 							) : (
 								<div className="detail-inline-actions migration-file-actions">
 									<input
 										className="detail-input"
 										type="file"
 										data-migration-file-input={entry.service}
+										accept={entry.accept}
 										disabled={submitting}
 										onChange={event => {
 											const file = event.currentTarget.files?.[0] || null
@@ -221,7 +257,7 @@ export default function SettingsMigrationSection({
 						<div className="migration-service-row">
 							<div>
 								<div className="detail-label">{entry.label}</div>
-								<div className="detail-value">{entry.mode === 'oauth' ? 'OAuth import' : 'File import'}</div>
+								<div className="detail-value">{entry.mode === 'oauth' ? 'OAuth import' : entry.mode === 'csv' ? 'Guided CSV import' : 'File import'}</div>
 							</div>
 							<div className="count-chip migration-status-chip status-unavailable">
 								Not enabled

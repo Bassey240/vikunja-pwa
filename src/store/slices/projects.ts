@@ -1,4 +1,4 @@
-import {api, uploadApi} from '@/api'
+import {api, apiBlob, uploadApi} from '@/api'
 import {
 	defaultProjectFilters,
 	normalizeProjectFilters,
@@ -601,7 +601,7 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 			const useViewEndpoint = isManualTaskSort(get().projectFilters.taskSortBy)
 			let tasks = get().projectPreviewTasksById[projectId] || []
 			if (useViewEndpoint) {
-				const viewId = await get().resolveProjectPreviewTaskViewId(projectId)
+				const viewId = await get().resolveProjectListTaskViewId(projectId)
 				if (viewId) {
 					const normalizedSort = sanitizeProjectPreviewTaskSort(sortBy, orderBy)
 					const [viewTasks, completedTasks] = await Promise.all([
@@ -941,22 +941,21 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 		}
 
 		try {
-			const response = await fetch(`/api/projects/${numericProjectId}/background`, {
-				credentials: 'same-origin',
-			})
-			if (response.status === 404) {
-				set(state => ({
-					projectBackgroundUrls: {
-						...state.projectBackgroundUrls,
-						[numericProjectId]: null,
-					},
-				}))
-				return null
+			let blob: Blob
+			try {
+				blob = await apiBlob(`/api/projects/${numericProjectId}/background`)
+			} catch (error) {
+				if ((error as {statusCode?: number}).statusCode === 404) {
+					set(state => ({
+						projectBackgroundUrls: {
+							...state.projectBackgroundUrls,
+							[numericProjectId]: null,
+						},
+					}))
+					return null
+				}
+				throw error
 			}
-			if (!response.ok) {
-				throw new Error(`Background load failed: ${response.status}`)
-			}
-			const blob = await response.blob()
 			const nextUrl = URL.createObjectURL(blob)
 			set(state => {
 				const previousUrl = state.projectBackgroundUrls[numericProjectId]

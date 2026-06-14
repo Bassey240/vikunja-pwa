@@ -300,7 +300,7 @@ export function createVikunjaClient({
 	}
 }
 
-export async function createPasswordAccount({baseUrl, username, password, totpPasscode = ''}) {
+export async function createPasswordAccount({baseUrl, username, password, totpPasscode = '', longToken = false}) {
 	const nextTotpPasscode = `${totpPasscode || ''}`.trim()
 	const response = await fetch(new URL('login', `${baseUrl}/`), {
 		method: 'POST',
@@ -311,6 +311,7 @@ export async function createPasswordAccount({baseUrl, username, password, totpPa
 		body: JSON.stringify({
 			username,
 			password,
+			long_token: Boolean(longToken),
 			...(nextTotpPasscode ? {totp_passcode: nextTotpPasscode} : {}),
 		}),
 	})

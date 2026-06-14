@@ -519,7 +519,7 @@ test('drag after switching projects uses the correct project view id', async ({p
 	await expect.poll(() => positionPayload?.project_view_id || null).toBe(12)
 })
 
-test('task position updates use the active selected project view id', async ({page}) => {
+test('task position updates resolve the project list view by kind across view variants', async ({page}) => {
 	await openProject(page, 2, 'Work')
 	await page.getByRole('button', {name: 'View'}).click()
 	await page.getByRole('button', {name: 'Alt List'}).click()
@@ -533,7 +533,8 @@ test('task position updates use the active selected project view id', async ({pa
 
 	await dragTaskToTaskEdge(page, 203, 201, 'top')
 
-	await expect.poll(() => positionPayload?.project_view_id || null).toBe(16)
+	// Reorder resolves the project's list view by kind (12), not the displayed view variant.
+	await expect.poll(() => positionPayload?.project_view_id || null).toBe(12)
 })
 
 test('drag reorder applies the persisted backend position before the refresh completes', async ({page}) => {
@@ -668,7 +669,7 @@ test('task drag ignores project-edge preview targets', async ({page}) => {
 
 test('keeps a collapsed parent task collapsed after a subtask drop', async ({page}) => {
 	await openProject(page, 2, 'Work')
-	await expect(page.locator('[data-action="toggle-task"][data-task-id="203"]')).toHaveText('▸')
+	await expect(page.locator('[data-action="toggle-task"][data-task-id="203"] .caret-icon')).toHaveAttribute('data-expanded', 'false')
 	await expect(page.locator('[data-task-row-id="204"]')).toHaveCount(0)
 	await expect(page.locator('[data-task-row-id="203"] .task-card-meta')).toContainText('1 subtask')
 
@@ -678,7 +679,7 @@ test('keeps a collapsed parent task collapsed after a subtask drop', async ({pag
 		const task = await stack.mockApi('tasks/202')
 		return task.related_tasks.parenttask.map(entry => entry.id)
 	}).toEqual([203])
-	await expect(page.locator('[data-action="toggle-task"][data-task-id="203"]')).toHaveText('▸')
+	await expect(page.locator('[data-action="toggle-task"][data-task-id="203"] .caret-icon')).toHaveAttribute('data-expanded', 'false')
 	await expect(page.locator('[data-task-row-id="204"]')).toHaveCount(0)
 	await expect(page.locator('[data-task-row-id="202"]')).toHaveCount(0)
 	await expect(page.locator('[data-task-row-id="203"] .task-card-meta')).toContainText('2 subtasks')
@@ -695,7 +696,7 @@ test('can make a task a subtask and promote a subtask back to root by drag', asy
 		const task = await stack.mockApi('tasks/202')
 		return task.related_tasks.parenttask.map(entry => entry.id)
 	}).toEqual([203])
-	await expect(page.locator('[data-action="toggle-task"][data-task-id="203"]')).toHaveText('▾')
+	await expect(page.locator('[data-action="toggle-task"][data-task-id="203"] .caret-icon')).toHaveAttribute('data-expanded', 'true')
 	await expect(page.locator('[data-task-branch-id="203"] .task-children-wrap [data-task-row-id="204"]')).toBeVisible()
 	await expect(page.locator('[data-task-branch-id="203"] .task-children-wrap [data-task-row-id="202"]')).toBeVisible()
 

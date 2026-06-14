@@ -14,6 +14,7 @@ import {
 	isAppleMobileWeb,
 	type SettingsSectionId,
 } from '@/utils/settings-helpers'
+import {getPlatform} from '@/platform/registry'
 import SettingsSection from './SettingsSection'
 
 export default function SettingsNotificationsSection({
@@ -131,46 +132,51 @@ export default function SettingsNotificationsSection({
 		>
 			<div className="empty-state compact">
 				Choose which Vikunja notification categories appear in the in-app notification center.
-				Browser permission, device support, and test alerts are managed here too. Your own
-				actions stay hidden automatically.
+				{getPlatform().capabilities.hasNativeNotifications
+					? ' Device alerts are configured in the Reminders section. Your own actions stay hidden automatically.'
+					: ' Browser permission, device support, and test alerts are managed here too. Your own actions stay hidden automatically.'}
 			</div>
-			<div className="detail-grid">
-				<div className="detail-item detail-field">
-					<div className="detail-label">Browser notifications</div>
-					<div className="detail-value">{browserNotificationStatusLabel}</div>
-				</div>
-				<div className="detail-item detail-field">
-					<div className="detail-label">Push API</div>
-					<div className="detail-value">{pushManagerSupported ? 'Supported' : 'Unavailable'}</div>
-				</div>
-				<div className="detail-item detail-field">
-					<div className="detail-label">Secure context</div>
-					<div className="detail-value">{isSecureContext ? 'Yes' : 'No'}</div>
-				</div>
-				<div className="detail-item detail-field">
-					<div className="detail-label">Installed app mode</div>
-					<div className="detail-value">{standaloneWebApp ? 'Yes' : 'No'}</div>
-				</div>
-			</div>
-			<div className="settings-action-row">
-				{browserNotificationsSupported && browserNotificationPermission === 'default' ? (
-					<button
-						className="pill-button subtle"
-						type="button"
-						disabled={notificationPermissionRequesting}
-						onClick={onRequestBrowserNotificationPermission}
-					>
-						{notificationPermissionRequesting ? 'Waiting…' : 'Enable notifications'}
-					</button>
-				) : null}
-				{browserNotificationsSupported && browserNotificationPermission === 'granted' ? (
-					<button className="pill-button subtle" type="button" onClick={onSendTestBrowserNotification}>
-						Send test notification
-					</button>
-				) : null}
-			</div>
-			{browserNotificationMessage ? <div className="empty-state compact">{browserNotificationMessage}</div> : null}
-			{mobileSupportMessage ? <div className="empty-state compact">{mobileSupportMessage}</div> : null}
+			{getPlatform().capabilities.hasNativeNotifications ? null : (
+				<>
+					<div className="detail-grid">
+						<div className="detail-item detail-field">
+							<div className="detail-label">Browser notifications</div>
+							<div className="detail-value">{browserNotificationStatusLabel}</div>
+						</div>
+						<div className="detail-item detail-field">
+							<div className="detail-label">Push API</div>
+							<div className="detail-value">{pushManagerSupported ? 'Supported' : 'Unavailable'}</div>
+						</div>
+						<div className="detail-item detail-field">
+							<div className="detail-label">Secure context</div>
+							<div className="detail-value">{isSecureContext ? 'Yes' : 'No'}</div>
+						</div>
+						<div className="detail-item detail-field">
+							<div className="detail-label">Installed app mode</div>
+							<div className="detail-value">{standaloneWebApp ? 'Yes' : 'No'}</div>
+						</div>
+					</div>
+					<div className="settings-action-row">
+						{browserNotificationsSupported && browserNotificationPermission === 'default' ? (
+							<button
+								className="pill-button subtle"
+								type="button"
+								disabled={notificationPermissionRequesting}
+								onClick={onRequestBrowserNotificationPermission}
+							>
+								{notificationPermissionRequesting ? 'Waiting…' : 'Enable notifications'}
+							</button>
+						) : null}
+						{browserNotificationsSupported && browserNotificationPermission === 'granted' ? (
+							<button className="pill-button subtle" type="button" onClick={onSendTestBrowserNotification}>
+								Send test notification
+							</button>
+						) : null}
+					</div>
+					{browserNotificationMessage ? <div className="empty-state compact">{browserNotificationMessage}</div> : null}
+					{mobileSupportMessage ? <div className="empty-state compact">{mobileSupportMessage}</div> : null}
+				</>
+			)}
 			<form className="detail-grid settings-form" data-form="notification-preferences" onSubmit={handleSubmit}>
 				{notificationPreferenceDefinitions.map(definition => (
 					<div key={definition.category} className="detail-item detail-item-full detail-field settings-checkbox-field">

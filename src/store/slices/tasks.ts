@@ -1,4 +1,5 @@
 import {api, type ApiError} from '@/api'
+import {getPlatform} from '@/platform/registry'
 import {
 	defaultTaskFilters,
 	normalizeTaskFilters,
@@ -655,6 +656,11 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 		const nextDone = !task.done
 		const doneAt = nextDone ? new Date().toISOString() : null
 		const snapshot = cloneTaskSnapshot(task)
+		if (nextDone) {
+			getPlatform().haptics.success()
+		} else {
+			getPlatform().haptics.drop()
+		}
 
 		clearCompletionAnimationTimer(taskId)
 		set(state => {
@@ -855,6 +861,7 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 			return false
 		}
 
+		getPlatform().haptics.drop()
 		const snapshot = captureTaskDeletionSnapshot(get())
 		set(state => ({
 			...applyTaskDeletionOptimisticUpdate(state, [taskId]),

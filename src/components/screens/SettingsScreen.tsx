@@ -1,3 +1,4 @@
+import {getPlatform} from '@/platform/registry'
 import {APP_VERSION} from '@/appVersion'
 import {CLIENT_BUILD_ID} from '@/clientBuildId'
 import StatusCards from '@/components/layout/StatusCards'
@@ -19,7 +20,7 @@ import {
 	type SettingsSectionId,
 } from '@/utils/settings-helpers'
 import type {MigrationService} from '@/types'
-import {type FormEvent, useEffect, useMemo, useState} from 'react'
+import {Fragment, type FormEvent, useEffect, useMemo, useState} from 'react'
 import {useLocation, useNavigate} from 'react-router-dom'
 
 export default function SettingsScreen() {
@@ -126,9 +127,13 @@ export default function SettingsScreen() {
 	const teamsLoading = useAppStore(state => state.teamsLoading)
 	const teamSubmitting = useAppStore(state => state.teamSubmitting)
 	const theme = useAppStore(state => state.theme)
+	const defaultDesktopViewKind = useAppStore(state => state.defaultDesktopViewKind)
+	const defaultMobileViewKind = useAppStore(state => state.defaultMobileViewKind)
 	const setAccountField = useAppStore(state => state.setAccountField)
 	const setAccountAuthMode = useAppStore(state => state.setAccountAuthMode)
 	const setTheme = useAppStore(state => state.setTheme)
+	const setDefaultDesktopViewKind = useAppStore(state => state.setDefaultDesktopViewKind)
+	const setDefaultMobileViewKind = useAppStore(state => state.setDefaultMobileViewKind)
 	const setChangePasswordField = useAppStore(state => state.setChangePasswordField)
 	const setChangeEmailField = useAppStore(state => state.setChangeEmailField)
 	const setAccountDeletionField = useAppStore(state => state.setAccountDeletionField)
@@ -225,6 +230,8 @@ export default function SettingsScreen() {
 		userAdministration: false,
 		teams: false,
 		appData: false,
+		'app-lock': false,
+		reminders: false,
 	})
 
 	const canManageUsers = Boolean(account?.authMode === 'password' && account?.canUseAdminBridge)
@@ -298,7 +305,7 @@ export default function SettingsScreen() {
 		if (!requestedSection) {
 			return
 		}
-		if (!['offline', 'migration', 'webhooks', 'security', 'account', 'preferences', 'notifications', 'collaboration', 'teams', 'appData', 'userAdministration'].includes(requestedSection)) {
+		if (!['offline', 'migration', 'webhooks', 'security', 'account', 'preferences', 'notifications', 'collaboration', 'teams', 'appData', 'userAdministration', 'app-lock', 'reminders'].includes(requestedSection)) {
 			return
 		}
 
@@ -349,6 +356,8 @@ export default function SettingsScreen() {
 			userAdministration: false,
 			teams: false,
 			appData: false,
+			'app-lock': false,
+			reminders: false,
 		})
 	}, [accountDeletionNotice, openSections.account])
 
@@ -512,6 +521,10 @@ export default function SettingsScreen() {
 								accountAuthMode={account?.authMode}
 								theme={theme}
 								onSetTheme={setTheme}
+								defaultDesktopViewKind={defaultDesktopViewKind}
+								defaultMobileViewKind={defaultMobileViewKind}
+								onSetDefaultDesktopViewKind={setDefaultDesktopViewKind}
+								onSetDefaultMobileViewKind={setDefaultMobileViewKind}
 								timezoneOptionsLoading={timezoneOptionsLoading}
 								currentTimezone={currentTimezone}
 								timezoneSubmitting={timezoneSubmitting}
@@ -522,6 +535,14 @@ export default function SettingsScreen() {
 								}}
 							/>
 						) : null}
+						{getPlatform().settingsSections.map(s => (
+							<Fragment key={s.id}>
+								{s.render({
+									open: openSections[s.id as SettingsSectionId],
+									onToggle: id => toggleSection(id as SettingsSectionId),
+								})}
+							</Fragment>
+						))}
 						{account ? (
 							<SettingsOfflineSection
 								open={openSections.offline}
@@ -570,7 +591,7 @@ export default function SettingsScreen() {
 								onSubmit={saveNotificationPreferences}
 							/>
 						) : null}
-						{account ? (
+						{account && getPlatform().capabilities.showPwaOnlySections ? (
 							<SettingsSecuritySection
 								open={openSections.security}
 								onToggle={toggleSection}
@@ -608,7 +629,7 @@ export default function SettingsScreen() {
 								onDeleteApiToken={deleteApiToken}
 							/>
 						) : null}
-						{account ? (
+						{account && getPlatform().capabilities.showPwaOnlySections ? (
 							<SettingsWebhooksSection
 								open={openSections.webhooks}
 								onToggle={toggleSection}
@@ -629,7 +650,7 @@ export default function SettingsScreen() {
 								onDeleteUserWebhook={deleteUserWebhook}
 							/>
 						) : null}
-						{account ? (
+						{account && getPlatform().capabilities.showPwaOnlySections ? (
 							<SettingsMigrationSection
 								open={openSections.migration}
 								onToggle={toggleSection}
@@ -647,6 +668,9 @@ export default function SettingsScreen() {
 								}}
 								onGetMigrationAuthUrl={getMigrationAuthUrl}
 								onUploadFileMigration={uploadFileMigration}
+								onOpenCsvImporter={() => {
+									navigate('/migrate/csv')
+								}}
 								onOpenMigrationProviderSettings={() => {
 									toggleSection('userAdministration')
 								}}
@@ -663,7 +687,7 @@ export default function SettingsScreen() {
 								onSubmit={saveCollaborationSettings}
 							/>
 						) : null}
-						{account?.authMode === 'password' ? (
+						{account?.authMode === 'password' && getPlatform().capabilities.showPwaOnlySections ? (
 							<SettingsAdminSection
 								open={openSections.userAdministration}
 								onToggle={toggleSection}
@@ -782,6 +806,8 @@ function normalizeMigrationService(value: unknown): MigrationService | '' {
 		case 'trello':
 		case 'microsoft-todo':
 		case 'ticktick':
+		case 'wekan':
+		case 'csv':
 		case 'vikunja-file':
 			return `${value || ''}`.trim().toLowerCase() as MigrationService
 		default:

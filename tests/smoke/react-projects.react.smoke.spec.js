@@ -70,7 +70,9 @@ async function openProjects(page, targetStack = stack) {
 	await expect
 		.poll(async () => page.evaluate(() => window.location.pathname))
 		.toBe('/projects')
-	await expect(page.getByRole('heading', {name: 'Projects'})).toBeVisible()
+	// Wide layout hides the screen-title heading (sidebar shows the active view), so
+	// assert the active projects screen — present at both narrow and wide widths.
+	await expect(page.locator('.workspace-screen.is-active[data-screen="projects"]')).toBeVisible()
 }
 
 async function previewTaskIds(page, projectId) {
@@ -103,7 +105,7 @@ test('projects screen renders hierarchy and project detail saves edits', async (
 	const titleInput = page.locator('[data-project-detail-title]')
 	await titleInput.fill('Travel Plans')
 	await titleInput.blur()
-	await expect(page.locator('.panel-title').filter({hasText: 'Travel Plans'})).toBeVisible()
+	await expect(page.getByRole('heading', {name: 'Travel Plans'})).toBeVisible()
 
 	const identifierInput = page.locator('[data-project-detail-identifier]')
 	await identifierInput.fill('TRIP')
@@ -125,7 +127,7 @@ test('projects screen renders hierarchy and project detail saves edits', async (
 	}).toBe(true)
 
 	await page.locator('[data-project-detail-parent]').selectOption('0')
-	await page.locator('.workspace-screen.is-active .topbar [data-action="close-detail-overlay"]').click()
+	await page.locator('[data-action="close-project-detail"]').click()
 	await expect(page.locator('.screen-body > .project-node').filter({hasText: 'Travel Plans'})).toHaveCount(1)
 })
 
@@ -134,7 +136,7 @@ test('project composer creates projects and project menu duplicate move-root and
 
 	await page.getByRole('button', {name: 'Add'}).click()
 	await expect(page.locator('[data-form="root-task"]')).toBeVisible()
-	await page.locator('[data-action="close-root-composer"]').click({position: {x: 12, y: 12}})
+	await page.locator('[data-action="close-root-composer-button"]').click()
 	await expect(page.locator('[data-form="root-task"]')).toHaveCount(0)
 	await openScreenMenu(page)
 	await page.locator('[data-menu-root="true"] [data-action="open-project-composer"]').click()
@@ -697,7 +699,8 @@ test('gantt renders dependency arrows and drag release does not open task focus'
 
 	const workNode = page.locator('[data-project-node-id="2"]')
 	await workNode.locator('[data-action="select-project"][data-project-id="2"]').click()
-	await expect(page.getByRole('heading', {name: 'Work'})).toBeVisible()
+	// Wide layout hides the screen-title heading; the view-menu toggle confirms the project detail loaded.
+	await expect(page.locator('[data-action="toggle-project-view-menu"]')).toBeVisible()
 
 	await page.locator('[data-action="toggle-project-view-menu"]').click()
 	await page.locator('[data-action="select-project-view"][data-view-id="17"]').click()

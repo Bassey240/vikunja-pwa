@@ -1,5 +1,6 @@
 import {api} from '@/api'
 import UserAvatar from '@/components/common/UserAvatar'
+import Caret from '@/components/common/Caret'
 import DetailSheet from '@/components/common/DetailSheet'
 import UnsplashBackgroundPicker from '@/components/projects/UnsplashBackgroundPicker'
 import WebhookManager from '@/components/webhooks/WebhookManager'
@@ -198,6 +199,9 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 		if (!projectDetailOpen) {
 			setOpenSections(DEFAULT_PROJECT_DETAIL_SECTIONS)
 			setExpandedLinkShareId(null)
+			/* Footer nav closes the detail without handleCloseProjectDetail. */
+			setBackgroundSheetOpen(false)
+			setBackgroundTab('upload')
 			clearShareDetail()
 		}
 	}, [clearShareDetail, projectDetailOpen])
@@ -529,21 +533,48 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 		closeProjectDetail()
 	}
 
+	function closeBackgroundSheet() {
+		setBackgroundSheetOpen(false)
+		setBackgroundTab('upload')
+	}
+
+	// Background is a sub-view of the project-detail page, not its own page: it
+	// reuses the single topbar so Back steps back one level, never stacking a
+	// second header over the first.
+	const backgroundOpen = backgroundSheetOpen && Boolean(projectDetail)
+
 	return (
 		<>
 			<DetailSheet
 				open={projectDetailOpen}
-				closeAction="close-project-detail"
-				onClose={handleCloseProjectDetail}
+				closeAction={backgroundOpen ? 'close-project-background-sheet' : 'close-project-detail'}
+				onClose={backgroundOpen ? closeBackgroundSheet : handleCloseProjectDetail}
 				mode={mode}
+				variant="page"
+				title={backgroundOpen ? 'Project Background' : projectDetail ? projectDetail.title : 'Project'}
 			>
 			<div className="sheet-head detail-sheet-head">
-				<div>
-					<div className="panel-label">Project Detail</div>
-					<div className="panel-title">{projectDetail ? projectDetail.title : 'Loading…'}</div>
-				</div>
+				{/* Only the inspector lacks a topbar to show the title. */}
+				{mode === 'inspector' ? (
+					<div>
+						<div className="panel-label">{backgroundOpen ? 'Project Background' : 'Project Detail'}</div>
+						<div className="panel-title">{projectDetail ? projectDetail.title : 'Loading…'}</div>
+					</div>
+				) : null}
 				<div className="panel-action-row">
-					{projectDetail && projectSubscribed !== null ? (
+					{backgroundOpen ? (
+						/* Inspector has no topbar Back, so it carries the one-step-back control. */
+						mode === 'inspector' ? (
+							<button
+								className="pill-button"
+								data-action="close-project-background-sheet"
+								type="button"
+								onClick={closeBackgroundSheet}
+							>
+								Back
+							</button>
+						) : null
+					) : projectDetail && projectSubscribed !== null ? (
 						<button
 							className={`pill-button ${projectSubscribed ? 'is-active' : ''}`.trim()}
 							data-action="toggle-project-subscription"
@@ -557,7 +588,7 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 				</div>
 			</div>
 			{projectDetailLoading && !projectDetail ? <div className="empty-state">Loading project details…</div> : null}
-				{projectDetail ? (
+				{projectDetail && !backgroundOpen ? (
 				<div className="project-detail-stack detail-density-compact-surface">
 					<CollapsibleProjectSection
 						title="Project"
@@ -1150,23 +1181,8 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 					</div>
 				</div>
 				) : null}
-				{projectDetail ? (
-					<DetailSheet
-						open={backgroundSheetOpen}
-						closeAction="close-project-background-sheet"
-						onClose={() => {
-							setBackgroundSheetOpen(false)
-							setBackgroundTab('upload')
-						}}
-						mode={mode}
-					>
-						<div className="sheet-head detail-sheet-head">
-							<div>
-								<div className="panel-label">Project Background</div>
-								<div className="panel-title">{projectDetail.title}</div>
-							</div>
-						</div>
-						<div className="detail-core-card background-sheet-card" data-form="project-background">
+				{projectDetail && backgroundOpen ? (
+					<div className="detail-core-card background-sheet-card" data-form="project-background">
 							<div className="background-sheet-tabs">
 								<button
 									className={`pill-button ${backgroundTab === 'upload' ? 'is-active' : ''}`.trim()}
@@ -1232,8 +1248,7 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 									}}
 								/>
 							)}
-						</div>
-					</DetailSheet>
+					</div>
 				) : null}
 			</DetailSheet>
 		</>
@@ -1275,7 +1290,7 @@ function CollapsibleProjectSection({
 					<span className="detail-label">{title}</span>
 				</span>
 				<span className="detail-section-chevron" aria-hidden="true">
-					{open ? '▾' : '▸'}
+					<Caret expanded={open} />
 				</span>
 			</button>
 			{open ? <div className="detail-section-content">{children}</div> : null}

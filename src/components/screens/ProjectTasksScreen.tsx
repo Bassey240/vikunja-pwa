@@ -483,7 +483,7 @@ export default function ProjectTasksScreen({
 			? [{
 					action: 'open-project-tasks-menu',
 					label: 'Menu',
-					text: '⋯',
+					text: '⋮',
 					className: 'topbar-overview-menu-button',
 					active: Boolean(panelAnchor),
 					menuToggle: true,
@@ -713,7 +713,7 @@ export default function ProjectTasksScreen({
 					)
 				}
 				desktopHeadingTitle={displayProject?.title || selectedProject.title}
-				desktopHeadingCount={`${totalItems} item${totalItems === 1 ? '' : 's'}`}
+				desktopHeadingCount={totalItems}
 				onDismissTray={() => {
 					setViewAnchor(null)
 					setPanelAnchor(null)
@@ -900,7 +900,6 @@ export default function ProjectTasksScreen({
 						</div>
 						<div className="project-surface-background-content project-screen-header-content">
 							<div className="project-screen-title-stack">
-								<div className="detail-label">{isSavedFilterRoute ? 'Saved filter' : 'Project'}</div>
 								<h2 className="project-screen-title">{displayProject?.title || selectedProject.title}</h2>
 								<div className="project-screen-meta-row">
 									<div className="count-chip">{totalItems} item{totalItems === 1 ? '' : 's'}</div>

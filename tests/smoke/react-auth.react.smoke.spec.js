@@ -68,6 +68,17 @@ test('forgot-password and reset-password flows accept a new password', async ({p
 	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
 })
 
+test('password login can request a remembered Vikunja session', async ({page}) => {
+	await page.locator('[data-account-field="baseUrl"]').fill(`${stack.mock.origin}/api/v1`)
+	await page.locator('[data-account-field="username"]').fill('smoke-user')
+	await page.locator('[data-account-field="password"]').fill('smoke-password')
+	await page.locator('[data-account-field="rememberSession"]').check()
+	await page.getByRole('button', {name: 'Connect'}).click()
+
+	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
+	await expect.poll(() => stack.mock.getState().lastLogin?.long_token ?? null).toBe(true)
+})
+
 test('password login prompts for a TOTP code when the account has 2FA enabled', async ({browser}) => {
 	const totpStack = await startTestStack({
 		legacyConfigured: false,

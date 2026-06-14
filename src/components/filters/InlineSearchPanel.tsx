@@ -111,7 +111,7 @@ export default function InlineSearchPanel({
 											type="button"
 											onClick={event => toggleProjectMenu(result.project.id, getMenuAnchor(event.currentTarget))}
 										>
-											⋯
+											⋮
 										</button>
 									</div>
 									{openMenu?.kind === 'project' && openMenu.id === result.project.id ? (

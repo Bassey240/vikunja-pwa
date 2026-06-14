@@ -1,35 +1,98 @@
-:root {
-	--bg: #181616;
-	--bg-elevated: rgba(36, 31, 31, 0.9);
-	--bg-soft: rgba(53, 46, 46, 0.82);
-	--surface-base: #181616;
-	--surface-pane: rgba(36, 31, 31, 0.9);
-	--surface-card: rgba(255, 255, 255, 0.04);
-	--surface-card-strong: rgba(255, 255, 255, 0.06);
-	--surface-field: rgba(0, 0, 0, 0.18);
-	--line-subtle: rgba(255, 255, 255, 0.12);
-	--line-ui: rgba(255, 255, 255, 0.24);
-	--line-strong: rgba(255, 255, 255, 0.34);
-	--line: var(--line-ui);
-	--text: #fff7f1;
-	--muted: #d2c2bb;
-	--accent: #1973ff;
-	--accent-strong: #58a0ff;
-	--accent-soft: rgba(25, 115, 255, 0.16);
-	--brand-accent: #1973ff;
-	--brand-accent-strong: #58a0ff;
-	--warning: #ffcc66;
-	--danger: #ff9286;
-	--success: #4fd964;
-	--warning-soft: var(--warning);
-	--text-muted: var(--muted);
-	--accent-contrast: #fff;
-	--shadow: 0 24px 90px rgba(0, 0, 0, 0.28);
-	--radius-lg: 28px;
-	--radius-md: 20px;
+/* ============================================================================
+ *  REDESIGN TOKENS (dark = primary)
+ *  Source of truth: Vikunja PWA CSS re-design/handoff/tokens.css
+ *  Names from the redesign are exposed AS-IS, AND legacy names from the old
+ *  warm theme are aliased here so existing classes adopt the new palette
+ *  without per-rule edits. AppShell already writes data-theme on <html>.
+ * ============================================================================ */
+:root,
+:root[data-theme="dark"] {
+	/* --- Redesign tokens (canonical names from handoff/tokens.css) --------- */
+	--bg: #0b0b0e;
+	--surface: #131318;
+	--surface-2: #191920;
+	--surface-3: #20202a;
+	--hairline: rgba(255, 255, 255, 0.14);
+	--hairline-2: rgba(255, 255, 255, 0.09);
+	--stroke: rgba(255, 255, 255, 0.20);
+	--proj-ink: #ffffff;
+	--ink-line: var(--proj-ink);
+	--ink-line-soft: rgba(255, 255, 255, 0.30);
+
+	--text: #ededf2;
+	--text-dim: #9b9ba8;
+	--text-faint: #5f5f6c;
+
+	--accent: oklch(0.66 0.16 265);
+	--accent-2: oklch(0.55 0.18 265);
+	--accent-soft: oklch(0.66 0.16 265 / 0.14);
+	--accent-fg: #fff;
+
+	--lbl-blue: oklch(0.66 0.14 245);     --lbl-blue-bg: oklch(0.66 0.14 245 / 0.16);
+	--lbl-green: oklch(0.70 0.13 165);    --lbl-green-bg: oklch(0.70 0.13 165 / 0.16);
+	--lbl-amber: oklch(0.78 0.14 75);     --lbl-amber-bg: oklch(0.78 0.14 75 / 0.16);
+	--lbl-red: oklch(0.68 0.18 25);       --lbl-red-bg: oklch(0.68 0.18 25 / 0.16);
+	--lbl-violet: oklch(0.70 0.13 305);   --lbl-violet-bg: oklch(0.70 0.13 305 / 0.16);
+	--lbl-cyan: oklch(0.74 0.11 210);     --lbl-cyan-bg: oklch(0.74 0.11 210 / 0.16);
+
+	--radius-card: 12px;
+	--radius-chip: 999px;
+	--radius-pill: 10px;
+	/* Squareness scale — one place to tune. Controls (buttons, inputs, FAB) and
+	 * badges (status/role/label chips, ⋮ menu, expand caret) read these instead
+	 * of hard-coded values. */
+	--radius-control: 0.5rem;
+	--radius-badge: 6px;
+	/* Overlay shells (composers, detail sheets, viewers, gantt/kanban panels).
+	 * Squared to match the flat language — was a hard-coded 1.45rem (~23px). */
+	--radius-sheet: 14px;
+	--row-pad-y: 8px;
+	--row-pad-x: 12px;
+	--row-gap: 4px;
+	/* One caret idea everywhere a row or section expands (task + project rows,
+	 * settings + detail sections): a CSS-drawn chevron (.caret-icon) sized by this
+	 * padding, matching the topbar back-button chevron. Bump to enlarge all carets. */
+	--caret-size: 0.32rem;
+	--caret-stroke: 2px;
+
+	/* Flat / "paper" design: no elevation shadows anywhere. --shadow + --shadow-overlay
+	 * are kept as tokens (many surfaces still reference them) but resolve to none, so
+	 * overlays, menus, cards and the composer read as flat sheets separated by borders
+	 * and hairlines, not drop shadows. */
+	--shadow-overlay: none;
+
+	--font-ui: "Geist Sans", "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+	--font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+	--font-display: var(--font-ui);
+
+	/* --- Legacy aliases (old token names → new values) -------------------- */
+	--bg-elevated: var(--surface);
+	--bg-soft: var(--surface-2);
+	--surface-base: var(--bg);
+	--surface-pane: var(--surface);
+	--surface-card: var(--surface);
+	--surface-card-strong: var(--surface-2);
+	--surface-field: var(--surface-3);
+	--line-subtle: var(--hairline-2);
+	--line-ui: var(--hairline);
+	--line-strong: var(--stroke);
+	--line: var(--hairline);
+	--muted: var(--text-dim);
+	--accent-strong: var(--accent-2);
+	--brand-accent: var(--accent);
+	--brand-accent-strong: var(--accent-2);
+	--warning: var(--lbl-amber);
+	--danger: var(--lbl-red);
+	--success: var(--lbl-green);
+	--warning-soft: var(--lbl-amber-bg);
+	--text-muted: var(--text-dim);
+	--accent-contrast: var(--accent-fg);
+	--shadow: var(--shadow-overlay);
+	--radius-lg: var(--radius-card);
+	--radius-md: var(--radius-card);
+	--font-main: var(--font-ui);
 	--control-height: 2.55rem;
 	--control-padding-inline: 0.78rem;
-	--font-main: "Avenir Next", "SF Pro Display", "Segoe UI", sans-serif;
 	--topbar-clearance: calc(
 		env(safe-area-inset-top, 0px) +
 		var(--header-padding-block-start) +
@@ -40,7 +103,16 @@
 	--shell-gutter: 1rem;
 	--bottom-nav-pill-block-size: 4.15rem;
 	--bottom-nav-divider-gap: 0.4rem;
-	--bottom-nav-clearance: 4.9rem;
+	--bottom-nav-clearance: 4rem;
+	/* Composer (add-task/subtask) sheet gaps. --sheet-keyboard-gap: flush gap above
+	 * the keyboard when editing; --sheet-edge-gap: extra lift above the footer when
+	 * closed. Tokenized so the composer's two resting positions stay rule-driven. */
+	--sheet-keyboard-gap: 0.5rem;
+	--sheet-edge-gap: 0.8rem;
+	/* Bottom safe-area inset. Defaults to env(), but main.tsx overrides it inline
+	 * on boot with the last cached value so the fixed footer doesn't jump while
+	 * iOS resolves the real inset after first paint. */
+	--safe-bottom: env(safe-area-inset-bottom, 0px);
 	--mobile-sheet-scroll-reserve: 0px;
 	--header-padding-block-start: 0rem;
 	--header-padding-block-end: 0.4rem;
@@ -77,34 +149,29 @@
 }
 
 :root[data-theme="light"] {
-	--bg: #f4efe9;
-	--bg-elevated: rgba(255, 250, 246, 0.96);
-	--bg-soft: rgba(239, 231, 223, 0.9);
-	--surface-base: #f4efe9;
-	--surface-pane: rgba(255, 250, 246, 0.94);
-	--surface-card: rgba(96, 67, 42, 0.06);
-	--surface-card-strong: rgba(96, 67, 42, 0.1);
-	--surface-field: rgba(96, 67, 42, 0.08);
-	--line-subtle: rgba(50, 33, 20, 0.14);
-	--line-ui: rgba(50, 33, 20, 0.24);
-	--line-strong: rgba(50, 33, 20, 0.34);
-	--text: #23150e;
-	--muted: #6a5548;
-	--accent: #0e56c4;
-	--accent-strong: #0b4aa8;
-	--accent-soft: rgba(14, 86, 196, 0.14);
-	--brand-accent: #1973ff;
-	--brand-accent-strong: #58a0ff;
-	--warning: #9a6a00;
-	--danger: #c03c2d;
-	--success: #2f8f63;
-	--warning-soft: var(--warning);
-	--text-muted: var(--muted);
-	--accent-contrast: #fff;
-	--shadow: 0 24px 70px rgba(46, 23, 8, 0.12);
-	--app-frame-bg: #efe7df;
-	--mask-bg: var(--app-frame-bg);
-	--detail-surface-bg: rgba(96, 67, 42, 0.08);
+	/* Redesign light tokens (from handoff/tokens.css) */
+	--bg: #f9fafc;
+	--surface: #ffffff;
+	--surface-2: #fcfdfe;
+	--surface-3: #f1f3f6;
+	--hairline: rgba(0, 0, 0, 0.13);
+	--hairline-2: rgba(0, 0, 0, 0.08);
+	--stroke: rgba(0, 0, 0, 0.18);
+	--ink-line: var(--proj-ink);
+	--ink-line-soft: rgba(0, 0, 0, 0.22);
+
+	--text: #14141a;
+	--text-dim: #5f6068;
+	--text-faint: #92929b;
+	--proj-ink: #16161c;
+
+	--accent-soft: oklch(0.66 0.16 265 / 0.12);
+	--accent-fg: #fff;
+
+	/* Legacy alias updates (values re-derived for light) */
+	--app-frame-bg: var(--bg);
+	--mask-bg: var(--bg);
+	--detail-surface-bg: var(--surface-2);
 }
 
 * {
@@ -123,11 +190,32 @@
 	border: 0;
 }
 
+/* Safari/WebKit autofill default is a bright yellow background — overwhelms the
+ * dark theme. The only way to override the autofill bg is the inset-shadow
+ * trick + -webkit-text-fill-color (background-color alone is ignored). */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active,
+textarea:-webkit-autofill,
+select:-webkit-autofill {
+	-webkit-box-shadow: 0 0 0 1000px var(--surface-2) inset !important;
+	-webkit-text-fill-color: var(--text) !important;
+	caret-color: var(--text) !important;
+	border-color: var(--hairline) !important;
+	transition: background-color 5000s ease-in-out 0s !important;
+}
+
 html,
 body {
 	margin: 0;
+	/* Static 100vh, NOT 100dvh: 100dvh misreports at iOS PWA cold-start and only
+	 * self-corrects after a rotation — that is the footer launch-move. The narrow
+	 * shell is locked to exactly 100vh and scrolls its content internally (see
+	 * .shell:not(.shell-wide) below), so the *document* never scrolls — which is what
+	 * keeps the fixed masthead/footer/composer from being dragged by an iOS visual-
+	 * viewport pan when the keyboard is up. */
 	min-height: 100vh;
-	min-height: 100dvh;
 	font-family: var(--font-main);
 	background: var(--app-frame-bg);
 	color: var(--text);
@@ -162,7 +250,6 @@ select {
 #app {
 	inline-size: min(100%, 32rem);
 	min-height: 100vh;
-	min-height: 100dvh;
 	background: var(--app-frame-bg);
 }
 
@@ -173,12 +260,69 @@ select {
 }
 
 .shell {
-	min-height: 100vh;
-	min-height: calc(100dvh + 1px);
-	padding: env(safe-area-inset-top) 0 calc(var(--bottom-nav-clearance) + var(--mobile-sheet-scroll-reserve));
+	/* Static vh, never dvh — see html/body above for why. The narrow shell overrides
+	 * this to a locked 100vh that scrolls internally; the wide shell scrolls inside
+	 * its own surface column. The +1px is a harmless desktop artifact. */
+	min-height: calc(100vh + 1px);
+	/* Reserve the masthead height at the top and the footer height + home-indicator
+	 * safe area at the bottom, so content clears both fixed bars (the masthead is
+	 * position:fixed — see below — exactly like the bottom nav). Narrow moves this
+	 * clearance onto .surface-content (the scroller) so content scrolls *under* the
+	 * glass bars; see .shell:not(.shell-wide) .surface-content below. */
+	padding: var(--topbar-clearance) 0 calc(var(--bottom-nav-clearance) + var(--safe-bottom) + var(--mobile-sheet-scroll-reserve));
 	position: relative;
 	background: transparent;
 	border-inline: 1px solid var(--line-subtle);
+}
+
+/* Narrow (mobile) shell: the *document* does not scroll — only .surface-content does.
+ *
+ * This is the whole game on iOS standalone. When the keyboard is up, iOS pans the
+ * *visual* viewport; anything a *document* scroll can move drags the position:fixed
+ * chrome (masthead/footer/composer, all anchored to the layout viewport) along with
+ * it. So the shell is exactly one static 100vh frame with overflow:hidden, and the
+ * content scrolls inside it. With no document scroll, the visual viewport can't pan,
+ * so the fixed bars stay rock-steady while you scroll — only the content moves.
+ * (Static 100vh, never dvh — see html/body for the footer launch-move.) */
+.shell:not(.shell-wide) {
+	block-size: 100vh;
+	min-block-size: 0;
+	overflow: hidden;
+	/* Clearance moves to the scroller below so content scrolls under the glass bars. */
+	padding: 0;
+}
+.shell:not(.shell-wide) .shell-workspace,
+.shell:not(.shell-wide) .workspace-screen-stack,
+.shell:not(.shell-wide) .workspace-screen,
+.shell:not(.shell-wide) .surface {
+	block-size: 100%;
+	min-block-size: 0;
+}
+/* The masthead is position:fixed (out of flow), so the surface is a single scrolling
+ * row — mirror of the wide shell's auto/1fr grid, minus the in-flow header row. */
+.shell:not(.shell-wide) .surface {
+	grid-template-rows: minmax(0, 1fr);
+}
+.shell:not(.shell-wide) .surface-content {
+	block-size: 100%;
+	min-block-size: 0;
+	overflow-y: auto;
+	-webkit-overflow-scrolling: touch;
+	overscroll-behavior: contain;
+	/* The fixed bars' clearance lives here (not on .shell) so content scrolls under
+	 * the glass masthead and footer instead of clipping at their edges. */
+	padding-block-start: var(--topbar-clearance);
+	padding-block-end: calc(var(--bottom-nav-clearance) + var(--safe-bottom) + var(--mobile-sheet-scroll-reserve));
+	/* Default stretch would split the spare 100%-height across the rows. */
+	align-content: start;
+}
+
+/* While editing, the composer lifts to --keyboard-height + gap above the layout
+ * bottom, and the keyboard covers the lower part of the scroller. Reserve that
+ * full height (keyboard + gap + the measured composer height) so the last card
+ * can still scroll clear of the composer instead of hiding behind it. */
+[data-editing] .shell:not(.shell-wide) .surface-content {
+	padding-block-end: calc(var(--keyboard-height, 0px) + var(--sheet-keyboard-gap) + var(--mobile-sheet-scroll-reserve));
 }
 
 .shared-project-shell {
@@ -546,9 +690,8 @@ select {
 
 .auth-shell {
 	min-height: 100vh;
-	min-height: 100dvh;
 	padding:
-		max(1.1rem, env(safe-area-inset-top))
+		calc(env(safe-area-inset-top) + 2rem)
 		1rem
 		max(1.1rem, env(safe-area-inset-bottom))
 		1rem;
@@ -567,7 +710,7 @@ select {
 
 .auth-hero,
 .auth-card {
-	border-radius: calc(var(--radius-lg) + 0.35rem);
+	border-radius: var(--radius-sheet);
 	border: 1.5px solid var(--line-ui);
 	background: var(--surface-pane);
 	box-shadow: var(--shadow);
@@ -590,7 +733,7 @@ select {
 	inline-size: 4.25rem;
 	block-size: 4.25rem;
 	padding: 0.32rem;
-	border-radius: 1.35rem;
+	border-radius: var(--radius-card);
 	background: linear-gradient(135deg, var(--brand-accent), var(--brand-accent-strong));
 	box-shadow: var(--shadow);
 }
@@ -598,7 +741,7 @@ select {
 .auth-logo-mark-core {
 	inline-size: 100%;
 	block-size: 100%;
-	border-radius: 1rem;
+	border-radius: var(--radius-control);
 	display: grid;
 	place-items: center;
 	background: color-mix(in srgb, var(--app-frame-bg) 16%, transparent);
@@ -633,13 +776,13 @@ select {
 	gap: 0.42rem;
 }
 
+/* Flattened (.flat-surface neutralizes the card tokens): the skeleton sits
+ * directly in the hero pane, divided from its label by a hairline. */
 .auth-identity-card {
 	display: grid;
 	gap: 0.62rem;
-	padding: 0.9rem 0.96rem;
-	border-radius: var(--radius-md);
-	background: var(--surface-card);
-	border: 1.5px solid var(--line-ui);
+	padding-block-start: 0.62rem;
+	border-block-start: 1px solid var(--ink-line-soft);
 }
 
 .auth-identity-line {
@@ -678,14 +821,15 @@ select {
 	line-height: 1.1;
 }
 
+/* Flattened (.flat-surface neutralizes the card tokens): the form sits directly
+ * in the auth-card pane, divided from the head/status above by a hairline. Nested
+ * cards (SSO .detail-core-card) flatten too via the neutralized tokens. */
 .auth-fallback-card,
 .auth-form-card {
 	display: grid;
 	gap: 0.7rem;
-	padding: 0.92rem 0.98rem;
-	border-radius: var(--radius-md);
-	background: var(--surface-card);
-	border: 1.5px solid var(--line-ui);
+	padding-block-start: 0.92rem;
+	border-block-start: 1px solid var(--ink-line-soft);
 }
 
 .auth-fallback-copy {
@@ -785,13 +929,40 @@ select {
 	top: 0;
 	z-index: 50;
 	isolation: isolate;
-	background: var(--mask-bg);
+	/* Mobile masthead — edge-aligned glass strip with a hairline double-rule
+	 * below (primary border + a 1px offset via box-shadow). Desktop neutralizes
+	 * the glass and keeps its own ::after divider (see .shell-wide overrides). */
+	background: color-mix(in oklab, var(--bg) 88%, transparent);
+	-webkit-backdrop-filter: blur(20px) saturate(160%);
+	backdrop-filter: blur(20px) saturate(160%);
 	border: 0;
-	box-shadow: none;
+	border-bottom: 1px solid var(--hairline);
+	box-shadow: 0 3px 0 -2px var(--hairline-2);
 }
+
+/* Mobile masthead: ONE fixed position, like the footer. As position:sticky it rode
+ * up off the top when iOS scrolled the page for the keyboard; position:fixed pins it
+ * to the top of the viewport for good — one position, never moves, never disappears.
+ * The shell reserves --topbar-clearance at the top (mirror of the footer's bottom
+ * clearance) so content clears it. Desktop keeps sticky (it scrolls inside its own
+ * column). */
+.shell:not(.shell-wide) .topbar {
+	position: fixed;
+	inset-block-start: 0;
+	inset-inline: 0;
+	inline-size: 100%;
+	margin-top: 0;
+}
+
+/* The masthead is plain position:fixed; top:0 — NO transform, ever. iOS's
+ * viewport shift (which would ride a fixed header up when the keyboard opens) is
+ * suppressed at focus instead — see suppressKeyboardScroll() in safeArea.ts — so
+ * the header never has to chase the keyboard. A per-frame translate here used to
+ * jitter the header while scrolling with the keyboard up; plain fixed is steady. */
 
 .topbar::after {
 	content: '';
+	display: none;
 	position: absolute;
 	inset-inline: calc(var(--shell-gutter) + 0.4rem);
 	inset-block-end: 0;
@@ -800,23 +971,32 @@ select {
 	pointer-events: none;
 }
 
+/* Page title — redesigned. Display weight + tight tracking. Per the
+ * prototype the title is NOT in the masthead; it lives in the body so
+ * long names never cramp. */
 .topbar h1,
 .panel-title {
 	margin: 0;
-	font-size: clamp(1.08rem, 4vw, 1.42rem);
-	line-height: 1.12;
+	font-family: var(--font-display);
+	font-size: clamp(1.5rem, 6.5vw, 1.9rem);
+	font-weight: 600;
+	letter-spacing: normal;
+	line-height: 1.05;
 }
 
+/* Eyebrows / section labels — redesigned. Geist Mono, tighter, dim. */
 .eyebrow,
 .panel-label,
 .subtask-context,
 .breadcrumbs,
 .field-label,
 .detail-label {
-	font-size: 0.78rem;
-	letter-spacing: 0.06em;
+	font-family: var(--font-ui);
+	font-size: 0.66rem;
+	letter-spacing: 0.14em;
 	text-transform: uppercase;
-	color: var(--muted);
+	font-weight: 600;
+	color: var(--text-dim);
 }
 
 .title-row,
@@ -903,15 +1083,60 @@ select {
 	align-items: center;
 	justify-content: center;
 	background: transparent;
-	color: var(--text);
+	color: var(--text-dim);
 	line-height: 1;
 	flex: 0 0 auto;
 	box-shadow: none;
 	position: relative;
+	transition: background 0.15s ease, color 0.15s ease;
+}
+
+.topbar-nav-button:hover {
+	color: var(--text);
+	background: var(--surface-2);
 }
 
 .topbar-nav-button.is-active {
 	color: var(--accent-strong);
+}
+
+/* Mobile masthead avatar — left-aligned, replaces the old account-label pill.
+ * The view/project name now lives in the body (.panel-head / .panel-title). */
+.topbar-avatar-block {
+	display: inline-flex;
+	align-items: center;
+	flex: 0 0 auto;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	border-radius: 999px;
+	cursor: pointer;
+	-webkit-tap-highlight-color: transparent;
+	transition: opacity 0.15s ease;
+}
+
+.topbar-avatar-block:hover,
+.topbar-avatar-block:focus-visible {
+	opacity: 0.82;
+}
+
+/* Flatten the right-hand action cluster on the mobile masthead — no pill
+ * container, just transparent flat icon buttons (desktop keeps its pill). */
+.topbar-main.is-narrow-layout .topbar-nav-pill {
+	background: transparent;
+	border: 0;
+	box-shadow: none;
+	padding: 0;
+	gap: 0.1rem;
+}
+
+/* Sub-screen title (back · title · action) — flatten the title pill too so the
+ * whole mobile masthead reads as one flat glass strip, not nested pills. */
+.topbar-main.is-narrow-layout .topbar-title-pill.is-screen-title {
+	background: transparent;
+	border: 0;
+	box-shadow: none;
+	padding-inline: 0.1rem;
 }
 
 .topbar-nav-button.is-engaged {
@@ -994,11 +1219,33 @@ select {
 	transform: rotate(45deg);
 }
 
+/* One expand/collapse caret for every list row & section that opens (task +
+ * project rows, settings + detail sections). Drawn from two borders — no font
+ * glyph — so it stays crisp at any size and never carries a pill/circle.
+ * Collapsed points right (›), expanded points down (⌄); sized via --caret-size. */
+.caret-icon {
+	display: inline-block;
+	inline-size: 0;
+	block-size: 0;
+	padding: var(--caret-size, 0.32rem);
+	border: solid currentColor;
+	border-width: 0 var(--caret-stroke, 2px) var(--caret-stroke, 2px) 0;
+	transform: translateX(-15%) rotate(-45deg);
+	transition: transform 150ms ease;
+}
+
+.caret-icon[data-expanded='true'] {
+	transform: translateY(-15%) rotate(45deg);
+}
+
 .topbar-icon {
 	position: relative;
 	display: inline-block;
 	inline-size: 1.2rem;
 	block-size: 1.2rem;
+	/* Match the footer icon size — scale keeps the pseudo-element drawings centered. */
+	transform: scale(1.18);
+	transform-origin: center;
 }
 
 .topbar-icon-search::before {
@@ -1207,13 +1454,17 @@ select {
 	gap: calc(var(--detail-density-stack-gap) - 0.02rem);
 }
 
+/* Settings section — flat accordion card (prototype .vk-settings-group +
+ * .vk-accordion-head). One --surface card, hairline border, 12px radius; rows
+ * inside are hairline-separated, never nested cards. */
 .settings-section {
 	display: grid;
 	gap: 0;
-	border-radius: var(--radius-md);
-	background: var(--surface-card);
-	border: 1.5px solid var(--line-ui);
+	border-radius: var(--radius-card);
+	background: var(--surface);
+	border: 1px solid var(--ink-line-soft);
 	overflow: hidden;
+	margin-block-end: 12px;
 }
 
 .settings-section-header {
@@ -1221,7 +1472,175 @@ select {
 	align-items: center;
 	justify-content: space-between;
 	gap: calc(var(--detail-density-stack-gap, 0.56rem) - 0.02rem);
-	padding: var(--detail-density-card-padding-block) var(--detail-density-card-padding-inline);
+	padding: 12px 16px;
+	cursor: pointer;
+	transition: background 0.15s ease;
+}
+
+.settings-section-header:hover {
+	background: var(--surface-2);
+}
+
+/* Open group: caption brightens, header gets a bottom hairline. */
+.settings-section.is-open .settings-section-header {
+	border-block-end: 1px solid var(--ink-line-soft);
+}
+
+.settings-section.is-open .settings-section-title .detail-label {
+	color: var(--text);
+}
+
+/* ── Flat surface (transposable) ─────────────────────────────────────────────
+ * The card → hairline transformation as ONE reusable rule, not a hard-coded list
+ * of card classes. Cards resolve their fill + edge from tokens; neutralize those
+ * tokens and every descendant card flattens automatically. Rows are then divided
+ * by hairlines (the rule that *replaces* the card edge). Drop `.flat-surface` on
+ * any container — settings, project/card overlays, dialogs — to flatten it.
+ *
+ * Tokens neutralized: card fills (--surface-card, --detail-surface-bg) and card
+ * edges (--line-ui, --detail-surface-border, --surface-pane), plus --shadow.
+ * Real controls (inputs, buttons) re-assert a hairline edge below. */
+.flat-surface,
+.settings-section-content,
+.detail-section-content,
+.composer-sheet,
+.detail-sheet,
+.bulk-task-editor-sheet,
+.settings-user-dialog,
+.settings-admin-user-sheet,
+.overview-search-panel,
+.overview-filter-panel,
+.topbar-notification-panel,
+.background-sheet-card {
+	--surface-card: transparent;
+	--detail-surface-bg: transparent;
+	--detail-surface-border: transparent;
+	--line-ui: transparent;
+	--surface-pane: transparent;
+	--radius-md: 0px;
+	--shadow: none;
+}
+
+.settings-section-content {
+	padding: 0;
+	gap: 0;
+}
+
+/* Nested groups flatten too — only the outermost group remains a card. (Uses
+ * --surface/--ink-line-soft, which we keep for the outer card, so override here.) */
+.settings-section-content .settings-section {
+	border-color: transparent;
+	background: transparent;
+	border-radius: 0;
+}
+
+/* `.flat-rows` adds the row treatment (de-border + hairline dividers) on top of
+ * the token flatten. Use it for ROW-LIST surfaces (settings); plain
+ * `.flat-surface` (tokens only) is for forms/overlays that should NOT get an
+ * auto-hairline between every child. */
+
+/* Stack everything in one column — no 2-up grids inside a flat list. */
+.flat-rows .detail-grid,
+.flat-rows .detail-grid-tight,
+.settings-section-content .detail-grid,
+.settings-section-content .detail-grid-tight,
+.detail-section-content .detail-grid,
+.detail-section-content .detail-grid-tight {
+	display: block;
+}
+
+/* Square AND fully de-border the rows — neutralizing the card token only made
+ * the border transparent, the 1.5px width remained and inset the top hairline
+ * (making it read like a rounded card-top). Zero the width + radius structurally
+ * so the hairline below spans edge to edge. */
+.flat-rows > *,
+.settings-section-content > *,
+.settings-section-content .detail-grid > *,
+.settings-section-content .detail-grid-tight > *,
+.settings-section-content .settings-team-members > *,
+.settings-section-content .detail-section-list > *,
+.settings-section-content .migration-service-list > *,
+.detail-section-content > *,
+.detail-section-content .detail-grid > *,
+.detail-section-content .detail-section-list > * {
+	border-radius: 0;
+	border-width: 0;
+}
+
+/* Hairline replaces the card edge between consecutive rows — full width now. */
+.flat-rows > * + *,
+.settings-section-content > * + *,
+.settings-section-content .detail-grid > * + *,
+.settings-section-content .detail-grid-tight > * + *,
+.settings-section-content .settings-team-members > * + *,
+.settings-section-content .detail-section-list > * + *,
+.settings-section-content .migration-service-list > * + *,
+.detail-section-content > * + *,
+.detail-section-content .detail-grid > * + *,
+.detail-section-content .detail-section-list > * + * {
+	border-block-start-width: 1px;
+	border-block-start-style: solid;
+	border-block-start-color: var(--ink-line-soft);
+}
+
+/* Real controls keep a visible edge (they drew it from the now-neutral --line-ui).
+ * Applies in every token-flattened surface (settings + overlays). */
+.flat-surface :is(.detail-input, .detail-textarea, select, .pill-button, .detail-subtask-title),
+.settings-section-content :is(.detail-input, .detail-textarea, select, .pill-button),
+.detail-section-content :is(.detail-input, .detail-textarea, select, .pill-button, .detail-subtask-title),
+.composer-sheet :is(.detail-input, .detail-textarea, select),
+.detail-sheet :is(.detail-input, .detail-textarea, select, .detail-subtask-title),
+.bulk-task-editor-sheet :is(.detail-input, .detail-textarea, select),
+.settings-user-dialog :is(.detail-input, .detail-textarea, select),
+.settings-admin-user-sheet :is(.detail-input, .detail-textarea, select) {
+	border-color: var(--hairline);
+}
+
+/* Detail panel sections (task + project detail) use the same flat accordion
+ * language as settings: flat section, hairline between sections, header hover,
+ * and a bottom hairline under the open section's header. */
+.detail-section {
+	border: 0;
+	background: transparent;
+	border-radius: 0;
+}
+
+.detail-section + .detail-section {
+	border-block-start: 1px solid var(--ink-line-soft);
+}
+
+.detail-section-toggle {
+	cursor: pointer;
+	transition: background 0.15s ease;
+}
+
+.detail-section-toggle:hover {
+	background: var(--surface-2);
+}
+
+.detail-section.is-open .detail-section-toggle {
+	border-block-end: 1px solid var(--ink-line-soft);
+}
+
+/* Settings value text — match the flat language (13px), not the larger detail
+ * value used in task/project panels. */
+.settings-section-content .detail-value {
+	font-size: 13px;
+	margin-block-start: 0.15rem;
+}
+
+/* Entity rows (team members) are FILLED rows, not hairline rows: distinct people
+ * with name · role · menu read better as soft filled tiles than bare hairlines,
+ * without re-introducing card chrome. Subtle surface fill, 8px radius, gapped. */
+.settings-section-content .settings-team-members {
+	gap: 6px;
+}
+
+.settings-section-content .settings-team-member-row {
+	background: var(--surface-2);
+	border: 0;
+	border-radius: 8px;
+	padding: 10px 12px;
 }
 
 .settings-section-title {
@@ -1365,7 +1784,6 @@ select {
 .project-select,
 .fab,
 .add-subtask-inline,
-.task-toggle-end,
 .checkbox-button,
 .menu-button,
 .detail-subtask-title {
@@ -1373,11 +1791,18 @@ select {
 	transition: transform 140ms ease, background 140ms ease, border-color 140ms ease;
 }
 
+/* Action buttons squared to the flat language (8px) — no full-pill buttons.
+ * (FAB, checkbox, etc. above intentionally stay round.) */
+.composer-submit,
+.pill-button,
+.ghost-button {
+	border-radius: var(--radius-control);
+}
+
 .pill-button,
 .ghost-button,
 .project-select,
 .add-subtask-inline,
-.task-toggle-end,
 .menu-button,
 .detail-subtask-title {
 	padding: 0.42rem 0.68rem;
@@ -1398,6 +1823,17 @@ select {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
+}
+
+/* Row ⋮ overflow menu — flat, no round pill (transparent, hover tint). */
+.menu-button {
+	background: transparent;
+	border: 0;
+	border-radius: var(--radius-badge);
+}
+
+.menu-button:hover {
+	background: var(--surface-2);
 }
 
 .composer-submit {
@@ -1490,21 +1926,36 @@ select {
 	min-block-size: 0;
 }
 
-.count-chip,
+/* Count "chip" — redesigned. No background; the count is just a bold accent
+ * number sitting next to the page title. Display font + tabular nums. */
+.count-chip {
+	display: inline-flex;
+	align-items: baseline;
+	padding: 0;
+	background: transparent;
+	color: var(--accent);
+	font-family: var(--font-display);
+	font-variant-numeric: tabular-nums;
+	letter-spacing: -0.01em;
+	font-weight: 600;
+	font-size: 1rem;
+}
+
+.count-chip.compact {
+	font-size: 0.85rem;
+}
+
+/* .meta-chip is used as a true chip in other places (label-like) — keep its
+ * pill background, just retoned. */
 .meta-chip {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	padding: 0.28rem 0.62rem;
-	border-radius: 999px;
-	background: var(--accent-soft);
-	color: var(--accent-strong);
+	padding: 0.24rem 0.6rem;
+	border-radius: var(--radius-chip);
+	background: var(--surface-3);
+	color: var(--text-dim);
 	font-size: 0.8rem;
-}
-
-.count-chip.compact {
-	padding: 0.18rem 0.46rem;
-	font-size: 0.72rem;
 }
 
 .project-node {
@@ -1517,27 +1968,40 @@ select {
 	isolation: isolate;
 }
 
+/* Project row — redesigned. Deliberately distinct from task rows so projects
+ * read as "structural" from across the room: 8px radius (squarer = more
+ * structural), hairline full border + tinted surface, and a 4px project-
+ * colored left spine. --proj-color is set per-row from the project's color;
+ * --proj-ink is the fallback (white on dark, near-black on light). Slightly
+ * open title tracking is applied via .project-row-title below. */
+/* Exact port of the prototype's .vk-proj-row: tinted full border carrying the
+ * project's own color (55% mix) + a 4px colored left edge, on --surface. */
 .project-node-row {
 	display: grid;
 	grid-template-columns: auto 1fr auto auto;
 	align-items: center;
 	min-inline-size: 0;
 	gap: 0.38rem;
-	padding: 0.62rem 0.68rem 0.68rem 0.54rem;
-	border-radius: var(--radius-md);
-	background: var(--bg-soft);
-	border: 1.5px solid color-mix(in srgb, var(--accent) 28%, var(--line-ui));
+	padding: 11px 13px;
+	border-radius: 8px;
+	background: var(--surface);
+	border: 1.5px solid color-mix(in oklab, var(--proj-color, var(--proj-ink)) 55%, transparent);
+	border-left: 4px solid var(--proj-color, var(--proj-ink));
 	position: relative;
 	overflow: visible;
-	box-shadow: inset 0 -0.14rem 0 color-mix(in srgb, var(--accent) 30%, transparent);
-	transition: margin 160ms ease, transform 160ms ease, opacity 160ms ease, box-shadow 160ms ease;
+	transition: background 150ms ease, border-color 150ms ease, transform 120ms ease, opacity 160ms ease, margin 160ms ease;
+}
+
+.project-node-row:hover {
+	background: var(--surface-2);
+	border-color: color-mix(in oklab, var(--proj-color, var(--proj-ink)) 72%, transparent);
+	border-left-color: var(--proj-color, var(--proj-ink));
 }
 
 .project-node-row.has-background {
 	isolation: isolate;
 	overflow: hidden;
-	background: color-mix(in srgb, var(--bg-soft) 62%, transparent);
-	border-color: color-mix(in srgb, var(--accent) 32%, var(--line-ui));
+	background: color-mix(in srgb, var(--surface-2) 70%, transparent);
 }
 
 .project-node-row > :not(.project-surface-background-media) {
@@ -1624,6 +2088,39 @@ select {
 	color: var(--accent);
 }
 
+/* Project rows put title + meta inline on one baseline (prototype .vk-proj-body),
+ * not stacked. Title 13.5px/600 with slightly open tracking; meta 11px dim. */
+.project-node-row .card-copy {
+	display: flex;
+	align-items: baseline;
+	gap: 10px;
+}
+
+.project-node-row .card-title-row {
+	flex: 0 1 auto;
+	min-inline-size: 0;
+	overflow: hidden;
+}
+
+.project-node-row .project-card-title {
+	font-size: 13.5px;
+	font-weight: 600;
+	letter-spacing: normal;
+	line-height: 1.2;
+	-webkit-line-clamp: 1;
+	display: block;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+	overflow: hidden;
+}
+
+.project-node-row .project-card-meta {
+	flex: 0 0 auto;
+	color: var(--text-dim);
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+}
+
 .filter-project-chip {
 	background: color-mix(in srgb, var(--accent-soft) 72%, var(--surface-card));
 	color: color-mix(in srgb, var(--accent) 70%, var(--text));
@@ -1644,21 +2141,36 @@ select {
 	font-weight: 650;
 }
 
+/* Expand toggle — plain caret, no circle/pill (task + project rows). */
 .chevron-button {
-	inline-size: 2rem;
-	block-size: 2rem;
-	border-radius: 999px;
-	background: var(--surface-card-strong);
-	border: 1.5px solid var(--line-ui);
+	inline-size: 1.6rem;
+	block-size: 1.6rem;
+	border-radius: var(--radius-badge);
+	background: transparent;
+	border: 0;
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	color: var(--muted);
+	color: var(--text-dim);
+	font-size: 0.82rem;
 	flex-shrink: 0;
+}
+
+.chevron-button:hover {
+	background: var(--surface-2);
+	color: var(--text);
 }
 
 .chevron-button.is-placeholder {
 	cursor: default;
+}
+
+/* Project-row expand caret — same shared .caret-icon chevron as the task rows,
+ * distinguishable (brighter than faint). */
+.project-node-row .chevron-button {
+	inline-size: 1.6rem;
+	block-size: 1.6rem;
+	color: var(--text-dim);
 }
 
 .task-tree {
@@ -1678,11 +2190,14 @@ select {
 	isolation: isolate;
 }
 
+/* Task row — redesigned. One card style (12px / outlined), one stroke OR one
+ * fill, never both. Crisper rest shadow so the edge reads without hover,
+ * subtle accent shift on hover/touch. */
 .task-row,
 .subtask-composer {
-	border-radius: var(--radius-md);
-	background: var(--bg-soft);
-	border: 1.5px solid var(--line-ui);
+	border-radius: var(--radius-card);
+	background: var(--surface);
+	border: 1px solid var(--stroke);
 }
 
 .task-row {
@@ -1690,11 +2205,23 @@ select {
 	grid-template-columns: auto minmax(0, 1fr) auto auto;
 	align-items: center;
 	min-inline-size: 0;
-	gap: 0.38rem;
-	padding: 0.5rem 0.62rem 0.52rem 0.5rem;
+	gap: var(--row-gap);
+	padding: var(--row-pad-y) var(--row-pad-x);
 	position: relative;
 	overflow: visible;
-	transition: margin 160ms ease, transform 160ms ease, opacity 160ms ease, box-shadow 160ms ease;
+	transition: background 150ms ease, border-color 150ms ease, transform 120ms ease, opacity 160ms ease, margin 160ms ease;
+	/* Flat / paper: no elevation. The border + background separate rows. */
+	box-shadow: none;
+}
+
+.task-row:hover {
+	background: var(--surface-2);
+	border-color: color-mix(in oklab, var(--stroke) 60%, var(--text) 40%);
+}
+
+.task-row:active {
+	transform: scale(0.995);
+	background: var(--surface-2);
 }
 
 .task-row.is-bulk-mode {
@@ -1749,6 +2276,9 @@ select {
 	font-weight: 500;
 }
 
+/* Row chrome (grip + ⋯) — redesigned. Hover-reveal on desktop; always-on
+ * when [data-handles="always"] is set on <html> (touch devices default per
+ * main.tsx). */
 .drag-handle {
 	display: flex;
 	align-items: center;
@@ -1756,12 +2286,28 @@ select {
 	width: 1.5rem;
 	min-height: 1.5rem;
 	cursor: grab;
-	opacity: 0.4;
-	color: var(--muted);
+	opacity: 0;
+	color: var(--text-faint);
+	transition: opacity 150ms ease, color 150ms ease;
 	-webkit-user-select: none;
 	user-select: none;
 	-webkit-touch-callout: none;
 	touch-action: none;
+}
+
+.task-row:hover .drag-handle,
+[data-handles="always"] .drag-handle {
+	opacity: 1;
+}
+
+.task-row .menu-button {
+	opacity: 0;
+	transition: opacity 150ms ease;
+}
+
+.task-row:hover .menu-button,
+[data-handles="always"] .task-row .menu-button {
+	opacity: 1;
 }
 
 .drag-handle svg {
@@ -1777,7 +2323,7 @@ select {
 .sortable-ghost {
 	opacity: 0.2;
 	border: 2px dashed var(--accent-strong, #1973ff);
-	border-radius: 0.5rem;
+	border-radius: var(--radius-control);
 	background: transparent;
 }
 
@@ -1790,8 +2336,8 @@ select {
 }
 
 .sortable-fallback {
-	box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
-	border-radius: 0.5rem;
+	box-shadow: none;
+	border-radius: var(--radius-control);
 	opacity: 1;
 	background: var(--bg-elevated);
 	z-index: 9999;
@@ -1804,7 +2350,7 @@ select {
 .kanban-task-item.is-drop-target .kanban-task-frame {
 	outline: 2px solid var(--accent-strong, #1973ff);
 	outline-offset: -2px;
-	border-radius: 0.5rem;
+	border-radius: var(--radius-control);
 	background: color-mix(in srgb, var(--accent-strong, #1973ff) 10%, transparent);
 }
 
@@ -1829,28 +2375,39 @@ select {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 0.34rem;
-	margin-top: 0.14rem;
+	margin-top: 0.1rem;
 }
 
+/* Label chip — redesigned. Pill-shaped; semantic tone via [data-tone].
+ * Default (muted) uses surface-3 for low-contrast neutral chips. */
 .task-label-chip {
 	display: inline-flex;
 	align-items: center;
+	gap: 5px;
 	max-inline-size: 100%;
-	padding: var(--chip-padding-block) var(--chip-padding-inline);
-	border-radius: 999px;
-	font-size: 0.74rem;
-	font-weight: 600;
-	line-height: 1.2;
+	padding: 3px 9px;
+	border-radius: var(--radius-badge);
+	font-size: 0.72rem;
+	font-weight: 500;
+	letter-spacing: -0.005em;
+	line-height: 1.3;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
-	background: var(--surface-card-strong);
-	color: var(--text);
+	color: var(--text-dim);
+	background: var(--surface-3);
 }
 
+.task-label-chip[data-tone="blue"]   { color: var(--lbl-blue);   background: var(--lbl-blue-bg); }
+.task-label-chip[data-tone="green"]  { color: var(--lbl-green);  background: var(--lbl-green-bg); }
+.task-label-chip[data-tone="amber"]  { color: var(--lbl-amber);  background: var(--lbl-amber-bg); }
+.task-label-chip[data-tone="red"]    { color: var(--lbl-red);    background: var(--lbl-red-bg); }
+.task-label-chip[data-tone="violet"] { color: var(--lbl-violet); background: var(--lbl-violet-bg); }
+.task-label-chip[data-tone="cyan"]   { color: var(--lbl-cyan);   background: var(--lbl-cyan-bg); }
+
 .task-label-chip-overflow {
-	background: var(--surface-card);
-	color: var(--muted);
+	background: var(--surface-3);
+	color: var(--text-dim);
 }
 
 .task-assignee-chip {
@@ -1879,16 +2436,27 @@ select {
 	border-radius: 999px;
 }
 
+/* Checkbox — redesigned. 19px equivalent, 6px radius, transparent until
+ * checked. Checked = accent fill, accent-fg glyph (not gradient). */
 .checkbox-button {
-	inline-size: 1.72rem;
-	block-size: 1.72rem;
+	inline-size: 1.1rem;
+	block-size: 1.1rem;
+	border-radius: var(--radius-badge);
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	border: 1.5px solid var(--line-strong);
-	background: var(--surface-card);
-	color: var(--bg);
-	font-weight: 800;
+	border: 1.5px solid var(--text-faint);
+	background: transparent;
+	color: var(--accent-fg);
+	/* Check glyph sized to the smaller box so it doesn't crowd the border. */
+	font-size: 0.78rem;
+	font-weight: 700;
+	line-height: 1;
+	transition: border-color 150ms ease, background 150ms ease;
+}
+
+.checkbox-button:hover {
+	border-color: var(--accent);
 }
 
 .bulk-select-checkbox {
@@ -1905,8 +2473,9 @@ select {
 }
 
 .checkbox-button.is-checked {
-	background: linear-gradient(135deg, #8fe1a8, #b6f5c7);
-	border-color: rgba(182, 245, 199, 0.7);
+	background: var(--accent);
+	border-color: var(--accent);
+	color: var(--accent-fg);
 }
 
 .bulk-select-checkbox.is-checked {
@@ -1922,7 +2491,10 @@ select {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	color: var(--muted);
+	background: transparent;
+	border: 0;
+	/* Holds the shared .caret-icon chevron — dim but visible, one idea everywhere. */
+	color: var(--text-dim);
 }
 
 .task-row .menu-button {
@@ -1933,14 +2505,17 @@ select {
 	margin-block-start: 0;
 }
 
+/* Overlay menus — flattened to the new language: one container card (surface +
+ * hairline + overlay shadow) holding flat transparent item rows, not nested
+ * cards. Mirrors the settings/prototype flat aesthetic. */
 .inline-menu {
 	display: grid;
-	gap: 0.3rem;
-	padding: 0.45rem;
-	border-radius: var(--radius-md);
-	background: var(--surface-pane);
-	border: 1.5px solid var(--line-ui);
-	box-shadow: var(--shadow);
+	gap: 2px;
+	padding: 6px;
+	border-radius: var(--radius-card);
+	background: var(--surface);
+	border: 1px solid var(--ink-line-soft);
+	box-shadow: var(--shadow-overlay);
 }
 
 @keyframes task-complete-fade {
@@ -1972,83 +2547,137 @@ select {
 	z-index: 120;
 }
 
+/* Footer = a flat FULL-WIDTH glass strip pinned to the bottom. The wrap is just
+ * a transparent positioning layer — no centered pill, no inset, no extra mask-bg
+ * plane (that old "trickery" is gone). The .bottom-nav itself is the glass. */
 .bottom-nav-wrap {
 	position: fixed;
-	inset-inline-start: 50%;
-	inset-block-end: 0.22rem;
-	transform: translateX(-50%);
-	inline-size: min(100vw, 32rem);
+	inset-inline: 0;
+	inset-block-end: 0;
+	inline-size: 100%;
 	display: grid;
-	justify-items: center;
+	justify-items: stretch;
 	pointer-events: none;
 	z-index: 90;
-	padding-block-start: 0.4rem;
-	padding-block-end: 0;
-	background: var(--mask-bg);
+	background: transparent;
 }
 
+/* The footer is plain `position:fixed; bottom:0` (base rule above) — no JS anchor.
+ * Its safe-area padding comes from env(safe-area-inset-bottom), which the browser
+ * resolves natively; see safeArea.ts for why the old cached-anchor machinery is gone. */
+
+/* While an input is focused (keyboard up), hide the footer entirely so iOS can't
+ * float it up above the keyboard. The hide is driven by focusin/focusout (set as
+ * data-editing on <html>), which fire the instant the field is tapped — BEFORE the
+ * keyboard animates in — so there's no frame where the footer is visible floating
+ * up. display:none is safe: the footer is fixed, nothing reflows. */
+[data-editing] .bottom-nav-wrap {
+	display: none;
+}
+
+/* (Removed) the wrap's own top rule — the .bottom-nav already draws a single
+ * hairline border-top, so this second line made the footer read as a double rule. */
 .bottom-nav-wrap::before {
-	content: '';
-	position: absolute;
-	inset-inline: calc(var(--shell-gutter) + 0.4rem);
-	inset-block-start: 0;
-	block-size: 2px;
-	background: var(--line-subtle);
+	display: none;
 }
 
 .bottom-nav-wrap .nav-menu {
 	pointer-events: auto;
+	justify-self: end;
+	margin-inline-end: var(--shell-gutter);
+	margin-block-end: 0.4rem;
+	max-inline-size: 16rem;
 }
 
+/* The composer has exactly TWO positions and never moves between them:
+ *  - keyboard up (data-editing): a flat --sheet-keyboard-gap above the keyboard,
+ *    which iOS pins fixed boxes to natively;
+ *  - keyboard down (rest): a fixed clearance above the footer (the base
+ *    .composer-backdrop inset).
+ * Both are plain-CSS constants — no JS, no visualViewport offset. On focusout it
+ * snaps straight between them, no glide, no correction. */
+[data-editing] .composer-backdrop {
+	/* Lift above the keyboard by its measured height (--keyboard-height, set from
+	 * visualViewport in safeArea.ts) plus a flat gap. We measure it ourselves
+	 * because suppressing iOS's viewport shift also stops iOS floating fixed boxes
+	 * above the keyboard for us. 0 at rest, so this collapses to the gap. */
+	inset-block-end: calc(var(--keyboard-height, 0px) + var(--sheet-keyboard-gap));
+}
+
+/* Bottom tab bar — redesigned. Flat full-width glass strip with a hairline
+ * top border. 5 slots (4 tabs + center FAB). Labels are hidden by default
+ * and appear only on the active tab. */
 .bottom-nav {
 	pointer-events: auto;
-	inline-size: min(calc(100vw - (var(--shell-gutter) * 2)), calc(32rem - (var(--shell-gutter) * 2)));
-	max-inline-size: calc(32rem - (var(--shell-gutter) * 2));
-	block-size: var(--bottom-nav-pill-block-size);
+	inline-size: 100%;
+	max-inline-size: 100%;
 	display: grid;
 	grid-template-columns: repeat(5, minmax(0, 1fr));
 	align-items: center;
-	gap: 0.08rem;
-	padding: 0.3rem 0.6rem 0.22rem;
-	border-radius: 1.55rem;
-	backdrop-filter: blur(18px);
-	background: var(--surface-pane);
-	border: 1.5px solid var(--line-ui);
-	box-shadow: var(--shadow);
+	gap: 6px;
+	/* viewport-fit=cover (needed up top for the header→dynamic-island bleed) also
+	 * exposes env(safe-area-inset-bottom) down here. The footer is bottom:0, so the
+	 * physical bottom edge is the same with or without that inset — adding it only
+	 * pushed the bar up. Pin to the bottom rounding (the blessed pre-cover position). */
+	padding: 5px 12px 7px;
+	border-radius: 0;
+	backdrop-filter: blur(20px) saturate(160%);
+	-webkit-backdrop-filter: blur(20px) saturate(160%);
+	background: color-mix(in oklab, var(--bg) 88%, transparent);
+	border: 0;
+	border-top: 1px solid var(--hairline);
+	box-shadow: none;
 	position: relative;
 	z-index: 1;
 }
 
 .bottom-nav-button {
-	display: grid;
-	grid-template-rows: 2.2rem auto;
-	justify-items: center;
-	align-items: start;
-	gap: 0.08rem;
-	padding: 0.08rem 0.1rem 0.02rem;
-	border-radius: 1rem;
-	color: var(--muted);
-	transition: color 140ms ease, transform 140ms ease;
+	display: inline-flex;
+	flex-direction: row;
+	align-items: center;
+	justify-content: center;
+	gap: 5px;
+	min-inline-size: 0;
+	padding: 7px 11px;
+	border-radius: var(--radius-control);
+	color: var(--text-dim);
+	background: transparent;
+	font-size: 12px;
+	transition: background 150ms ease, color 150ms ease;
 }
 
 .bottom-nav-button.is-active {
-	color: var(--accent-strong);
+	background: var(--accent-soft);
+	color: var(--accent);
 }
 
 .bottom-nav-button.is-emphasized {
 	color: var(--text);
 }
 
+/* Labels hidden by default; only the active tab shows its label inline next
+ * to the icon (per the redesign). */
 .bottom-nav-label {
-	font-size: 0.62rem;
+	display: none;
+	font-size: 12px;
 	line-height: 1;
 }
 
+.bottom-nav-button.is-active .bottom-nav-label {
+	display: inline;
+}
+
+/* Icon box stays at the size the pseudo-element drawings were designed for, so
+ * they stay centered; scale enlarges them around their center (bigger AND still
+ * vertically aligned — resizing the box alone shoved the drawings off-centre). */
 .bottom-nav-icon {
 	position: relative;
-	inline-size: 1.18rem;
-	block-size: 1.18rem;
+	inline-size: 1.2rem;
+	block-size: 1.2rem;
 	align-self: center;
+	flex: 0 0 auto;
+	transform: scale(1.18);
+	transform-origin: center;
 }
 
 .task-completion-toast {
@@ -2060,7 +2689,7 @@ select {
 	justify-content: space-between;
 	gap: 0.8rem;
 	padding: 0.78rem 0.92rem;
-	border-radius: 1rem;
+	border-radius: var(--radius-card);
 	background: color-mix(in srgb, var(--surface-pane) 92%, #8fe1a8 8%);
 	border: 1.5px solid var(--line-ui);
 	box-shadow: var(--shadow);
@@ -2106,7 +2735,7 @@ select {
 	justify-content: space-between;
 	gap: 0.8rem;
 	padding: 0.78rem 0.92rem;
-	border-radius: 1rem;
+	border-radius: var(--radius-card);
 	background: color-mix(in srgb, var(--bg-soft) 92%, var(--warning-soft) 8%);
 	border: 1.5px solid color-mix(in srgb, var(--warning) 34%, var(--line-ui));
 	backdrop-filter: blur(20px);
@@ -2232,18 +2861,21 @@ select {
 	inset-block-start: 0.92rem;
 }
 
+/* Center FAB — redesigned. 44px rounded square in the accent, not a circle.
+ * Subtle inner top highlight gives it weight; no outer drop-shadow (the
+ * bar itself is flat now). */
 .bottom-nav-plus-circle {
-	inline-size: 2.1rem;
-	block-size: 2.1rem;
+	inline-size: 50px;
+	block-size: 50px;
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	border-radius: 999px;
-	background: linear-gradient(135deg, var(--brand-accent), var(--brand-accent-strong));
-	color: #170f0d;
-	font-size: 1.45rem;
+	border-radius: var(--radius-control);
+	background: var(--accent);
+	color: var(--accent-fg);
+	font-size: 1.7rem;
 	font-weight: 600;
-	box-shadow: 0 14px 24px rgba(0, 0, 0, 0.24);
+	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
 	align-self: center;
 }
 
@@ -2265,13 +2897,17 @@ select {
 	position: absolute;
 	inset-inline-end: 0;
 	inset-block-start: calc(100% + 0.45rem);
-	inline-size: min(22rem, calc(100vw - (var(--shell-gutter) * 2)));
+	/* Width must respect the tray's right offset (3.1rem on mobile) so the
+	 * right-anchored panel doesn't spill off the left edge on narrow screens. */
+	inline-size: min(22rem, calc(100vw - 6.5rem));
 	max-block-size: min(70dvh, 30rem);
 	overflow: auto;
 	padding: 0.7rem;
 	border-radius: var(--radius-lg);
-	background: var(--surface-pane);
-	border: 1.5px solid var(--line-ui);
+	/* Floating popover over page content: opaque fill + hairline must survive the
+	 * flat-surface token flatten, which zeroes --surface-pane and --line-ui. */
+	background: var(--surface-2);
+	border: 1.5px solid var(--hairline);
 	box-shadow: var(--shadow);
 	display: grid;
 	gap: 0.62rem;
@@ -2294,6 +2930,13 @@ select {
 .topbar-notification-empty-hint {
 	font-size: 0.76rem;
 	line-height: 1.2;
+	color: var(--muted);
+}
+
+.topbar-notification-token-hint {
+	margin-block-start: 0.5rem;
+	font-size: 0.74rem;
+	line-height: 1.3;
 	color: var(--muted);
 }
 
@@ -2538,25 +3181,31 @@ select {
 
 .menu-item {
 	inline-size: 100%;
-	padding: 0.8rem 0.9rem;
-	border-radius: 0.95rem;
+	padding: 9px 12px;
+	border-radius: 7px;
 	text-align: left;
-	background: var(--surface-card);
+	background: transparent;
 	color: var(--text);
+	font-size: 13px;
+	transition: background 0.15s ease, color 0.15s ease;
+}
+
+.menu-item:hover {
+	background: var(--surface-2);
 }
 
 .menu-item.is-active {
 	background: var(--accent-soft);
-	color: var(--accent-strong);
+	color: var(--accent);
 }
 
 .menu-item.danger {
-	color: var(--danger);
+	color: var(--lbl-red);
 }
 
 .menu-note {
 	padding: 0.8rem 0.9rem;
-	border-radius: 0.95rem;
+	border-radius: var(--radius-control);
 	background: color-mix(in srgb, var(--surface-card) 88%, var(--surface-field) 12%);
 	color: var(--muted);
 	font-size: 0.88rem;
@@ -2594,7 +3243,7 @@ select {
 	align-items: center;
 	padding: 0.6rem 0.8rem;
 	border: 1.5px solid var(--line-ui);
-	border-radius: 0.75rem;
+	border-radius: var(--radius-control);
 	background: var(--surface-card);
 }
 
@@ -2798,9 +3447,12 @@ select {
 .root-project-inline-composer,
 .bulk-task-inline-editor {
 	margin-block-end: 0.08rem;
-	border-radius: 1.1rem;
-	background: rgba(255, 255, 255, 0.03);
-	border: 1px solid rgba(255, 255, 255, 0.06);
+	border-radius: var(--radius-sheet);
+	/* Opaque surface fill (matching .subproject-composer) so the composer stays
+	 * readable over a project background image instead of letting the photo
+	 * bleed through a near-transparent wash. */
+	background: var(--surface);
+	border: 1px solid var(--stroke);
 }
 
 .bulk-task-editor-grid {
@@ -2818,17 +3470,26 @@ select {
 	grid-template-columns: 1fr;
 }
 
+/* Two fixed positions, like the composer: a constant clearance above the footer
+ * at rest, and flush above the keyboard while editing. No JS-measured anchor. */
 .bulk-task-editor-dock {
 	position: fixed;
 	inset:
 		auto
 		calc(var(--shell-gutter) + 0.18rem)
-		var(--bottom-nav-clearance)
+		/* mirrors .composer-backdrop — no --safe-bottom now the footer sits low */
+		calc(var(--bottom-nav-clearance) + var(--sheet-edge-gap))
 		calc(var(--shell-gutter) + 0.18rem);
 	display: flex;
 	justify-content: center;
 	pointer-events: none;
 	z-index: 140;
+}
+
+/* Keyboard up: the footer hides and iOS pins fixed boxes above the keyboard. Lift
+ * the dock a flat gap above it (mirrors the composer — a constant, no JS offset). */
+[data-editing] .bulk-task-editor-dock {
+	inset-block-end: calc(var(--keyboard-height, 0px) + var(--sheet-keyboard-gap));
 }
 
 .bulk-task-editor-dock .bulk-task-editor-sheet {
@@ -2886,7 +3547,7 @@ select {
 	inline-size: 100%;
 	min-block-size: 2.28rem;
 	padding: 0.46rem 0.72rem;
-	border-radius: 999px;
+	border-radius: var(--radius-control);
 	background: var(--surface-field);
 	color: var(--text);
 	border: 1.5px solid var(--line-ui);
@@ -2910,13 +3571,42 @@ select {
 
 .composer-backdrop {
 	z-index: 140;
+	/* Bottom: above the footer when the keyboard is closed; just above the
+	 * keyboard when open (Keyboard resize=native shrinks the webview, so
+	 * subtracting the inset collapses the footer clearance to a small gap). */
+	/* Bottom sits above the footer when the keyboard is closed. iOS Safari pins
+	 * fixed elements to the visual-viewport bottom (above the keyboard) and other
+	 * platforms resize the layout viewport, so when the keyboard is open the
+	 * keyboard flag drops this to a small flush gap (rule below). */
 	inset:
 		var(--mobile-overlay-top-clearance)
 		0
-		var(--bottom-nav-clearance)
+		/* No --safe-bottom: the footer no longer reserves it (sits in the rounding),
+		 * so adding it here floated the composer a safe-area's worth too high above
+		 * the footer. Sit --sheet-edge-gap directly above the footer. */
+		calc(var(--bottom-nav-clearance) + var(--sheet-edge-gap))
 		0;
 	align-items: flex-end;
-	padding: 0 calc(var(--shell-gutter) + 0.18rem);
+	padding: 0 var(--shell-gutter);
+	/* Don't dim/block the list — the cards scroll freely behind the composer,
+	 * which stays put (only the sheet itself is interactive). translateZ promotes
+	 * the fixed layer so iOS keeps it stable during momentum scroll. */
+	background: transparent;
+	pointer-events: none;
+	transform: translateZ(0);
+}
+
+.composer-backdrop > * {
+	pointer-events: auto;
+}
+
+/* The composer sheet is opted into .flat-surface (so --surface-pane is
+ * transparent); give it back a solid card + shadow so it reads over the
+ * scrolling cards now that the backdrop no longer dims them. */
+.composer-backdrop .composer-sheet {
+	background: var(--surface);
+	border: 1px solid var(--ink-line-soft);
+	box-shadow: var(--shadow-overlay);
 }
 
 .detail-backdrop {
@@ -2929,10 +3619,38 @@ select {
 	padding: 0 1rem;
 }
 
+/* DetailSheet variant="page": a screen-shaped .surface (own Topbar +
+ * .surface-content) as a full-viewport cover. Above any topbar (z-50), incl. a
+ * parent detail page's; below the footer (z-90), which stays clickable. */
+.detail-page-surface {
+	position: fixed;
+	inset: 0;
+	z-index: 55;
+	background: var(--app-frame-bg);
+}
+
+/* In a page the .detail-sheet is only the density-props carrier, not a card. */
+.detail-page-surface .surface-content > .detail-sheet {
+	inline-size: 100%;
+	max-inline-size: 100%;
+	max-block-size: none;
+	block-size: auto;
+	overflow: visible;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+	box-shadow: none;
+	backdrop-filter: none;
+	padding: 0.72rem var(--shell-gutter) 1rem;
+	/* No stacking context, or a nested page is trapped under this page's topbar. */
+	position: static;
+	z-index: auto;
+}
+
 .composer-sheet,
 .detail-sheet {
 	inline-size: min(100%, 28rem);
-	border-radius: 1.45rem;
+	border-radius: var(--radius-sheet);
 	padding: 0.72rem;
 	position: relative;
 	z-index: 21;
@@ -2971,6 +3689,8 @@ select {
 
 .composer-sheet {
 	max-block-size: 100%;
+	/* Full card width (the backdrop pads by --shell-gutter to match the cards). */
+	inline-size: 100%;
 }
 
 .sheet-head {
@@ -3061,7 +3781,7 @@ select {
 	color: #170f0d;
 	font-size: 2rem;
 	font-weight: 500;
-	box-shadow: 0 20px 40px rgba(0, 0, 0, 0.28);
+	box-shadow: none;
 	z-index: 30;
 }
 
@@ -3188,7 +3908,7 @@ select {
 	padding:
 		var(--detail-density-row-padding-block)
 		var(--detail-density-row-padding-inline);
-	border-radius: 1rem;
+	border-radius: var(--radius-control);
 }
 
 .detail-section-content > .detail-planning-card {
@@ -3238,7 +3958,7 @@ select {
 	min-inline-size: 0;
 	max-inline-size: 100%;
 	padding: 0.58rem var(--control-padding-inline);
-	border-radius: 0.88rem;
+	border-radius: var(--radius-control);
 	background: var(--surface-field);
 	color: var(--text);
 	border: 1.5px solid var(--line-ui);
@@ -3258,7 +3978,7 @@ select {
 .detail-section-content .detail-textarea {
 	min-block-size: 5.4rem;
 	padding-block: 0.5rem;
-	border-radius: 1rem;
+	border-radius: var(--radius-control);
 }
 
 .detail-color-input {
@@ -3311,7 +4031,7 @@ select {
 	inline-size: 100%;
 	min-block-size: var(--control-height);
 	padding: 0.58rem var(--control-padding-inline);
-	border-radius: 0.88rem;
+	border-radius: var(--radius-control);
 	background: var(--surface-field);
 	color: var(--text);
 	border: 1.5px solid var(--line-ui);
@@ -3499,7 +4219,7 @@ select {
 	gap: 0.56rem;
 	align-items: center;
 	padding: 0.54rem 0.62rem;
-	border-radius: 1rem;
+	border-radius: var(--radius-control);
 	background: var(--surface-field);
 	border: 1.5px solid var(--line-ui);
 	text-align: left;
@@ -3525,7 +4245,7 @@ select {
 	display: grid;
 	gap: 0.34rem;
 	padding: 0.5rem 0.56rem;
-	border-radius: 0.92rem;
+	border-radius: var(--radius-control);
 	background: var(--surface-field);
 	border: 1.5px solid var(--line-ui);
 	min-inline-size: 0;
@@ -3642,7 +4362,7 @@ select {
 	gap: 0.44rem;
 	align-items: center;
 	padding: 0.42rem 0.48rem;
-	border-radius: 0.84rem;
+	border-radius: var(--radius-control);
 	background: var(--surface-field);
 	border: 1.5px solid var(--line-ui);
 }
@@ -3654,7 +4374,7 @@ select {
 	inline-size: 2.35rem;
 	block-size: 2.35rem;
 	overflow: hidden;
-	border-radius: 0.7rem;
+	border-radius: var(--radius-control);
 	border: 1px solid rgba(255, 255, 255, 0.1);
 	background: rgba(255, 255, 255, 0.04);
 	padding: 0;
@@ -3740,7 +4460,7 @@ select {
 	inline-size: min(100%, 36rem);
 	max-block-size: 100%;
 	padding: 0.8rem;
-	border-radius: 1.25rem;
+	border-radius: var(--radius-sheet);
 	background: var(--detail-surface-bg);
 	border: 1px solid var(--detail-surface-border);
 }
@@ -3769,7 +4489,7 @@ select {
 	display: block;
 	max-inline-size: 100%;
 	max-block-size: min(70vh, 42rem);
-	border-radius: 0.95rem;
+	border-radius: var(--radius-control);
 	image-orientation: from-image;
 }
 
@@ -3858,7 +4578,7 @@ select {
 	gap: 0.6rem;
 	align-items: center;
 	padding: 0.58rem 0.64rem;
-	border-radius: 0.92rem;
+	border-radius: var(--radius-control);
 	background: var(--surface-field);
 	color: var(--text);
 	border: 1.5px solid var(--line-ui);
@@ -3882,7 +4602,7 @@ select {
 	gap: 0.5rem;
 	align-items: start;
 	padding: 0.54rem 0.58rem;
-	border-radius: 0.92rem;
+	border-radius: var(--radius-control);
 	background: var(--surface-field);
 	border: 1.5px solid var(--line-ui);
 }
@@ -4472,16 +5192,18 @@ select {
 	padding:
 		var(--detail-density-row-padding-block, 0.58rem)
 		var(--detail-density-row-padding-inline, 0.66rem);
-	border-radius: 0.92rem;
+	border-radius: var(--radius-control);
 	background: var(--surface-field);
 	border: 1.5px solid var(--line-ui);
 }
 
+/* Status / role badges (Admin, Member, No admins, Checking…) — one consistent
+ * square-ish radius (6px): not a full pill, not fully square. */
 .settings-status-chip {
 	display: inline-flex;
 	align-items: center;
 	padding: 0.28rem 0.54rem;
-	border-radius: 999px;
+	border-radius: var(--radius-badge);
 	font-size: 0.82rem;
 	font-weight: 650;
 	background: var(--surface-field);
@@ -4578,7 +5300,7 @@ select {
 	align-items: center;
 	gap: 0.5rem;
 	padding: 0.5rem 0.58rem;
-	border-radius: 1rem;
+	border-radius: var(--radius-control);
 }
 
 .project-share-row .detail-assignee-pill-token,
@@ -4637,7 +5359,7 @@ select {
 	gap: 0.26rem;
 	min-inline-size: 0;
 	padding: 0.32rem 0.4rem;
-	border-radius: 0.94rem;
+	border-radius: var(--radius-control);
 }
 
 .project-link-share-summary-row {
@@ -4673,7 +5395,7 @@ select {
 
 .project-link-share-card .detail-item {
 	padding: 0.36rem 0.44rem;
-	border-radius: 0.86rem;
+	border-radius: var(--radius-control);
 }
 
 .project-link-share-card .detail-field {
@@ -4719,7 +5441,7 @@ select {
 .project-link-share-card .detail-assignee-pill {
 	gap: 0.4rem;
 	padding: 0.38rem 0.44rem;
-	border-radius: 0.86rem;
+	border-radius: var(--radius-control);
 }
 
 .project-link-share-card .detail-assignee-pill-token {
@@ -4759,7 +5481,7 @@ select {
 	align-items: center;
 	gap: 0.45rem;
 	padding: 0.32rem 0.58rem;
-	border-radius: 999px;
+	border-radius: var(--radius-badge);
 	font-size: 0.84rem;
 }
 
@@ -4777,7 +5499,7 @@ select {
 .mini-fab {
 	inline-size: 2.1rem;
 	block-size: 2.1rem;
-	border-radius: 999px;
+	border-radius: var(--radius-control);
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
@@ -4785,7 +5507,7 @@ select {
 	color: #170f0d;
 	font-size: 1.18rem;
 	font-weight: 700;
-	box-shadow: 0 12px 24px rgba(0, 0, 0, 0.22);
+	box-shadow: none;
 }
 
 .detail-subtasks {
@@ -4806,6 +5528,21 @@ select {
 	min-inline-size: 0;
 	text-align: left;
 	color: var(--text);
+}
+
+/* Relation/subtask chips are fields, not pills: square edge + field grey fill. */
+.detail-subtask-title {
+	border-radius: var(--radius-control);
+	background: var(--surface-field);
+}
+
+/* Empty relation placeholders read as the same grey field, not bare text. */
+.detail-relation-empty {
+	padding: 0.42rem 0.68rem;
+	border-radius: var(--radius-control);
+	border: 1.5px solid var(--hairline);
+	background: var(--surface-field);
+	color: var(--muted);
 }
 
 .detail-subtask-composer {
@@ -5008,7 +5745,7 @@ select {
 	filter: saturate(0.72);
 }
 
-@media (min-width: 960px) {
+@media (min-width: 960px), (min-width: 768px) and (pointer: coarse) {
 	.auth-shell {
 		display: grid;
 		align-items: center;
@@ -5023,7 +5760,7 @@ select {
 
 	.auth-hero,
 	.auth-card {
-		min-block-size: min(100dvh - 2.8rem, 46rem);
+		min-block-size: min(100vh - 2.8rem, 46rem);
 	}
 
 	.auth-hero {
@@ -5171,16 +5908,17 @@ select {
 		background: var(--surface-pane);
 	}
 
+	/* Desktop sidebar — ported to the prototype's .vk-side exactly. */
 	.wide-sidebar {
 		position: relative;
 		display: flex;
 		flex-direction: column;
-		gap: 0.12rem;
-		inline-size: var(--wide-sidebar-width, 19rem);
+		gap: 4px;
+		inline-size: var(--wide-sidebar-width, 260px);
 		block-size: 100dvh;
 		min-block-size: 100dvh;
-		padding: 0 0.72rem 0.82rem;
-		background: var(--surface-pane);
+		padding: 18px 14px;
+		background: var(--bg);
 		overflow: hidden;
 	}
 
@@ -5189,34 +5927,35 @@ select {
 		padding-inline: 0.5rem;
 	}
 
-	.wide-sidebar-head {
+	.wide-sidebar-user {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
 		gap: 0.38rem;
-		block-size: var(--desktop-header-block-size);
-		padding-block: var(--desktop-header-padding-block-start) var(--desktop-header-divider-gap);
+		padding: 6px 8px 14px;
+		margin-block-end: 4px;
 		position: relative;
 		flex: 0 0 auto;
 		background: transparent;
 		z-index: 2;
 	}
 
-	.wide-sidebar-head::after {
-		content: '';
-		position: absolute;
-		inset-inline: -0.72rem;
-		inset-block-end: 0;
-		block-size: 2px;
-		background: var(--line-subtle);
-	}
-
+	/* "Projects" section label — exact port of .vk-side-label. */
 	.wide-sidebar-projects-head {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
 		gap: 0.3rem;
-		padding: 0 0.42rem 0 0.5rem;
+		padding: 16px 10px 6px;
+	}
+
+	.wide-sidebar-projects-head .detail-label {
+		font-family: var(--font-ui);
+		font-size: 10.5px;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--text-faint);
+		font-weight: 600;
 	}
 
 	.wide-sidebar-projects-menu-button {
@@ -5246,34 +5985,77 @@ select {
 		flex: 0 0 auto;
 	}
 
-	.wide-sidebar-account-pill {
-		padding: 0 0.88rem;
-		block-size: var(--header-pill-block-size);
-		display: inline-flex;
+	/* Sidebar user row — avatar + name + collapse toggle (replaces the old
+	 * account-label pill). Matches the redesign's .vk-side-user. */
+	.wide-sidebar-user-left {
+		display: flex;
 		align-items: center;
+		gap: 9px;
 		min-inline-size: 0;
-		inline-size: 0;
-		max-inline-size: none;
 		flex: 1 1 0;
+		background: none;
+		border: 0;
+		padding: 2px;
+		margin-inline-start: -2px;
+		border-radius: var(--radius-control);
+		cursor: pointer;
+		text-align: start;
 	}
 
-	.wide-sidebar-account-pill h1 {
-		margin: 0;
-		font-size: 1.08rem;
-		line-height: 1.1;
-		display: block;
+	.wide-sidebar-user-left:hover {
+		background: var(--surface-card);
+	}
+
+	.wide-sidebar-user-left .user-avatar {
+		border-radius: var(--radius-control);
+		border: 0;
+		flex: 0 0 auto;
+	}
+
+	.wide-sidebar-user-name {
+		font-size: 13.5px;
+		font-weight: 500;
+		color: var(--text);
 		min-inline-size: 0;
-		inline-size: 100%;
-		max-inline-size: 100%;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
 
+	/* Sidebar search — opens the search screen. Styled as the redesign's
+	 * .vk-side-search input with a leading magnifier. */
+	.wide-sidebar-search {
+		flex: 0 0 auto;
+		margin-block-end: 12px;
+		padding-inline: 4px;
+	}
+
+	.wide-sidebar-search-input {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		inline-size: 100%;
+		padding: 7px 10px;
+		border-radius: var(--radius-control);
+		background: var(--surface-2);
+		border: 1px solid var(--ink-line-soft);
+		color: var(--text-faint);
+		font-size: 12.5px;
+		text-align: left;
+	}
+
+	.wide-sidebar-search-input:hover {
+		color: var(--text-dim);
+	}
+
+	.wide-sidebar-search-input svg {
+		flex: 0 0 auto;
+	}
+
 	.wide-sidebar-nav,
 	.wide-sidebar-project-tree {
 		display: grid;
-		gap: 0.14rem;
+		gap: 4px;
 	}
 
 	.wide-sidebar-body {
@@ -5281,18 +6063,31 @@ select {
 		min-block-size: 0;
 		overflow-y: auto;
 		overscroll-behavior: contain;
-		padding-block: 0.48rem 0.2rem;
+		padding-block: 0;
 	}
 
-	.wide-sidebar-nav-item,
+	/* Nav item — exact port of .vk-nav-item. */
+	.wide-sidebar-nav-item {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		min-inline-size: 0;
+		padding: 7px 10px;
+		border-radius: 7px;
+		color: var(--text-dim);
+		font-size: 13px;
+		font-weight: 500;
+		text-align: left;
+	}
+
 	.wide-sidebar-project-link {
 		display: flex;
 		align-items: center;
-		gap: 0.5rem;
+		gap: 8px;
 		min-inline-size: 0;
-		padding: 0.36rem 0.58rem;
-		border-radius: 0.92rem;
-		color: var(--muted);
+		padding: 0;
+		color: var(--text-dim);
+		font-size: 13px;
 		text-align: left;
 	}
 
@@ -5301,6 +6096,64 @@ select {
 	.wide-sidebar-project-row.is-active .wide-sidebar-project-link {
 		background: var(--accent-soft);
 		color: var(--accent);
+	}
+
+	.wide-sidebar-nav-item:hover {
+		background: var(--surface-2);
+		color: var(--text);
+	}
+
+	.wide-sidebar-nav-icon {
+		inline-size: 16px;
+		block-size: 16px;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		flex: 0 0 auto;
+	}
+
+	.wide-sidebar-nav-icon svg {
+		inline-size: 16px;
+		block-size: 16px;
+	}
+
+	.wide-sidebar-nav-label {
+		flex: 1 1 auto;
+		min-inline-size: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	/* Right-aligned shortcut-key hint — exact port of .vk-key. */
+	.wide-sidebar-nav-key {
+		margin-inline-start: auto;
+		flex: 0 0 auto;
+		font-family: var(--font-mono);
+		font-size: 10.5px;
+		line-height: 1;
+		padding: 1px 5px;
+		border-radius: 4px;
+		background: var(--surface-2);
+		border: 1px solid var(--ink-line-soft);
+		color: var(--proj-ink);
+		letter-spacing: 0;
+	}
+
+	.wide-sidebar-nav-item.is-active .wide-sidebar-nav-key {
+		background: transparent;
+		border-color: transparent;
+		color: var(--accent);
+	}
+
+	/* Project color dot — exact port of .vk-side-proj-dot. Adopts the project's
+	 * hex_color; colorless projects fall back to --proj-ink. */
+	.wide-sidebar-project-dot {
+		inline-size: 8px;
+		block-size: 8px;
+		border-radius: 50%;
+		flex: 0 0 auto;
+		background: var(--proj-ink);
 	}
 
 	.wide-sidebar-nav-token {
@@ -5320,63 +6173,61 @@ select {
 	.wide-sidebar-projects {
 		display: flex;
 		flex-direction: column;
-		gap: 0.32rem;
-		padding-block-start: 0.7rem;
+		gap: 4px;
+		padding-block-start: 0;
 	}
 
 	.wide-sidebar-project-tree {
 		overflow: visible;
-		padding-inline-end: 0.02rem;
-		padding-block-start: 0.44rem;
+		padding-inline-end: 0;
+		padding-block-start: 0;
 	}
 
 	.wide-sidebar-project-tree > .root-project-inline-composer {
-		margin-inline: 0.5rem 0.42rem;
+		margin-inline: 10px;
 		margin-block-end: 0.46rem;
 	}
 
 	.wide-sidebar-project-item {
 		display: grid;
-		gap: 0.14rem;
+		gap: 4px;
 	}
 
+	/* Project row — exact port of .vk-side-proj (caret · dot · name · trail). */
 	.wide-sidebar-project-row {
 		display: grid;
-		grid-template-columns: 1.48rem minmax(0, 1fr);
+		grid-template-columns: 11px minmax(0, 1fr);
 		align-items: center;
-		gap: 0.5rem;
-		padding-inline-start: calc(0.58rem + (var(--depth) * 0.62rem));
+		gap: 8px;
+		padding: 6px 10px;
+		border-radius: 7px;
+		padding-inline-start: calc(10px + (var(--depth) * 14px));
 	}
 
-	.wide-sidebar-project-toggle {
-		inline-size: 1.48rem;
-		block-size: 1.48rem;
-		border-radius: 999px;
+	.wide-sidebar-project-row:hover {
+		background: var(--surface-2);
+	}
+
+	.wide-sidebar-project-toggle,
+	.wide-sidebar-project-toggle-spacer {
+		inline-size: 11px;
+		block-size: 11px;
+		border: 0;
+		background: transparent;
+		border-radius: 0;
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		background: var(--surface-card);
-		border: 1.5px solid var(--line-ui);
-		color: var(--muted);
-		font-size: 0.82rem;
+		color: var(--text-faint);
+		font-size: 0.7rem;
 		line-height: 1;
 	}
 
-	.wide-sidebar-project-toggle-spacer {
-		inline-size: 1.48rem;
-		block-size: 1.48rem;
-		display: inline-block;
-	}
-
-	.wide-sidebar-project-link {
+	.wide-sidebar-project-name {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		padding-inline-start: 0;
-		padding-block: 0.22rem;
-		display: flex;
-		align-items: center;
-		gap: 0.38rem;
+		min-inline-size: 0;
 	}
 
 	.wide-sidebar-project-kind {
@@ -5389,7 +6240,7 @@ select {
 
 	.wide-sidebar-project-children {
 		display: grid;
-		gap: 0.14rem;
+		gap: 4px;
 	}
 
 	.wide-sidebar.is-collapsed .wide-sidebar-nav {
@@ -5402,17 +6253,28 @@ select {
 		padding-inline: 0;
 	}
 
-	.shell-wide .topbar-title-block {
+	.shell-wide .topbar-title-block,
+	.shell-wide .topbar-avatar-block {
 		display: none;
 	}
 
+	/* Desktop main-head — ported to the prototype's .vk-main-head: 24px side
+	 * padding, hairline double-rule below (border + offset box-shadow). */
 	.shell-wide .topbar {
 		block-size: var(--desktop-header-block-size);
 		padding-block: 0;
+		padding-inline: 24px;
+		background: var(--mask-bg);
+		-webkit-backdrop-filter: none;
+		backdrop-filter: none;
+		/* No own bottom rule: the single full-width header hairline is drawn once by
+		 * .shell-wide::after so it can never misalign across the pane seams. */
+		border-bottom: 0;
+		box-shadow: none;
 	}
 
 	.shell-wide .topbar::after {
-		inset-inline: 0;
+		display: none;
 	}
 
 	.shell-wide .topbar-main {
@@ -5425,51 +6287,126 @@ select {
 		overflow: hidden;
 	}
 
+	/* Add button — shifted out of the old centered circle into the right-hand
+	 * action cluster, restyled as a flat accent button (the redesign's
+	 * .vk-btn-primary). No more floating gradient pill. */
+	/* Add task = the wide accent button and ALWAYS the right-most item in the
+	 * header action area (order:10); everything else sits to its left. The "+"
+	 * is the button text; "Add task" is appended decoratively (aria-label
+	 * already says "Add task"). Matches the prototype's .vk-btn-primary. */
 	.shell-wide .topbar-primary-pill {
-		position: absolute;
-		inset-inline-start: 50%;
-		inset-block-start: var(--desktop-header-padding-block-start);
-		transform: translateX(-50%);
-		inline-size: var(--header-pill-block-size);
-		block-size: var(--header-pill-block-size);
-		border-radius: 999px;
+		order: 10;
+		position: static;
+		transform: none;
+		inline-size: auto;
+		block-size: auto;
+		min-block-size: var(--header-nav-button-block-size);
+		padding: 0 0.9rem;
+		gap: 0.4rem;
+		border-radius: var(--radius-control);
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		background: linear-gradient(135deg, var(--brand-accent), var(--brand-accent-strong));
-		color: #170f0d;
-		font-size: 2rem;
+		background: var(--accent);
+		color: var(--accent-fg);
+		font-size: 1.05rem;
 		font-weight: 500;
-		box-shadow: var(--shadow);
+		line-height: 1;
+		box-shadow: none;
+		margin-inline-start: 0.5rem;
 		z-index: 1;
 	}
 
-	.shell-wide .topbar-nav-pill {
-		margin-inline-start: auto;
+	.shell-wide .topbar-primary-pill::after {
+		content: 'Add task';
+		font-size: 0.85rem;
+		font-weight: 500;
 	}
 
+	.shell-wide .topbar-primary-pill:hover {
+		filter: brightness(1.08);
+	}
+
+	/* Flatten the desktop action cluster — no pill container, flat icon buttons
+	 * (matching the mobile masthead and the redesign's .vk-iconbtn). Sits left of
+	 * the Add task button (order:5). */
+	.shell-wide .topbar-nav-pill {
+		order: 5;
+		background: transparent;
+		border: 0;
+		box-shadow: none;
+		padding: 0;
+		gap: 0.1rem;
+	}
+
+	/* Size to content (not grow) + margin-end:auto so title and count stay
+	 * together on the left and the actions get pushed to the right. */
 	.shell-wide .topbar-screen-heading {
 		display: flex;
-		align-items: center;
-		gap: 0.6rem;
+		align-items: baseline;
+		gap: 10px;
 		min-inline-size: 0;
-		inline-size: 0;
-		flex: 1 1 0;
+		flex: 0 1 auto;
 		margin-inline-end: auto;
-		max-inline-size: calc(50% - 4.8rem);
 		overflow: hidden;
 	}
 
 	.shell-wide .topbar-screen-heading .panel-title {
-		font-size: 2.05rem;
-		line-height: 1.04;
-		letter-spacing: -0.02em;
-		flex: 1 1 auto;
+		font-family: var(--font-display);
+		font-size: 26px;
+		font-weight: 500;
+		line-height: 1.1;
+		/* Open/normal tracking, matching the canonical .panel-title so no title is
+		 * squeezed tighter than the cards. */
+		letter-spacing: normal;
+		flex: 0 1 auto;
 		min-inline-size: 0;
 		max-inline-size: 100%;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	.shell-wide .topbar-screen-heading .count-chip {
+		flex: 0 0 auto;
+	}
+
+	.shell-wide .topbar-screen-heading .count-chip {
+		font-size: 17px;
+	}
+
+	/* Desktop rows use hover-reveal chrome (prototype data-handles="hover"),
+	 * overriding the global always-on handles used on touch. The grip + ⋯ stay
+	 * hidden until the row is hovered, and render as flat borderless trail
+	 * buttons (the prototype's .vk-trail / .vk-side-trail). */
+	.shell-wide .drag-handle,
+	.shell-wide .task-row .menu-button,
+	.shell-wide .project-node-row .menu-button {
+		opacity: 0;
+	}
+
+	.shell-wide .task-row:hover .drag-handle,
+	.shell-wide .task-row:hover .menu-button,
+	.shell-wide .project-node-row:hover .drag-handle,
+	.shell-wide .project-node-row:hover .menu-button {
+		opacity: 1;
+	}
+
+	.shell-wide .task-row .menu-button,
+	.shell-wide .project-node-row .menu-button {
+		inline-size: 1.7rem;
+		block-size: 1.7rem;
+		border: 0;
+		background: transparent;
+		border-radius: var(--radius-badge);
+		font-size: 1.15rem;
+		color: var(--text-dim);
+	}
+
+	.shell-wide .task-row .menu-button:hover,
+	.shell-wide .project-node-row .menu-button:hover {
+		background: var(--surface-3);
+		color: var(--text);
 	}
 
 	.shell-wide .desktop-promoted-panel-head {
@@ -5502,16 +6439,49 @@ select {
 		position: relative;
 		display: flex;
 		flex-direction: column;
-		inline-size: var(--wide-inspector-width, 27rem);
+		inline-size: var(--wide-inspector-width, 320px);
 		block-size: 100dvh;
 		min-block-size: 100dvh;
 		min-inline-size: 0;
-		background: var(--surface-pane);
+		background: var(--bg);
 		overflow: hidden;
 	}
 
+	/* Inspector empty state — ported to the prototype's .vk-inspector +
+	 * .vk-insp-empty (the populated detail keeps its own component styling). */
+	.shell-inspector-empty-state {
+		display: flex;
+		flex-direction: column;
+		gap: 14px;
+		padding: 18px;
+	}
+
+	.shell-inspector-empty-state .detail-label {
+		font-family: var(--font-ui);
+		font-size: 11px;
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+		color: var(--text-faint);
+		font-weight: 600;
+	}
+
+	.shell-inspector-empty-state .empty-state.compact {
+		color: var(--text-faint);
+		font-size: 12.5px;
+		padding: 12px 14px;
+		border: 1px dashed var(--hairline);
+		border-radius: var(--radius-control);
+		text-align: center;
+	}
+
+	/* Header-height mask strip for the two side panes only; their bottom border
+	 * is the side segments of the single full-width horizontal hairline. The
+	 * center segment is the topbar's own border-bottom (same height + thickness),
+	 * so the workspace must NOT draw its own strip here or the center reads as a
+	 * doubled rule against the single-line side panes. */
+	/* Side panes draw only the opaque header mask (hides content scrolling under the
+	 * pane header). The hairline itself is the single shell-level rule below. */
 	.wide-sidebar::before,
-	.shell-workspace::before,
 	.shell-inspector-region::before {
 		content: '';
 		position: absolute;
@@ -5523,13 +6493,30 @@ select {
 		z-index: 0;
 	}
 
+	/* The ONE header hairline: a single full-width line spanning all three panes,
+	 * drawn above the topbar (z-50) so no per-pane border has to be stitched at the
+	 * seams. Sits at the bottom row of the header band over the opaque masks/topbar,
+	 * so it composites over a uniform backing across the whole width. */
+	.shell-wide::after {
+		content: '';
+		position: absolute;
+		inset-inline: 0;
+		inset-block-start: calc(var(--desktop-header-block-size) - 1px);
+		block-size: 1px;
+		background: var(--hairline);
+		pointer-events: none;
+		z-index: 60;
+	}
+
+	/* Vertical pane dividers start at the horizontal header line and stop at the
+	 * bottom; same hairline weight as the horizontal rule. */
 	.wide-sidebar::after,
 	.shell-inspector-region::after {
 		content: '';
 		position: absolute;
 		inset-block: var(--desktop-header-block-size) 0;
 		inline-size: 1px;
-		background: var(--line-subtle);
+		background: var(--hairline);
 		pointer-events: none;
 		z-index: 1;
 	}
@@ -5591,14 +6578,9 @@ select {
 		z-index: 2;
 	}
 
-	.shell-inspector-chrome::after {
-		content: '';
-		position: absolute;
-		inset-inline: 0;
-		inset-block-end: 0;
-		block-size: 2px;
-		background: var(--line-subtle);
-	}
+	/* No separate chrome underline: the inspector ::before already draws the
+	 * single 1px header hairline shared with the other panes. A second rule here
+	 * stacked on it read as a doubled/heavier line versus the side panes. */
 
 	.shell-inspector-scroll {
 		flex: 1 1 auto;
@@ -5677,7 +6659,7 @@ select {
 	}
 }
 
-@media (min-width: 960px) and (max-width: 1099px) {
+@media (min-width: 960px) and (max-width: 1099px), (min-width: 768px) and (max-width: 1099px) and (pointer: coarse) {
 	.shell.shell-compact-wide,
 	.shell-compact-wide .wide-sidebar,
 	.shell-compact-wide .shell-inspector-region {
@@ -5751,7 +6733,7 @@ body.shell-resize-active {
 	.auth-hero,
 	.auth-card {
 		padding: 0.92rem;
-		border-radius: calc(var(--radius-lg) - 0.2rem);
+		border-radius: var(--radius-sheet);
 	}
 
 	.auth-brand {
@@ -6046,11 +7028,17 @@ body.shell-resize-active {
 	}
 
 	.chevron-button,
-	.checkbox-button,
 	.bulk-select-checkbox,
 	.task-toggle-end {
 		inline-size: 1.68rem;
 		block-size: 1.68rem;
+	}
+
+	/* Done checkbox is a deliberately small box — distinctly smaller than the
+	 * chevron/toggle tap targets above, per the flat language. */
+	.checkbox-button {
+		inline-size: 1.25rem;
+		block-size: 1.25rem;
 	}
 
 	.menu-button {
@@ -6096,17 +7084,17 @@ body.shell-resize-active {
 	}
 
 	.bottom-nav-wrap {
-		inline-size: calc(100vw - 1.7rem);
+		inline-size: 100%;
 	}
 
 	.bottom-nav {
 		padding-inline: 0.42rem;
 	}
 
-.bottom-nav-plus-circle {
-	inline-size: 2rem;
-	block-size: 2rem;
-	font-size: 1.35rem;
+	.bottom-nav-plus-circle {
+		inline-size: 48px;
+		block-size: 48px;
+		font-size: 1.6rem;
 	}
 }
 
@@ -6236,7 +7224,7 @@ body.shell-resize-active {
 	gap: 0.55rem;
 	padding: 0.8rem 0.9rem;
 	border: 1.5px solid var(--line-ui);
-	border-radius: 1.25rem;
+	border-radius: var(--radius-sheet);
 	background: var(--surface-card);
 }
 
@@ -6246,7 +7234,7 @@ body.shell-resize-active {
 	justify-content: center;
 	padding: 0.8rem 1rem;
 	border: 1.5px dashed var(--line-ui);
-	border-radius: 1.1rem;
+	border-radius: var(--radius-control);
 	background: transparent;
 	color: var(--text-muted);
 	font-weight: 700;
@@ -6345,7 +7333,7 @@ body.shell-resize-active {
 .kanban-empty-bucket {
 	padding: 1rem;
 	border: 1px dashed var(--line-subtle);
-	border-radius: 1rem;
+	border-radius: var(--radius-control);
 	color: var(--text-muted);
 	text-align: center;
 }
@@ -6389,7 +7377,7 @@ body.shell-resize-active {
 .project-gantt-scroll {
 	overflow: auto;
 	border: 1.5px solid var(--line-ui);
-	border-radius: 1.5rem;
+	border-radius: var(--radius-sheet);
 	background: var(--surface-card);
 	position: relative;
 }
@@ -6531,7 +7519,7 @@ body.shell-resize-active {
 
 .gantt-sort-select {
 	padding: 0.32rem 0.58rem;
-	border-radius: 999px;
+	border-radius: var(--radius-control);
 	border: 1.5px solid var(--line-ui);
 	background: var(--surface-card);
 	color: var(--text);
@@ -6571,7 +7559,7 @@ body.shell-resize-active {
 .compact-date-picker-toggle {
 	inline-size: 2.3rem;
 	block-size: 2.3rem;
-	border-radius: 0.88rem;
+	border-radius: var(--radius-control);
 	border: 1.5px solid var(--line-ui);
 	background: var(--surface-card);
 	color: var(--text);
@@ -6673,6 +7661,10 @@ body.shell-resize-active {
 	gap: 0.45rem;
 }
 
+.gantt-preset-select {
+	min-inline-size: 12rem;
+}
+
 .gantt-checkbox-field {
 	display: inline-flex;
 	align-items: center;
@@ -6685,7 +7677,7 @@ body.shell-resize-active {
 	gap: 0.65rem;
 	padding: 0.9rem 1rem;
 	border: 1.5px solid var(--line-ui);
-	border-radius: 1.25rem;
+	border-radius: var(--radius-sheet);
 	background: var(--surface-card);
 }
 
@@ -6838,7 +7830,7 @@ body.shell-resize-active {
 	position: relative;
 	min-inline-size: 0;
 	padding: 0.38rem 0.65rem;
-	border-radius: 999px;
+	border-radius: var(--radius-control);
 	background: var(--accent-strong);
 	color: var(--accent-contrast);
 	font-size: 0.85rem;
@@ -6855,7 +7847,7 @@ body.shell-resize-active {
 
 .project-gantt-task-bar.is-dragging {
 	opacity: 0.85;
-	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+	box-shadow: none;
 	z-index: 3;
 }
 
@@ -6865,7 +7857,7 @@ body.shell-resize-active {
 	inset-inline-start: 0;
 	block-size: 100%;
 	background: rgba(255, 255, 255, 0.18);
-	border-radius: 999px 0 0 999px;
+	border-radius: var(--radius-control) 0 0 var(--radius-control);
 	pointer-events: none;
 }
 
@@ -6902,7 +7894,7 @@ body.shell-resize-active {
 	min-inline-size: 0;
 	max-inline-size: 5.8rem;
 	padding: 0.12rem 0.34rem;
-	border-radius: 999px;
+	border-radius: var(--radius-badge);
 	background: rgba(255, 255, 255, 0.16);
 	font-size: 0.62rem;
 	font-weight: 600;
@@ -7009,7 +8001,7 @@ body.shell-resize-active {
 	inset-inline-start: 50%;
 	transform: translateX(-50%);
 	padding: 0.25rem 0.5rem;
-	border-radius: 6px;
+	border-radius: var(--radius-badge);
 	background: var(--surface-pane);
 	border: 1px solid var(--line-ui);
 	color: var(--text);
@@ -7027,7 +8019,7 @@ body.shell-resize-active {
 	min-inline-size: 14rem;
 	max-inline-size: 22rem;
 	padding: 0.55rem 0.7rem;
-	border-radius: 10px;
+	border-radius: var(--radius-md);
 	background: var(--surface-pane);
 	border: 1.5px solid var(--line-ui);
 	box-shadow: var(--shadow);
@@ -7090,7 +8082,7 @@ body.shell-resize-active {
 	gap: 0.6rem;
 	padding: 1rem;
 	border: 1.5px solid var(--line-ui);
-	border-radius: 1.25rem;
+	border-radius: var(--radius-sheet);
 	background: var(--surface-card);
 }
 
@@ -7103,7 +8095,7 @@ body.shell-resize-active {
 .project-gantt-undated-item {
 	padding: 0.65rem 0.85rem;
 	border: 1.5px solid var(--line-ui);
-	border-radius: 999px;
+	border-radius: var(--radius-control);
 	background: var(--surface-field);
 	color: inherit;
 }
@@ -7160,7 +8152,7 @@ body.shell-resize-active {
 	gap: 0.65rem;
 	padding: 0.7rem 0.8rem;
 	border: 1.5px solid var(--line-ui);
-	border-radius: 1rem;
+	border-radius: var(--radius-control);
 	background: var(--surface-field);
 }
 
@@ -7194,6 +8186,8 @@ body.shell-resize-active {
 
 .migration-status-chip {
 	border: 1px solid color-mix(in srgb, var(--line-ui) 78%, transparent);
+	border-radius: var(--radius-badge);
+	padding: 0.28rem 0.54rem;
 }
 
 .migration-status-chip.status-idle {
@@ -7272,7 +8266,7 @@ body.shell-resize-active {
 	min-height: 11rem;
 	padding: 1rem;
 	border: 1px solid color-mix(in srgb, var(--line-ui) 80%, transparent);
-	border-radius: 1.35rem;
+	border-radius: var(--radius-sheet);
 	overflow: hidden;
 	background:
 		radial-gradient(circle at top left, color-mix(in srgb, var(--accent-soft) 20%, transparent), transparent 50%),
@@ -7338,7 +8332,7 @@ body.shell-resize-active {
 	gap: 0.55rem;
 	padding: 0.6rem;
 	border: 1px solid color-mix(in srgb, var(--line-ui) 80%, transparent);
-	border-radius: 1rem;
+	border-radius: var(--radius-control);
 	background: var(--surface-field);
 	text-align: left;
 }
@@ -7347,7 +8341,7 @@ body.shell-resize-active {
 	inline-size: 100%;
 	aspect-ratio: 4 / 3;
 	object-fit: cover;
-	border-radius: 0.8rem;
+	border-radius: var(--radius-control);
 }
 
 .unsplash-grid-copy {

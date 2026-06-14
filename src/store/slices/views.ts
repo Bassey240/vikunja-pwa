@@ -8,15 +8,23 @@ import type {AppStore} from '../index'
 import {persistOfflineBrowseSnapshot} from '../offline-browse-cache'
 import {blockOfflineReadOnlyAction} from '../offline-readonly'
 import {taskFiltersToVikunjaFilter} from '../task-filter-query'
+import {isWideLayout} from '@/hooks/useWideLayout'
 import {
-	loadPersistedPreferredProjectViewKind,
-	persistPreferredProjectViewKind,
+	type ProjectViewKind,
+	loadDefaultDesktopViewKind,
+	loadDefaultMobileViewKind,
+	persistDefaultDesktopViewKind,
+	persistDefaultMobileViewKind,
+	resolveTaskViewId,
 } from '../view-selections'
 import {normalizeTaskGraph} from '../selectors'
 
 export interface ViewsSlice {
 	projectViewsById: Record<number, ProjectView[]>
-	preferredProjectViewKind: string | null
+	defaultDesktopViewKind: ProjectViewKind
+	defaultMobileViewKind: ProjectViewKind
+	// Per-project view kind chosen during this app session only; never persisted.
+	sessionProjectViewKindById: Record<number, ProjectViewKind>
 	projectBucketsByViewId: Record<number, Bucket[]>
 	loadingProjectBuckets: Record<number, boolean>
 	currentProjectViewId: number | null
@@ -39,7 +47,7 @@ export interface ViewsSlice {
 	) => Promise<ProjectView | null>
 	createTaskInBucket: (projectId: number, viewId: number, bucketId: number, title: string) => Promise<boolean>
 	resolveProjectTaskViewId: (projectId: number) => Promise<number | null>
-	resolveProjectPreviewTaskViewId: (projectId: number) => Promise<number | null>
+	resolveProjectListTaskViewId: (projectId: number) => Promise<number | null>
 	ensureCurrentProjectTaskViewId: () => Promise<number | null>
 	selectProjectView: (
 		projectId: number,
@@ -47,13 +55,16 @@ export interface ViewsSlice {
 		context?: 'project' | 'inbox' | 'savedFilter',
 		options?: {persistPreference?: boolean},
 	) => Promise<void>
-	savePreferredProjectViewKind: () => void
+	setDefaultDesktopViewKind: (kind: ProjectViewKind) => void
+	setDefaultMobileViewKind: (kind: ProjectViewKind) => void
 	resetViewsState: () => void
 }
 
 export const createViewsSlice: StateCreator<AppStore, [], [], ViewsSlice> = (set, get) => ({
 	projectViewsById: {},
-	preferredProjectViewKind: loadPersistedPreferredProjectViewKind(),
+	defaultDesktopViewKind: loadDefaultDesktopViewKind(),
+	defaultMobileViewKind: loadDefaultMobileViewKind(),
+	sessionProjectViewKindById: {},
 	projectBucketsByViewId: {},
 	loadingProjectBuckets: {},
 	currentProjectViewId: null,
@@ -502,6 +513,7 @@ export const createViewsSlice: StateCreator<AppStore, [], [], ViewsSlice> = (set
 			return null
 		}
 
+		const wide = isWideLayout()
 		const currentViewId =
 			(projectId === Number(get().selectedProjectId || 0)
 				? Number(get().currentProjectViewId || 0)
@@ -510,23 +522,16 @@ export const createViewsSlice: StateCreator<AppStore, [], [], ViewsSlice> = (set
 					: projectId === Number(get().selectedSavedFilterProjectId || 0)
 						? Number(get().currentSavedFilterViewId || 0)
 						: 0) || 0
-		if (currentViewId && views.some(view => view.id === currentViewId)) {
-			return currentViewId
-		}
 
-		const preferredViewKind = get().preferredProjectViewKind
-		const preferredView = preferredViewKind
-			? views.find(view => view.view_kind === preferredViewKind)
-			: null
-		if (preferredView) {
-			return preferredView.id
-		}
-
-		const firstListView = views.find(view => view.view_kind === 'list')
-		return firstListView?.id || views[0]?.id || null
+		return resolveTaskViewId(views, {
+			wide,
+			currentViewId,
+			sessionKind: get().sessionProjectViewKindById[projectId],
+			defaultKind: wide ? get().defaultDesktopViewKind : get().defaultMobileViewKind,
+		})
 	},
 
-	async resolveProjectPreviewTaskViewId(projectId) {
+	async resolveProjectListTaskViewId(projectId) {
 		const views = await get().loadProjectViews(projectId)
 		if (views.length === 0) {
 			return null
@@ -568,9 +573,14 @@ export const createViewsSlice: StateCreator<AppStore, [], [], ViewsSlice> = (set
 			? (get().projectViewsById[projectId] || []).find(view => view.id === viewId) || null
 			: null
 
+		// Active view is remembered for this session only; a fresh load falls back to the per-device default.
 		if (persistPreference && selectedView?.view_kind) {
-			set({preferredProjectViewKind: selectedView.view_kind})
-			get().savePreferredProjectViewKind()
+			set(state => ({
+				sessionProjectViewKindById: {
+					...state.sessionProjectViewKindById,
+					[projectId]: selectedView.view_kind as ProjectViewKind,
+				},
+			}))
 		}
 
 		if (context === 'inbox' && projectId === get().inboxProjectId) {
@@ -597,14 +607,22 @@ export const createViewsSlice: StateCreator<AppStore, [], [], ViewsSlice> = (set
 		}
 	},
 
-	savePreferredProjectViewKind() {
-		persistPreferredProjectViewKind(get().preferredProjectViewKind)
+	setDefaultDesktopViewKind(kind) {
+		persistDefaultDesktopViewKind(kind)
+		set({defaultDesktopViewKind: kind})
+	},
+
+	setDefaultMobileViewKind(kind) {
+		persistDefaultMobileViewKind(kind)
+		set({defaultMobileViewKind: kind})
 	},
 
 	resetViewsState() {
 		set({
 			projectViewsById: {},
-			preferredProjectViewKind: loadPersistedPreferredProjectViewKind(),
+			defaultDesktopViewKind: loadDefaultDesktopViewKind(),
+			defaultMobileViewKind: loadDefaultMobileViewKind(),
+			sessionProjectViewKindById: {},
 			projectBucketsByViewId: {},
 			loadingProjectBuckets: {},
 			currentProjectViewId: null,
