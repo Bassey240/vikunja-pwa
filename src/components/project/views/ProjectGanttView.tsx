@@ -1,6 +1,7 @@
 import {api} from '@/api'
 import UserAvatar from '@/components/common/UserAvatar'
 import CompactDatePicker from '@/components/common/CompactDatePicker'
+import DatePickerOverlay from '@/components/common/DatePickerOverlay'
 import GanttBarTooltip from '@/components/project/views/gantt/GanttBarTooltip'
 import GanttDependencyArrows from '@/components/project/views/gantt/GanttDependencyArrows'
 import {useGanttBarDrag} from '@/components/project/views/gantt/gantt-drag'
@@ -23,6 +24,7 @@ import {
 } from '@/components/project/views/gantt/gantt-helpers'
 import {useAppStore} from '@/store'
 import type {Task} from '@/types'
+import {placeTask} from '@/utils/calendar-placement'
 import {DEFAULT_LABEL_BG} from '@/utils/color-constants'
 import {getMenuAnchor} from '@/utils/menuPosition'
 import {formatShortDate, normalizeHexColor, normalizeTaskDateValue} from '@/utils/formatting'
@@ -46,6 +48,7 @@ export default function ProjectGanttView({
 	const toggleTaskMenu = useAppStore(state => state.toggleTaskMenu)
 	const duplicateTask = useAppStore(state => state.duplicateTask)
 	const deleteTask = useAppStore(state => state.deleteTask)
+	const moveTaskToDay = useAppStore(state => state.moveTaskToDay)
 	const setError = useAppStore(state => state.setError)
 	const setOfflineActionNotice = useAppStore(state => state.setOfflineActionNotice)
 	const [showTasksWithoutDates, setShowTasksWithoutDates] = useState(false)
@@ -55,6 +58,7 @@ export default function ProjectGanttView({
 	const [zoom, setZoom] = useState<GanttZoom>('day')
 	const [sortBy, setSortBy] = useState<GanttSort>('start_date')
 	const [hoveredTaskId, setHoveredTaskId] = useState<number | null>(null)
+	const [moveDateTask, setMoveDateTask] = useState<Task | null>(null)
 	const [dragOverrides, setDragOverrides] = useState<Map<number, {start: Date; end: Date}>>(new Map())
 	const gridRef = useRef<HTMLDivElement | null>(null)
 
@@ -535,6 +539,14 @@ export default function ProjectGanttView({
 														openFocusedTask(entry.task.id, focusProjectIdOverride || entry.task.project_id, 'tasks')
 													},
 												},
+												{
+													action: 'move-task-to-date',
+													label: 'Move to date',
+													onClick: () => {
+														setMoveDateTask(entry.task)
+														setOpenMenu(null)
+													},
+												},
 											]}
 											onEdit={() => {
 												setOpenMenu(null)
@@ -573,6 +585,17 @@ export default function ProjectGanttView({
 						))}
 					</div>
 				</section>
+			) : null}
+			{moveDateTask ? (
+				<DatePickerOverlay
+					title="Move to date"
+					value={placeTask(moveDateTask)?.startDayKey ?? ''}
+					onCommit={dayKey => {
+						void moveTaskToDay(moveDateTask.id, dayKey)
+						setMoveDateTask(null)
+					}}
+					onClose={() => setMoveDateTask(null)}
+				/>
 			) : null}
 		</div>
 	)

@@ -1,3 +1,4 @@
+import HighlightedTaskInput from '@/components/tasks/HighlightedTaskInput'
 import useWideLayout from '@/hooks/useWideLayout'
 import {useRootComposerState} from '@/hooks/useRootComposerState'
 import {useEffect} from 'react'
@@ -68,7 +69,7 @@ export default function InlineRootTaskComposer({
 							</option>
 						))}
 				</select>
-				<input
+				<HighlightedTaskInput
 					ref={inputRef}
 					className="subtask-input"
 					data-root-input
@@ -83,7 +84,7 @@ export default function InlineRootTaskComposer({
 					}}
 				/>
 				<div className="inline-composer-actions">
-					<button className="composer-submit" type="submit" disabled={rootSubmitting || !composerProjectId}>
+					<button className="composer-submit" type="submit" disabled={rootSubmitting || !composerProjectId} onMouseDown={event => event.preventDefault()}>
 						{rootSubmitting ? 'Saving…' : 'Add'}
 					</button>
 					<button className="ghost-button" data-action="close-root-composer-button" type="button" onClick={closeRootComposer}>

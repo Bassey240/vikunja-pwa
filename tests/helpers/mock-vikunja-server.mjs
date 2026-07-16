@@ -23,6 +23,7 @@ export async function createMockVikunjaServer({
 	refreshAccessTokenLifetimeSeconds = 3600,
 	rotateRefreshTokens = false,
 	refreshResponseDelayMs = 0,
+	unauthorizedGetRoutes = [],
 } = {}) {
 	const initialFixture = createMockFixture()
 	if (totpState && typeof totpState === 'object') {
@@ -61,6 +62,10 @@ export async function createMockVikunjaServer({
 			}
 
 			const route = url.pathname.replace(/^\/api\/v1\//, '')
+			if (req.method === 'GET' && unauthorizedGetRoutes.includes(route)) {
+				sendJson(res, 401, {message: 'missing, malformed, expired or otherwise invalid token provided'})
+				return
+			}
 			const isMultipart = `${req.headers['content-type'] || ''}`.toLowerCase().includes('multipart/form-data')
 			const body = req.method === 'GET' || req.method === 'DELETE' || isMultipart ? null : await readJsonBody(req)
 			const avatarSuffixMatch = route.match(/^([^/]+)\/avatar$/)

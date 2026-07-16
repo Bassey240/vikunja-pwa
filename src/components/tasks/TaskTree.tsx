@@ -12,6 +12,11 @@ interface TaskTreeProps {
 	rootParentTaskId?: number | null
 	focusProjectIdOverride?: number | null
 	savedFilterProjectId?: number | null
+	onMoveToDate?: (task: Task) => void
+	// Flat mode renders every matched task as its own root with no subtask
+	// nesting — used by the calendar's selected-day list so it matches the grid,
+	// where each dated task (parent or subtask) stands on its own.
+	flat?: boolean
 }
 
 export default function TaskTree({
@@ -23,8 +28,13 @@ export default function TaskTree({
 	rootParentTaskId = null,
 	focusProjectIdOverride = null,
 	savedFilterProjectId = null,
+	onMoveToDate,
+	flat = false,
 }: TaskTreeProps) {
-	const rootTasks = getVisibleRootTasksFor(taskList, matcher, sortBy)
+	const matchedFlat = flat
+		? taskList.filter(task => (matcher ? matcher(task) : !task.done))
+		: []
+	const rootTasks = flat ? matchedFlat : getVisibleRootTasksFor(taskList, matcher, sortBy)
 
 	return (
 		<div
@@ -43,6 +53,8 @@ export default function TaskTree({
 					matcher={matcher}
 					sortBy={sortBy}
 					bulkMode={bulkMode}
+					flat={flat}
+					onMoveToDate={onMoveToDate}
 					focusProjectIdOverride={focusProjectIdOverride}
 				/>
 			))}

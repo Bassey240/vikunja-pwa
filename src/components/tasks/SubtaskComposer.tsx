@@ -1,3 +1,4 @@
+import HighlightedTaskInput from '@/components/tasks/HighlightedTaskInput'
 import {type FormEvent, useEffect, useRef, useState} from 'react'
 
 interface SubtaskComposerProps {
@@ -53,18 +54,17 @@ export default function SubtaskComposer({
 		>
 			<div className="subtask-context">Add subtask</div>
 			<div className="inline-composer-controls">
-				<input
+				<HighlightedTaskInput
 					ref={inputRef}
 					className="subtask-input"
 					type="text"
 					placeholder="Press Enter to keep adding subtasks"
-					disabled={submitting}
 					value={title}
 					onChange={event => setTitle(event.currentTarget.value)}
 					{...inputProps}
 				/>
 				<div className="inline-composer-actions">
-					<button className="composer-submit" type="submit" disabled={submitting}>
+					<button className="composer-submit" type="submit" disabled={submitting} onMouseDown={event => event.preventDefault()}>
 						{submitting ? 'Saving…' : 'Add'}
 					</button>
 					<button className="ghost-button" type="button" data-action={closeAction} onClick={onClose}>

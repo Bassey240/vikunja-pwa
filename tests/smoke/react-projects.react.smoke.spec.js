@@ -238,6 +238,8 @@ test('project task views can be created from filters and deleted from the view m
 	await expect(page.locator('.task-row').filter({hasText: 'Smoke suite rollout'})).toHaveCount(1)
 
 	await page.locator('[data-action="toggle-project-view-menu"]').click()
+	// Create/delete live behind "Manage views" now; the popover opens as a switcher.
+	await page.locator('[data-action="manage-project-views"]').click()
 	await page.locator('[data-project-view-title="true"]').fill('Critical work')
 	await page.locator('[data-project-view-kind="true"]').selectOption('list')
 	await page.locator('[data-project-view-seed-filter="true"]').check()
@@ -252,6 +254,7 @@ test('project task views can be created from filters and deleted from the view m
 
 	await page.locator('[data-action="toggle-project-view-menu"]').click()
 	await expect(page.locator(`[data-action="select-project-view"][data-view-id="${createdView?.id}"]`)).toHaveClass(/is-active/)
+	await page.locator('[data-action="manage-project-views"]').click()
 	page.once('dialog', dialog => dialog.accept())
 	await page.locator(`[data-action="delete-project-view"][data-view-id="${createdView?.id}"]`).click()
 	await expect.poll(async () => {
@@ -268,6 +271,8 @@ test('single-view projects do not expose a delete action in the view menu', asyn
 
 	await page.locator('[data-action="toggle-project-view-menu"]').click()
 	await expect(page.locator('[data-action="select-project-view"][data-view-id="13"]')).toBeVisible()
+	await page.locator('[data-action="manage-project-views"]').click()
+	await expect(page.locator('[data-project-view-title="true"]')).toBeVisible()
 	await expect(page.locator('[data-action="delete-project-view"]')).toHaveCount(0)
 })
 
@@ -732,6 +737,37 @@ test('gantt renders dependency arrows and drag release does not open task focus'
 	await expect(page.locator('[data-gantt-task-id="201"]')).toBeVisible()
 })
 
+test('gantt task menu can move a task to a date with the large date overlay', async ({page}) => {
+	await page.setViewportSize({width: 1440, height: 900})
+	await openProjects(page)
+
+	const workNode = page.locator('[data-project-node-id="2"]')
+	await workNode.locator('[data-action="select-project"][data-project-id="2"]').click()
+	await expect(page.locator('[data-action="toggle-project-view-menu"]')).toBeVisible()
+
+	await page.locator('[data-action="toggle-project-view-menu"]').click()
+	await page.locator('[data-action="select-project-view"][data-view-id="17"]').click()
+
+	const ganttBar = page.locator('[data-gantt-task-id="201"]').first()
+	await expect(ganttBar).toBeVisible()
+
+	await ganttBar.locator('[data-action="toggle-gantt-task-menu"]').click()
+	await page.locator('[data-menu-root="true"] [data-action="move-task-to-date"]').click()
+
+	const overlay = page.locator('.date-overlay-backdrop')
+	await expect(overlay).toBeVisible()
+	await expect(overlay.locator('.date-overlay-panel')).toBeVisible()
+
+	const movePost = page.waitForRequest(
+		request => request.method() === 'POST' && /\/api\/tasks\/201$/.test(request.url()),
+	)
+	await overlay.locator('.date-overlay-day:not(.is-selected):not(.is-muted)').first().click()
+	await page.locator('[data-action="commit-date-overlay"]').click()
+	await movePost
+
+	await expect(overlay).toHaveCount(0)
+})
+
 test('switching projects closes out-of-scope focused tasks without crashing the app shell', async ({page}) => {
 	const pageErrors = []
 	page.on('pageerror', error => {
@@ -776,7 +812,8 @@ test('offline project navigation reuses cached project tasks without surfacing g
 	await expect(page.getByText('Smoke suite rollout')).toBeVisible()
 
 	await page.context().setOffline(true)
-	await page.getByRole('button', {name: 'Today'}).click()
+	await page.getByRole('navigation', {name: 'Primary'}).getByRole('button', {name: 'Menu'}).click()
+	await page.locator('[data-action="go-today"]').click()
 	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
 	await expect(page.locator('.topbar-runtime-status-banner').first()).toContainText('saved locally and will sync')
 
@@ -1112,4 +1149,33 @@ test('kanban tasks can move to a non-done bucket by drag and bucket menu', async
 	await expect(page.locator('[data-kanban-lane-id="151"] [data-task-row-id="201"]')).toHaveCount(1)
 	await expect(movedTask).toHaveCount(0)
 	expect(pageErrors).toEqual([])
+})
+
+test('kanban task menu can move a task to a date with the large date overlay', async ({page}) => {
+	await openProjects(page)
+
+	const workNode = page.locator('[data-project-node-id="2"]')
+	await workNode.locator('[data-action="select-project"][data-project-id="2"]').click()
+	await expect(page.getByRole('heading', {name: 'Work'})).toBeVisible()
+
+	await page.locator('[data-action="toggle-project-view-menu"]').click()
+	await page.locator('[data-action="select-project-view"][data-project-id="2"][data-view-id="15"]').click()
+	await expect(page.locator('.kanban-lane-head').first()).toBeVisible()
+
+	const laneTask = page.locator('[data-kanban-lane-id="151"] [data-task-row-id="201"]')
+	await laneTask.locator('[data-action="toggle-task-menu"]').click()
+	await page.locator('[data-menu-root="true"] [data-action="move-task-to-date"]').click()
+
+	const overlay = page.locator('.date-overlay-backdrop')
+	await expect(overlay).toBeVisible()
+	await expect(overlay.locator('.date-overlay-panel')).toBeVisible()
+
+	const movePost = page.waitForRequest(
+		request => request.method() === 'POST' && /\/api\/tasks\/201$/.test(request.url()),
+	)
+	await overlay.locator('.date-overlay-day:not(.is-selected):not(.is-muted)').first().click()
+	await page.locator('[data-action="commit-date-overlay"]').click()
+	await movePost
+
+	await expect(overlay).toHaveCount(0)
 })

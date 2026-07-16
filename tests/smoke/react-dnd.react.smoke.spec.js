@@ -488,7 +488,8 @@ test('successful inbox drag keeps Today draggable after switching views', async 
 		await route.continue()
 	})
 
-	await page.getByRole('button', {name: 'Today'}).click()
+	await page.getByRole('navigation', {name: 'Primary'}).getByRole('button', {name: 'Menu'}).click()
+	await page.locator('[data-action="go-today"]').click()
 	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
 	await expect.poll(() => rootTaskIds(page)).toEqual([102, 101])
 

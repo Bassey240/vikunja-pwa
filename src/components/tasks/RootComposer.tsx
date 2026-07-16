@@ -1,3 +1,4 @@
+import HighlightedTaskInput from '@/components/tasks/HighlightedTaskInput'
 import {useRootComposerState} from '@/hooks/useRootComposerState'
 import useWideLayout from '@/hooks/useWideLayout'
 import {useEffect} from 'react'
@@ -72,7 +73,7 @@ export default function RootComposer() {
 					) : null}
 					<label className="detail-field">
 						<div className="detail-label">Title</div>
-						<input
+						<HighlightedTaskInput
 							ref={inputRef}
 							className="detail-input"
 							data-root-input
@@ -88,7 +89,7 @@ export default function RootComposer() {
 						/>
 					</label>
 					<div className="composer-form-actions">
-						<button className="composer-submit" type="submit" disabled={rootSubmitting || !composerProjectId}>
+						<button className="composer-submit" type="submit" disabled={rootSubmitting || !composerProjectId} onMouseDown={event => event.preventDefault()}>
 							{rootSubmitting ? 'Saving…' : 'Add'}
 						</button>
 						<button className="ghost-button" data-action="close-root-composer-button" type="button" onClick={closeRootComposer}>

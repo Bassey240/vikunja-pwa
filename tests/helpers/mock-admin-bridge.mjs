@@ -15,6 +15,8 @@ export async function createMockAdminBridge(rootDir, {
 	hostConfigPathMode = 'file',
 	configReadError = null,
 	configWriteError = null,
+	userListError = null,
+	migrateListError = null,
 	adminUsers = [],
 	testmail = {},
 	doctor = {},
@@ -37,6 +39,8 @@ export async function createMockAdminBridge(rootDir, {
 		envVars,
 		configReadError,
 		configWriteError,
+		userListError,
+		migrateListError,
 		adminUsers,
 		testmail,
 		doctor,
@@ -113,6 +117,8 @@ function buildInitialState({
 	envVars,
 	configReadError,
 	configWriteError,
+	userListError,
+	migrateListError,
 	adminUsers,
 	testmail,
 	doctor,
@@ -169,6 +175,8 @@ function buildInitialState({
 		envVars: {...envVars},
 		configReadError: normalizeCommandError(configReadError),
 		configWriteError: normalizeCommandError(configWriteError),
+		userListError: normalizeCommandError(userListError),
+		migrateListError: normalizeCommandError(migrateListError),
 		metrics: {
 			configReadCount: 0,
 			configWriteCount: 0,
@@ -343,6 +351,9 @@ function serializeMigrations(migrations) {
 function handleUserCli(state, args) {
 \tconst command = String(args[0] || '')
 \tif (command === 'list') {
+\t\tif (state.userListError) {
+\t\t\tfail(state.userListError.stderr, Number(state.userListError.exitCode || 1))
+\t\t}
 \t\tconst email = findFlagValue(args, '--email').toLowerCase()
 \t\tconst users = !email
 \t\t\t? [...(state.adminUsers || [])]
@@ -482,6 +493,9 @@ function handleCli(state, args) {
 \t\tconst subcommand = String(args[1] || '')
 \t\tstate.migrations = state.migrations || []
 \t\tif (subcommand === 'list') {
+\t\t\tif (state.migrateListError) {
+\t\t\t\tfail(state.migrateListError.stderr, Number(state.migrateListError.exitCode || 1))
+\t\t\t}
 \t\t\tprocess.stdout.write(serializeMigrations(state.migrations))
 \t\t\treturn
 \t\t}

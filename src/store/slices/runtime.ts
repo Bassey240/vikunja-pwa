@@ -22,6 +22,10 @@ function getCurrentRuntimeAssetUrls() {
 	])
 	const selectors = [
 		'script[src]',
+		// Vite emits the entry as script[src] but its static deps (react-vendor,
+		// vendor) as modulepreload. Without this the boot chunks never reach the
+		// cache and an offline reload dies on Response.error() with a blank page.
+		'link[rel="modulepreload"][href]',
 		'link[rel="stylesheet"][href]',
 		'link[rel="manifest"][href]',
 		'link[rel="apple-touch-icon"][href]',

@@ -1,3 +1,4 @@
+import Icon from '@/components/common/icons'
 import {useAppStore} from '@/store'
 import {useLocation, useNavigate} from 'react-router-dom'
 
@@ -30,11 +31,8 @@ function BottomNavButton({
 			disabled={disabled}
 			onClick={onClick}
 		>
-			<span
-				className={emphasize ? 'bottom-nav-plus-circle' : `bottom-nav-icon bottom-nav-icon-${icon}`}
-				aria-hidden="true"
-			>
-				{emphasize ? '+' : ''}
+			<span className={emphasize ? 'bottom-nav-plus-circle' : 'bottom-nav-icon'} aria-hidden="true">
+				{emphasize ? '+' : <Icon name={icon} size={21} />}
 			</span>
 			<span className="bottom-nav-label">{label}</span>
 		</button>
@@ -48,6 +46,9 @@ export default function BottomNav() {
 	const setOpenMenu = useAppStore(state => state.setOpenMenu)
 	const toggleNavMenu = useAppStore(state => state.toggleNavMenu)
 	const openRootComposer = useAppStore(state => state.openRootComposer)
+	const openCalendarComposer = useAppStore(state => state.openCalendarComposer)
+	const focusedTaskId = useAppStore(state => state.focusedTaskId)
+	const openInlineSubtaskComposer = useAppStore(state => state.openInlineSubtaskComposer)
 	const closeTaskDetail = useAppStore(state => state.closeTaskDetail)
 	const closeProjectDetail = useAppStore(state => state.closeProjectDetail)
 	const location = useLocation()
@@ -76,6 +77,7 @@ export default function BottomNav() {
 			{openMenu?.kind === 'nav' ? (
 				<div className="inline-menu nav-menu" data-menu-root="true">
 					<button className={`menu-item ${screen === 'today' ? 'is-active' : ''}`} data-action="go-today" type="button" onClick={() => goTo('/')}>Today</button>
+					<button className={`menu-item ${screen === 'calendar' ? 'is-active' : ''}`} data-action="go-calendar" type="button" onClick={() => goTo('/calendar')}>Calendar</button>
 					<button className={`menu-item ${screen === 'inbox' ? 'is-active' : ''}`} data-action="go-inbox" type="button" onClick={() => goTo('/inbox')}>Inbox</button>
 					<button className={`menu-item ${screen === 'upcoming' ? 'is-active' : ''}`} data-action="go-upcoming" type="button" onClick={() => goTo('/upcoming')}>Upcoming</button>
 					<button className={`menu-item ${projectsActive ? 'is-active' : ''}`} data-action="go-projects" type="button" onClick={() => goTo('/projects')}>Projects</button>
@@ -86,18 +88,28 @@ export default function BottomNav() {
 				</div>
 			) : null}
 			<nav className="bottom-nav" aria-label="Primary">
-				<BottomNavButton action="go-today" label="Today" icon="today" active={screen === 'today'} onClick={() => goTo('/')} />
+				<BottomNavButton action="go-calendar" label="Calendar" icon="calendar" active={screen === 'calendar'} onClick={() => goTo('/calendar')} />
 				<BottomNavButton action="go-inbox" label="Inbox" icon="inbox" active={screen === 'inbox'} onClick={() => goTo('/inbox')} />
 				<BottomNavButton
 					action="open-root-composer"
 					label="Add"
 					emphasize={true}
-					onClick={() =>
+					onClick={() => {
+						// On the task focus screen the + adds a subtask (audit H5) — the
+						// screen's own empty state points at this button.
+						if (focusedTaskId) {
+							openInlineSubtaskComposer(focusedTaskId, 'focus')
+							return
+						}
+						if (screen === 'calendar') {
+							openCalendarComposer()
+							return
+						}
 						openRootComposer({
 							projectId: screen === 'today' ? inboxProjectId : null,
 							defaultDueToday: screen === 'today',
 						})
-					}
+					}}
 				/>
 			<BottomNavButton action="go-projects" label="Projects" icon="projects" active={projectsActive} onClick={() => goTo('/projects')} />
 				<BottomNavButton action="toggle-screen-menu" label="Menu" icon="menu" active={openMenu?.kind === 'nav'} menuToggle={true} onClick={toggleNavMenu} />

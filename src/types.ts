@@ -3,6 +3,7 @@ export type AppTheme = 'dark' | 'light'
 
 export type Screen =
 	| 'today'
+	| 'calendar'
 	| 'inbox'
 	| 'upcoming'
 	| 'projects'

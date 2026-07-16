@@ -1,5 +1,6 @@
 import {type PointerEvent as ReactPointerEvent, useCallback, useEffect, useRef, useState} from 'react'
 
+import {capturePointer, DRAG_ACTIVATION_DISTANCE, releasePointer, usePointerDragListeners} from '@/utils/pointer-drag'
 import type {GanttZoom} from './gantt-helpers'
 
 export interface DragState {
@@ -24,7 +25,6 @@ export interface ActiveGanttDrag {
 }
 
 const EDGE_WIDTH = 8
-const DRAG_ACTIVATION_DISTANCE = 4
 
 export function useGanttBarDrag({
 	zoom,
@@ -44,107 +44,95 @@ export function useGanttBarDrag({
 		callbacksRef.current = {zoom, onDragUpdate, onDragEnd}
 	}, [onDragEnd, onDragUpdate, zoom])
 
-	useEffect(() => {
-		function handlePointerMove(event: PointerEvent) {
-			const state = dragStateRef.current
-			if (!state) {
-				return
-			}
-
-			if (!state.hasDragged && Math.abs(event.clientX - state.initialPointerX) >= DRAG_ACTIVATION_DISTANCE) {
-				state.hasDragged = true
-			}
-
-			const deltaColumns = Math.round((event.clientX - state.initialPointerX) / state.columnWidth)
-			const {zoom: currentZoom, onDragUpdate: currentOnDragUpdate} = callbacksRef.current
-			let nextStart = new Date(state.initialStartDate.getTime())
-			let nextEnd = new Date(state.initialEndDate.getTime())
-
-			switch (state.mode) {
-				case 'move':
-					nextStart = shiftDateByZoom(state.initialStartDate, deltaColumns, currentZoom)
-					nextEnd = shiftDateByZoom(state.initialEndDate, deltaColumns, currentZoom)
-					break
-				case 'resize-start':
-					nextStart = shiftDateByZoom(state.initialStartDate, deltaColumns, currentZoom)
-					if (nextStart.getTime() > nextEnd.getTime()) {
-						nextStart = new Date(nextEnd.getTime())
-					}
-					break
-				case 'resize-end':
-					nextEnd = shiftDateByZoom(state.initialEndDate, deltaColumns, currentZoom)
-					if (nextEnd.getTime() < nextStart.getTime()) {
-						nextEnd = new Date(nextStart.getTime())
-					}
-					break
-			}
-
-			if (
-				nextStart.getTime() === state.currentStartDate.getTime() &&
-				nextEnd.getTime() === state.currentEndDate.getTime()
-			) {
-				return
-			}
-
-			state.currentStartDate = nextStart
-			state.currentEndDate = nextEnd
-			setActiveDrag({
-				taskId: state.taskId,
-				mode: state.mode,
-				startDate: nextStart,
-				endDate: nextEnd,
-			})
-			currentOnDragUpdate(state.taskId, nextStart, nextEnd)
+	const handlePointerMove = useCallback((event: PointerEvent) => {
+		const state = dragStateRef.current
+		if (!state) {
+			return
 		}
 
-		function finishDrag() {
-			const state = dragStateRef.current
-			if (!state) {
-				return
-			}
+		if (!state.hasDragged && Math.abs(event.clientX - state.initialPointerX) >= DRAG_ACTIVATION_DISTANCE) {
+			state.hasDragged = true
+		}
 
-			try {
-				state.element?.releasePointerCapture?.(state.pointerId)
-			} catch {}
+		const deltaColumns = Math.round((event.clientX - state.initialPointerX) / state.columnWidth)
+		const {zoom: currentZoom, onDragUpdate: currentOnDragUpdate} = callbacksRef.current
+		let nextStart = new Date(state.initialStartDate.getTime())
+		let nextEnd = new Date(state.initialEndDate.getTime())
 
-			const changed =
-				state.currentStartDate.getTime() !== state.initialStartDate.getTime() ||
-				state.currentEndDate.getTime() !== state.initialEndDate.getTime()
-			const shouldSuppress =
-				state.mode !== 'move' ||
-				state.hasDragged ||
-				changed
-			const nextStart = new Date(state.currentStartDate.getTime())
-			const nextEnd = new Date(state.currentEndDate.getTime())
-			const nextTaskId = state.taskId
-
-			dragStateRef.current = null
-			setActiveDrag(null)
-
-			if (shouldSuppress) {
-				suppressClickRef.current = {
-					taskId: nextTaskId,
-					until: Date.now() + 300,
+		switch (state.mode) {
+			case 'move':
+				nextStart = shiftDateByZoom(state.initialStartDate, deltaColumns, currentZoom)
+				nextEnd = shiftDateByZoom(state.initialEndDate, deltaColumns, currentZoom)
+				break
+			case 'resize-start':
+				nextStart = shiftDateByZoom(state.initialStartDate, deltaColumns, currentZoom)
+				if (nextStart.getTime() > nextEnd.getTime()) {
+					nextStart = new Date(nextEnd.getTime())
 				}
-			}
-
-			if (!changed) {
-				return
-			}
-
-			callbacksRef.current.onDragEnd(nextTaskId, nextStart, nextEnd)
+				break
+			case 'resize-end':
+				nextEnd = shiftDateByZoom(state.initialEndDate, deltaColumns, currentZoom)
+				if (nextEnd.getTime() < nextStart.getTime()) {
+					nextEnd = new Date(nextStart.getTime())
+				}
+				break
 		}
 
-		window.addEventListener('pointermove', handlePointerMove)
-		window.addEventListener('pointerup', finishDrag)
-		window.addEventListener('pointercancel', finishDrag)
-
-		return () => {
-			window.removeEventListener('pointermove', handlePointerMove)
-			window.removeEventListener('pointerup', finishDrag)
-			window.removeEventListener('pointercancel', finishDrag)
+		if (
+			nextStart.getTime() === state.currentStartDate.getTime() &&
+			nextEnd.getTime() === state.currentEndDate.getTime()
+		) {
+			return
 		}
+
+		state.currentStartDate = nextStart
+		state.currentEndDate = nextEnd
+		setActiveDrag({
+			taskId: state.taskId,
+			mode: state.mode,
+			startDate: nextStart,
+			endDate: nextEnd,
+		})
+		currentOnDragUpdate(state.taskId, nextStart, nextEnd)
 	}, [])
+
+	const finishDrag = useCallback(() => {
+		const state = dragStateRef.current
+		if (!state) {
+			return
+		}
+
+		releasePointer(state.element, state.pointerId)
+
+		const changed =
+			state.currentStartDate.getTime() !== state.initialStartDate.getTime() ||
+			state.currentEndDate.getTime() !== state.initialEndDate.getTime()
+		const shouldSuppress =
+			state.mode !== 'move' ||
+			state.hasDragged ||
+			changed
+		const nextStart = new Date(state.currentStartDate.getTime())
+		const nextEnd = new Date(state.currentEndDate.getTime())
+		const nextTaskId = state.taskId
+
+		dragStateRef.current = null
+		setActiveDrag(null)
+
+		if (shouldSuppress) {
+			suppressClickRef.current = {
+				taskId: nextTaskId,
+				until: Date.now() + 300,
+			}
+		}
+
+		if (!changed) {
+			return
+		}
+
+		callbacksRef.current.onDragEnd(nextTaskId, nextStart, nextEnd)
+	}, [])
+
+	usePointerDragListeners(handlePointerMove, finishDrag)
 
 	const updateHoverCursor = useCallback((event: ReactPointerEvent<HTMLElement>) => {
 		if (dragStateRef.current) {
@@ -194,9 +182,7 @@ export function useGanttBarDrag({
 					endDate: initialEndDate,
 				})
 
-				try {
-					event.currentTarget.setPointerCapture(event.pointerId)
-				} catch {}
+				capturePointer(event.currentTarget, event.pointerId)
 
 				event.preventDefault()
 				event.stopPropagation()

@@ -1,4 +1,5 @@
 import ContextMenu from '@/components/common/ContextMenu'
+import DatePickerOverlay from '@/components/common/DatePickerOverlay'
 import TaskFilterPanel from '@/components/filters/TaskFilterPanel'
 import TaskCard from '@/components/tasks/TaskCard'
 import TaskMenu from '@/components/tasks/TaskMenu'
@@ -7,6 +8,7 @@ import useWideLayout from '@/hooks/useWideLayout'
 import {useAppStore} from '@/store'
 import {getSubtasksFor, getVisibleRootTasksFor} from '@/store/selectors'
 import type {Bucket, MenuAnchor, Task} from '@/types'
+import {placeTask} from '@/utils/calendar-placement'
 import {getMenuAnchor} from '@/utils/menuPosition'
 import {useEffect, useMemo, useState} from 'react'
 import {useNavigate} from 'react-router-dom'
@@ -42,6 +44,7 @@ export default function ProjectKanbanView({
 	const deleteBucket = useAppStore(state => state.deleteBucket)
 	const createTaskInBucket = useAppStore(state => state.createTaskInBucket)
 	const moveTask = useAppStore(state => state.moveTask)
+	const moveTaskToDay = useAppStore(state => state.moveTaskToDay)
 	const toggleTaskDone = useAppStore(state => state.toggleTaskDone)
 	const duplicateTask = useAppStore(state => state.duplicateTask)
 	const deleteTask = useAppStore(state => state.deleteTask)
@@ -62,6 +65,7 @@ export default function ProjectKanbanView({
 		bucketId: number
 		anchor: MenuAnchor
 	} | null>(null)
+	const [moveDateTaskId, setMoveDateTaskId] = useState<number | null>(null)
 	const [filterOpen, setFilterOpen] = useState(false)
 	const [createBucketOpen, setCreateBucketOpen] = useState(false)
 	const [newBucketTitle, setNewBucketTitle] = useState('')
@@ -426,6 +430,14 @@ export default function ProjectKanbanView({
 															})
 														},
 													},
+													{
+														action: 'move-task-to-date',
+														label: 'Move to date',
+														onClick: () => {
+															setOpenMenu(null)
+															setMoveDateTaskId(task.id)
+														},
+													},
 												]}
 												onEdit={() => {
 													setOpenMenu(null)
@@ -512,6 +524,20 @@ export default function ProjectKanbanView({
 					</div>
 				</ContextMenu>
 			) : null}
+			{moveDateTaskId != null ? (() => {
+				const pickerTask = filteredBuckets.flatMap(bucket => bucket.tasks).find(task => task.id === moveDateTaskId) || null
+				return (
+					<DatePickerOverlay
+						title="Move to date"
+						value={pickerTask ? (placeTask(pickerTask)?.startDayKey ?? '') : ''}
+						onCommit={dayKey => {
+							void moveTaskToDay(moveDateTaskId, dayKey)
+							setMoveDateTaskId(null)
+						}}
+						onClose={() => setMoveDateTaskId(null)}
+					/>
+				)
+			})() : null}
 			{bucketMenu ? (
 				<ContextMenu
 					anchor={bucketMenu.anchor}

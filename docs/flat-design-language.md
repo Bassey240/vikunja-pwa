@@ -15,7 +15,10 @@ dialogs. When something looks "card-in-card," it's violating rule #1.
 3. **Accent only for active/selected state.** Status uses the semantic
    `--lbl-{blue,green,amber,red,violet,cyan}` tokens.
 4. **Hairlines** are `--ink-line-soft` (row dividers) / `--hairline` (card edge) /
-   `--hairline-2` (faint inner rules).
+   `--hairline-2` (faint inner rules). In dark mode all three are lifted above
+   the light ramp — a white line on near-black reads fainter than a black line
+   on the light canvas at equal opacity, so dark runs hotter to keep the same
+   structural definition.
 5. **Radii:** cards/popovers `--radius-card` (12px); chips 999px; small controls
    6–8px. Squarer (8px) reads as "structural" (project rows).
 
@@ -48,6 +51,14 @@ Action buttons (`.composer-submit`, `.pill-button`, `.ghost-button`) and inputs
 ### Surface card
 `background: var(--surface); border: 1px solid var(--ink-line-soft);
 border-radius: var(--radius-card); overflow: hidden;` — gap 12px between cards.
+
+There is **one** card fill: `--surface` (alias `--surface-card`). Every card uses
+it — list/task rows, kanban cards **and column heads**, calendar timeline cards,
+chips, all-day items, and day heads. There is no separate "kanban" shade.
+`--bg-soft` is a soft-tint mix base (done/selected/toast), never a bare card
+fill; `--surface-card-strong` is the emphasis-chip token (active pills, sidebar
+nav, auth line), not a card. This invariant is guarded by
+`tests/unit/design-tokens.test.ts`.
 
 ### Overlay / popover (menus, dropdowns)
 Surface card **+ `box-shadow: var(--shadow-overlay)`**. Items are flat:

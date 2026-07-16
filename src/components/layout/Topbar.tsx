@@ -1,3 +1,4 @@
+import Icon from '@/components/common/icons'
 import UserAvatar from '@/components/common/UserAvatar'
 import NotificationTray from '@/components/layout/NotificationTray'
 import useWideLayout from '@/hooks/useWideLayout'
@@ -168,7 +169,9 @@ export default function Topbar({
 						onClick={primaryAction.onClick}
 					>
 						{primaryAction.icon ? (
-							<span className={`topbar-icon topbar-icon-${primaryAction.icon}`} aria-hidden="true"></span>
+							<span className="topbar-icon" aria-hidden="true">
+								<Icon name={primaryAction.icon} size={20} />
+							</span>
 						) : (
 							primaryAction.text
 						)}
@@ -202,7 +205,9 @@ export default function Topbar({
 								action.icon === 'back' ? (
 									<span className="chevron-icon" aria-hidden="true"></span>
 								) : action.icon ? (
-									<span className={`topbar-icon topbar-icon-${action.icon}`} aria-hidden="true"></span>
+									<span className="topbar-icon" aria-hidden="true">
+										<Icon name={action.icon} size={20} />
+									</span>
 								) : (
 									action.text
 								)
@@ -242,32 +247,8 @@ export default function Topbar({
 									toggleNotificationsMenu()
 								}}
 							>
-								<span className="topbar-icon topbar-icon-bell" aria-hidden="true">
-									<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-										<path
-											d="M12 4.75a4 4 0 0 0-4 4v2.02c0 1.03-.3 2.04-.86 2.9l-1.2 1.83a1 1 0 0 0 .84 1.55h10.44a1 1 0 0 0 .84-1.55l-1.2-1.83a5.3 5.3 0 0 1-.86-2.9V8.75a4 4 0 0 0-4-4Z"
-											fill="none"
-											stroke="currentColor"
-											strokeWidth="1.8"
-											strokeLinecap="round"
-											strokeLinejoin="round"
-										/>
-										<path
-											d="M9.8 18.25a2.2 2.2 0 0 0 4.4 0"
-											fill="none"
-											stroke="currentColor"
-											strokeWidth="1.8"
-											strokeLinecap="round"
-											strokeLinejoin="round"
-										/>
-										<path
-											d="M12 3.25v1.5"
-											fill="none"
-											stroke="currentColor"
-											strokeWidth="1.8"
-											strokeLinecap="round"
-										/>
-									</svg>
+								<span className="topbar-icon" aria-hidden="true">
+									<Icon name="bell" size={20} />
 								</span>
 								{unreadNotifications > 0 ? (
 									<span className="topbar-notification-badge" aria-hidden="true">
@@ -290,7 +271,9 @@ export default function Topbar({
 								action.icon === 'back' ? (
 									<span className="chevron-icon" aria-hidden="true"></span>
 								) : action.icon ? (
-									<span className={`topbar-icon topbar-icon-${action.icon}`} aria-hidden="true"></span>
+									<span className="topbar-icon" aria-hidden="true">
+										<Icon name={action.icon} size={20} />
+									</span>
 								) : (
 									action.text
 								)

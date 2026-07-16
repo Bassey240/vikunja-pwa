@@ -32,12 +32,13 @@ async function openProjects(page) {
 async function openProject(page, projectId, projectTitle) {
 	await openProjects(page)
 	await page.locator(`.workspace-screen.is-active [data-action="select-project"][data-project-id="${projectId}"]`).click()
-	// Narrow navigates into the project (title heading); wide opens the inspector instead.
-	// Both layouts keep the other element in the DOM (hidden), so intersect with :visible
-	// to match only the rendered one and avoid a strict-mode two-element resolution.
+	// Narrow navigates into the project (title heading); wide opens the inspector
+	// AND shows the project title in the topbar heading, so the or-locator can
+	// resolve to two visible elements — assert on the first match.
 	await expect(
 		page.getByRole('heading', {name: projectTitle}).and(page.locator(':visible'))
-			.or(page.locator('.shell-inspector-region').getByText('Project Detail').and(page.locator(':visible'))),
+			.or(page.locator('.shell-inspector-region').getByText('Project Detail').and(page.locator(':visible')))
+			.first(),
 	).toBeVisible()
 }
 
@@ -183,7 +184,7 @@ test('boots into Today and exposes the bottom navigation shell', async ({page}) 
 	await expect(page.getByText('Buy milk')).toBeVisible()
 	const primaryNav = page.getByRole('navigation', {name: 'Primary'})
 	await expect(primaryNav).toBeVisible()
-	await expect(primaryNav.getByRole('button', {name: 'Today'})).toBeVisible()
+	await expect(primaryNav.getByRole('button', {name: 'Calendar'})).toBeVisible()
 	await expect(primaryNav.getByRole('button', {name: 'Inbox'})).toBeVisible()
 	await expect(primaryNav.getByRole('button', {name: 'Projects'})).toBeVisible()
 })

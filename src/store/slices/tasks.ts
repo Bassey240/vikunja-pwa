@@ -8,6 +8,8 @@ import {
 	type TaskFilters,
 } from '@/hooks/useFilters'
 import type {MenuAnchor, Screen, Task} from '@/types'
+import {buildCalendarRangeFilter, prefetchRange, rangeForZoom, type CalendarRange} from '@/utils/calendar-window'
+import {buildMoveToDayPatch, buildReschedulePatch, type RescheduleMode} from '@/utils/calendar-reschedule'
 import {debugDragLog, markTaskDropTrace} from '@/utils/dragPerf'
 import {formatError} from '@/utils/formatting'
 import {calculateTaskPosition} from '@/utils/taskPosition'
@@ -74,6 +76,7 @@ export interface TasksSlice extends BulkTasksSlice, TaskComposersSlice, TaskDeta
 	todayTasks: Task[]
 	inboxTasks: Task[]
 	upcomingTasks: Task[]
+	calendarTasks: Task[]
 	searchTasks: Task[]
 	savedFilterTasks: Task[]
 	projectFilterTasks: Task[]
@@ -85,6 +88,7 @@ export interface TasksSlice extends BulkTasksSlice, TaskComposersSlice, TaskDeta
 	loadingToday: boolean
 	loadingInbox: boolean
 	loadingUpcoming: boolean
+	loadingCalendar: boolean
 	loadingSearch: boolean
 	loadingSavedFilterTasks: boolean
 	loadingProjectFilterTasks: boolean
@@ -101,6 +105,9 @@ export interface TasksSlice extends BulkTasksSlice, TaskComposersSlice, TaskDeta
 	loadTodayTasks: (options?: LoadTaskCollectionOptions) => Promise<void>
 	loadInboxTasks: (options?: LoadTaskCollectionOptions) => Promise<void>
 	loadUpcomingTasks: (options?: LoadTaskCollectionOptions) => Promise<void>
+	loadCalendarTasks: (range: CalendarRange, options?: LoadTaskCollectionOptions) => Promise<void>
+	rescheduleCalendarTask: (taskId: number, mode: RescheduleMode, newStartMs: number, newEndMs: number) => Promise<boolean>
+	moveTaskToDay: (taskId: number, dayKey: string) => Promise<boolean>
 	loadSearchTasks: (query?: string, options?: LoadTaskCollectionOptions) => Promise<void>
 	loadSavedFilterTasks: (projectId: number | null, options?: LoadTaskCollectionOptions) => Promise<void>
 	ensureProjectFilterTasksLoaded: (options?: EnsureProjectFilterTasksOptions) => Promise<void>
@@ -132,6 +139,7 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 	todayTasks: [],
 	inboxTasks: [],
 	upcomingTasks: [],
+	calendarTasks: [],
 	searchTasks: [],
 	savedFilterTasks: [],
 	projectFilterTasks: [],
@@ -145,6 +153,7 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 	loadingToday: false,
 	loadingInbox: false,
 	loadingUpcoming: false,
+	loadingCalendar: false,
 	loadingSearch: false,
 	loadingSavedFilterTasks: false,
 	loadingProjectFilterTasks: false,
@@ -388,6 +397,34 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 		}
 	},
 
+	async loadCalendarTasks(range, {silent = false} = {}) {
+		if (!get().isOnline && get().offlineReadOnlyMode) {
+			return
+		}
+
+		if (!silent) {
+			set({
+				loadingCalendar: true,
+				error: null,
+			})
+		}
+
+		try {
+			const calendarTasks = normalizeTaskGraph(await api<Task[]>(buildTaskCollectionPath({
+				filter: buildCalendarRangeFilter(range),
+				sortBy: ['due_date', 'id'],
+				orderBy: ['asc', 'asc'],
+			})))
+			set({calendarTasks})
+		} catch (error) {
+			set({error: formatError(error as Error)})
+		} finally {
+			if (!silent) {
+				set({loadingCalendar: false})
+			}
+		}
+	},
+
 	async loadSearchTasks(query = get().searchQuery, {silent = false} = {}) {
 		const normalizedQuery = `${query || ''}`.trim()
 		set({
@@ -546,6 +583,13 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 
 		if (get().screen === 'upcoming' || get().upcomingTasks.length > 0) {
 			refreshes.push(get().loadUpcomingTasks({silent}))
+		}
+
+		if (get().screen === 'calendar' || get().calendarTasks.length > 0) {
+			const anchorMs = Date.parse(get().calendarAnchorIso)
+			if (!Number.isNaN(anchorMs)) {
+				refreshes.push(get().loadCalendarTasks(prefetchRange(rangeForZoom(get().calendarZoom, anchorMs)), {silent}))
+			}
 		}
 
 		if (get().searchHasRun && get().searchQuery) {
@@ -842,6 +886,113 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 				}
 			}
 
+			set({error: formatError(error as Error)})
+			return false
+		}
+	},
+
+	// Calendar drag/resize commit. Maps the drag onto the task's date fields via
+	// the placement-aware patch builder, applies it optimistically, then queues
+	// offline (task-update replay) or POSTs. Mirrors saveTaskDetailPatch but for
+	// an arbitrary task, so the calendar inherits the offline outbox like the
+	// other write paths instead of bailing.
+	async rescheduleCalendarTask(taskId, mode, newStartMs, newEndMs) {
+		if (blockNonQueueableOfflineAction(get, set, 'rescheduleCalendarTask')) {
+			return false
+		}
+
+		const task = findTaskInAnyContext(taskId, getTaskCollections(get()))
+		if (!task) {
+			return false
+		}
+
+		const patch = buildReschedulePatch(task, mode, newStartMs, newEndMs)
+		if (!patch) {
+			return false
+		}
+
+		const snapshot = cloneTaskSnapshot(task)
+		const payload = {...task}
+		delete payload.subscription
+		delete payload.read
+		delete payload.read_at
+		const body = {...payload, ...patch}
+
+		set(state => ({...applyTaskPatchOptimisticUpdate(state, taskId, patch), error: null}))
+
+		if (shouldQueueOffline(get, 'rescheduleCalendarTask')) {
+			await enqueueMutation({
+				type: 'task-update',
+				endpoint: `/api/tasks/${taskId}`,
+				method: 'POST',
+				body,
+				metadata: {
+					entityType: 'task',
+					entityId: taskId,
+					description: `Reschedule "${task.title}"`,
+				},
+			})
+			await get().refreshOfflineQueueCounts()
+			return true
+		}
+
+		try {
+			await api(`/api/tasks/${taskId}`, {method: 'POST', body})
+			await get().refreshCurrentCollections()
+			return true
+		} catch (error) {
+			set(state => ({...applyTaskPatchOptimisticUpdate(state, taskId, snapshot)}))
+			set({error: formatError(error as Error)})
+			return false
+		}
+	},
+
+	async moveTaskToDay(taskId, dayKey) {
+		if (blockNonQueueableOfflineAction(get, set, 'moveTaskToDay')) {
+			return false
+		}
+
+		const task = findTaskInAnyContext(taskId, getTaskCollections(get()))
+		if (!task) {
+			return false
+		}
+
+		const patch = buildMoveToDayPatch(task, dayKey)
+		if (!patch) {
+			return false
+		}
+
+		const snapshot = cloneTaskSnapshot(task)
+		const payload = {...task}
+		delete payload.subscription
+		delete payload.read
+		delete payload.read_at
+		const body = {...payload, ...patch}
+
+		set(state => ({...applyTaskPatchOptimisticUpdate(state, taskId, patch), error: null}))
+
+		if (shouldQueueOffline(get, 'moveTaskToDay')) {
+			await enqueueMutation({
+				type: 'task-update',
+				endpoint: `/api/tasks/${taskId}`,
+				method: 'POST',
+				body,
+				metadata: {
+					entityType: 'task',
+					entityId: taskId,
+					description: `Move "${task.title}"`,
+				},
+			})
+			await get().refreshOfflineQueueCounts()
+			return true
+		}
+
+		try {
+			await api(`/api/tasks/${taskId}`, {method: 'POST', body})
+			await get().refreshCurrentCollections()
+			return true
+		} catch (error) {
+			set(state => ({...applyTaskPatchOptimisticUpdate(state, taskId, snapshot)}))
 			set({error: formatError(error as Error)})
 			return false
 		}
@@ -1227,6 +1378,7 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 			todayTasks: [],
 			inboxTasks: [],
 			upcomingTasks: [],
+			calendarTasks: [],
 			searchTasks: [],
 			savedFilterTasks: [],
 			projectFilterTasks: [],
@@ -1249,6 +1401,7 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 			loadingToday: false,
 			loadingInbox: false,
 			loadingUpcoming: false,
+			loadingCalendar: false,
 			loadingSearch: false,
 			loadingSavedFilterTasks: false,
 			loadingProjectFilterTasks: false,

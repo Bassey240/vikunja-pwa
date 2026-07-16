@@ -6,6 +6,7 @@ import FiltersScreen from '@/components/screens/FiltersScreen'
 import AppShell from '@/components/layout/AppShell'
 import LinkShareAuthScreen from '@/components/sharing/LinkShareAuthScreen'
 import InboxScreen from '@/components/screens/InboxScreen'
+import CalendarScreen from '@/components/screens/CalendarScreen'
 import LabelsScreen from '@/components/screens/LabelsScreen'
 import ProjectTasksScreen from '@/components/screens/ProjectTasksScreen'
 import ProjectsScreen from '@/components/screens/ProjectsScreen'
@@ -55,6 +56,10 @@ export const router = createBrowserRouter([
 			{
 				path: 'upcoming',
 				element: <UpcomingScreen />,
+			},
+			{
+				path: 'calendar',
+				element: <CalendarScreen />,
 			},
 			{
 				path: 'projects',

@@ -76,7 +76,9 @@ async function hasCachedOfflineShell(page) {
 		const runtimeUrls = [
 			'/',
 			'/index.html',
-			...Array.from(document.querySelectorAll('script[src], link[rel="stylesheet"][href]'))
+			// modulepreload matters: Vite emits the boot-critical vendor chunks as
+			// modulepreload links, and an offline reload needs them cached.
+			...Array.from(document.querySelectorAll('script[src], link[rel="modulepreload"][href], link[rel="stylesheet"][href]'))
 				.map(element => {
 					const href = element instanceof HTMLScriptElement ? element.src : element.getAttribute('href')
 					if (!href) {
@@ -134,7 +136,7 @@ test('password login loads the auth shell, sessions, and disconnect flow', async
 	await loginWithPassword(page)
 
 	await expect(page.getByRole('navigation', {name: 'Primary'})).toBeVisible()
-	await expect(page.getByRole('button', {name: 'Today'})).toBeVisible()
+	await expect(page.getByRole('button', {name: 'Calendar'})).toBeVisible()
 	await expect(page.getByRole('button', {name: 'Inbox'})).toBeVisible()
 	await expect(page.getByRole('button', {name: 'Projects'})).toBeVisible()
 	await expect(page.getByRole('navigation', {name: 'Primary'}).getByRole('button', {name: 'Menu'})).toBeVisible()
@@ -1017,7 +1019,7 @@ test('offline reload restores the last signed-in shell from the cached snapshot'
 
 	await expect.poll(() => page.evaluate(() => window.location.pathname)).toBe('/')
 	await expect(page.getByRole('navigation', {name: 'Primary'})).toBeVisible({timeout: 30_000})
-	await expect(page.getByRole('button', {name: 'Today'})).toBeVisible()
+	await expect(page.getByRole('button', {name: 'Calendar'})).toBeVisible()
 	await expect(page.getByRole('heading', {name: 'Connect to your Vikunja server'})).toHaveCount(0)
 })
 
@@ -1057,7 +1059,7 @@ test('offline reload restores the last signed-in shell even when online status i
 
 	await expect.poll(() => page.evaluate(() => window.location.pathname)).toBe('/')
 	await expect(page.getByRole('navigation', {name: 'Primary'})).toBeVisible({timeout: 30_000})
-	await expect(page.getByRole('button', {name: 'Today'})).toBeVisible()
+	await expect(page.getByRole('button', {name: 'Calendar'})).toBeVisible()
 	await expect(page.getByRole('heading', {name: 'Connect to your Vikunja server'})).toHaveCount(0)
 	await expect(page.locator('.runtime-status-banner').first()).toContainText('saved locally and will sync')
 })
@@ -1119,7 +1121,8 @@ test('notification preferences save and affect the notification center', async (
 	await expect(reloadedSection.locator('[data-setting-field="email-reminders-enabled"]')).toBeChecked()
 	await expect(reloadedSection.locator('[data-setting-field="overdue-tasks-reminders-enabled"]')).toBeChecked()
 
-	await page.getByRole('navigation', {name: 'Primary'}).getByRole('button', {name: 'Today'}).click()
+	await page.getByRole('navigation', {name: 'Primary'}).getByRole('button', {name: 'Menu'}).click()
+	await page.locator('[data-action="go-today"]').click()
 	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
 	await page.locator('.topbar [data-action="toggle-notifications"]').first().click()
 	await expect(page.locator('.topbar-notification-badge').first()).toHaveText('3')

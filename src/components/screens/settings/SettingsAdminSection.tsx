@@ -157,7 +157,7 @@ export default function SettingsAdminSection({
 	publicAppOrigin: string | null
 	onReloadRuntimeHealth: () => void
 	onReloadUsers: () => void
-	onLoadMigrations: () => Promise<void>
+	onLoadMigrations: (options?: {force?: boolean}) => Promise<void>
 	onRunMigrate: () => Promise<boolean>
 	onRollbackMigration: (name: string) => Promise<boolean>
 	onCreateDump: () => Promise<boolean>
@@ -644,7 +644,7 @@ export default function SettingsAdminSection({
 						<div className="detail-core-card settings-subsection">
 							<div className="settings-subsection-header">
 								<div className="panel-label">Database Migrations</div>
-								<button className="pill-button subtle" type="button" onClick={() => void onLoadMigrations()}>
+								<button className="pill-button subtle" type="button" onClick={() => void onLoadMigrations({force: true})}>
 									Reload
 								</button>
 							</div>

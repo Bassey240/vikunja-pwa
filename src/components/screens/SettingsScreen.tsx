@@ -480,7 +480,7 @@ export default function SettingsScreen() {
 							onSetAccountField={setAccountField}
 							onSubmit={handleSubmit}
 							onReloadSessions={() => {
-								void loadAccountSessions()
+								void loadAccountSessions({force: true})
 							}}
 							onRevokeAccountSession={sessionId => {
 								void revokeAccountSession(sessionId)
@@ -727,7 +727,7 @@ export default function SettingsScreen() {
 									void loadAdminRuntimeHealth()
 								}}
 								onReloadUsers={() => {
-									void loadAdminUsers()
+									void loadAdminUsers({force: true})
 								}}
 								onLoadMigrations={loadMigrations}
 								onRunMigrate={runMigrate}

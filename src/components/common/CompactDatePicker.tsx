@@ -51,23 +51,43 @@ export default function CompactDatePicker({
 			return
 		}
 
+		// Dismiss only on a genuine outside tap. Closing on the raw pointerdown
+		// meant any scroll/swipe that began outside the popover discarded it — so
+		// nudging the page to see the calendar threw the picker away. Remember
+		// where an outside press started and only close if the release lands close
+		// by (a tap); a moved pointer is a scroll and leaves the picker open.
+		let pressX = 0
+		let pressY = 0
+		let pressedOutside = false
+
 		function handlePointerDown(event: PointerEvent) {
 			const target = event.target
-			if (!(target instanceof Node)) {
+			pressedOutside = target instanceof Node && !rootRef.current?.contains(target)
+			pressX = event.clientX
+			pressY = event.clientY
+		}
+
+		function handlePointerUp(event: PointerEvent) {
+			if (!pressedOutside) {
 				return
 			}
-
-			if (rootRef.current?.contains(target)) {
+			pressedOutside = false
+			const target = event.target
+			if (target instanceof Node && rootRef.current?.contains(target)) {
 				return
 			}
-
+			if (Math.abs(event.clientX - pressX) > 10 || Math.abs(event.clientY - pressY) > 10) {
+				return
+			}
 			setOpen(false)
 			commitDraft()
 		}
 
 		document.addEventListener('pointerdown', handlePointerDown, true)
+		document.addEventListener('pointerup', handlePointerUp, true)
 		return () => {
 			document.removeEventListener('pointerdown', handlePointerDown, true)
+			document.removeEventListener('pointerup', handlePointerUp, true)
 		}
 	}, [open, draft, effectiveValue, mode, timeValue])
 

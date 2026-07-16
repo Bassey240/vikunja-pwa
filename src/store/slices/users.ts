@@ -1,4 +1,4 @@
-import {api, uploadApi} from '@/api'
+import {api, type ApiError, uploadApi} from '@/api'
 import type {
 	AdminMailDiagnosticsResult,
 	AdminMigration,
@@ -17,6 +17,12 @@ import {serializeNotificationPreferences} from '@/utils/notificationPreferences'
 import {formatError} from '@/utils/formatting'
 import type {StateCreator} from 'zustand'
 import type {AppStore} from '../index'
+import {
+	type LoadBackoffState,
+	canAttemptLoad,
+	initialLoadBackoff,
+	recordLoadFailure,
+} from '../load-backoff'
 
 interface AdminUsersPayload {
 	items?: AdminUser[]
@@ -53,12 +59,14 @@ export interface UsersSlice {
 	adminUsers: AdminUser[]
 	adminUsersLoaded: boolean
 	adminUsersLoading: boolean
+	adminUsersLoadBackoff: LoadBackoffState
 	adminUserSubmitting: boolean
 	adminRuntimeHealth: AdminRuntimeHealth | null
 	adminRuntimeHealthLoading: boolean
 	adminMigrations: AdminMigration[]
 	adminMigrationsLoading: boolean
 	adminMigrationsLoaded: boolean
+	adminMigrationsLoadBackoff: LoadBackoffState
 	adminMigrateSubmitting: boolean
 	adminDumpSubmitting: boolean
 	adminRestoreSubmitting: boolean
@@ -84,9 +92,9 @@ export interface UsersSlice {
 	avatarProviderSubmitting: boolean
 	avatarUploadSubmitting: boolean
 	avatarCacheBuster: number
-	loadAdminUsers: () => Promise<void>
+	loadAdminUsers: (options?: {force?: boolean}) => Promise<void>
 	loadAdminRuntimeHealth: () => Promise<void>
-	loadMigrations: () => Promise<void>
+	loadMigrations: (options?: {force?: boolean}) => Promise<void>
 	runMigrate: () => Promise<boolean>
 	rollbackMigration: (name: string) => Promise<boolean>
 	createDump: () => Promise<boolean>
@@ -116,12 +124,14 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 	adminUsers: [],
 	adminUsersLoaded: false,
 	adminUsersLoading: false,
+	adminUsersLoadBackoff: initialLoadBackoff,
 	adminUserSubmitting: false,
 	adminRuntimeHealth: null,
 	adminRuntimeHealthLoading: false,
 	adminMigrations: [],
 	adminMigrationsLoading: false,
 	adminMigrationsLoaded: false,
+	adminMigrationsLoadBackoff: initialLoadBackoff,
 	adminMigrateSubmitting: false,
 	adminDumpSubmitting: false,
 	adminRestoreSubmitting: false,
@@ -148,12 +158,13 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 	avatarUploadSubmitting: false,
 	avatarCacheBuster: 0,
 
-	async loadAdminUsers() {
+	async loadAdminUsers({force = false} = {}) {
 		if (!canManageUsers(get())) {
 			set({
 				adminUsers: [],
 				adminUsersLoaded: false,
 				adminUsersLoading: false,
+				adminUsersLoadBackoff: initialLoadBackoff,
 			})
 			return
 		}
@@ -168,6 +179,13 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 			return
 		}
 
+		// The backoff gate must stay ahead of any state write: the settings
+		// effect re-fires on every adminUsersLoading flip, so an ungated
+		// failure loops hot.
+		if (!force && (get().adminUsersLoading || get().adminUsersLoaded || !canAttemptLoad(get().adminUsersLoadBackoff))) {
+			return
+		}
+
 		set({adminUsersLoading: true, error: null})
 
 		try {
@@ -175,9 +193,23 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 			set({
 				adminUsers: Array.isArray(payload.items) ? payload.items : [],
 				adminUsersLoaded: true,
+				adminUsersLoadBackoff: initialLoadBackoff,
 			})
 		} catch (error) {
-			set({error: formatError(error as Error)})
+			const statusCode = (error as ApiError).statusCode
+			const message = formatError(error as Error)
+			set({
+				error: message,
+				adminUsersLoadBackoff: recordLoadFailure(get().adminUsersLoadBackoff, statusCode),
+			})
+			if (statusCode === 401) {
+				// Reuses the session-expiry pathway: disconnects and surfaces
+				// the sign-in-again error when the session is actually dead.
+				await get().loadCurrentUser()
+				if (get().connected && !get().error) {
+					set({error: message})
+				}
+			}
 		} finally {
 			set({adminUsersLoading: false})
 		}
@@ -205,13 +237,21 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 		}
 	},
 
-	async loadMigrations() {
+	async loadMigrations({force = false} = {}) {
 		if (!canManageUsers(get())) {
 			set({
 				adminMigrations: [],
 				adminMigrationsLoading: false,
 				adminMigrationsLoaded: false,
+				adminMigrationsLoadBackoff: initialLoadBackoff,
 			})
+			return
+		}
+
+		// The backoff gate must stay ahead of any state write: the settings
+		// effect re-fires on every adminMigrationsLoading flip, so an ungated
+		// failure loops hot.
+		if (!force && (get().adminMigrationsLoading || get().adminMigrationsLoaded || !canAttemptLoad(get().adminMigrationsLoadBackoff))) {
 			return
 		}
 
@@ -222,9 +262,23 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 			set({
 				adminMigrations: result.migrations || [],
 				adminMigrationsLoaded: true,
+				adminMigrationsLoadBackoff: initialLoadBackoff,
 			})
 		} catch (error) {
-			set({error: formatError(error as Error)})
+			const statusCode = (error as ApiError).statusCode
+			const message = formatError(error as Error)
+			set({
+				error: message,
+				adminMigrationsLoadBackoff: recordLoadFailure(get().adminMigrationsLoadBackoff, statusCode),
+			})
+			if (statusCode === 401) {
+				// Reuses the session-expiry pathway: disconnects and surfaces
+				// the sign-in-again error when the session is actually dead.
+				await get().loadCurrentUser()
+				if (get().connected && !get().error) {
+					set({error: message})
+				}
+			}
 		} finally {
 			set({adminMigrationsLoading: false})
 		}
@@ -241,7 +295,7 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 			await api('/api/admin/migrate', {
 				method: 'POST',
 			})
-			await get().loadMigrations()
+			await get().loadMigrations({force: true})
 			set({settingsNotice: 'Migrations completed successfully.'})
 			return true
 		} catch (error) {
@@ -264,7 +318,7 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 				method: 'POST',
 				body: {name},
 			})
-			await get().loadMigrations()
+			await get().loadMigrations({force: true})
 			return true
 		} catch (error) {
 			set({error: formatError(error as Error)})
@@ -667,7 +721,7 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 					password,
 				},
 			})
-			await get().loadAdminUsers()
+			await get().loadAdminUsers({force: true})
 			set({settingsNotice: `Created user "${username}".`})
 			return true
 		} catch (error) {
@@ -700,7 +754,7 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 					email,
 				},
 			})
-			await get().loadAdminUsers()
+			await get().loadAdminUsers({force: true})
 			set({settingsNotice: `Updated user "${username}".`})
 			return true
 		} catch (error) {
@@ -723,7 +777,7 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 				method: 'PATCH',
 				body: {enabled},
 			})
-			await get().loadAdminUsers()
+			await get().loadAdminUsers({force: true})
 			set({settingsNotice: enabled ? 'User enabled.' : 'User disabled.'})
 			return true
 		} catch (error) {
@@ -777,7 +831,7 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 			await api<{ok: boolean}>(`/api/admin/users/${encodeURIComponent(String(identifier))}`, {
 				method: 'DELETE',
 			})
-			await get().loadAdminUsers()
+			await get().loadAdminUsers({force: true})
 			set({settingsNotice: 'User deleted.'})
 			return true
 		} catch (error) {
@@ -985,12 +1039,14 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 			adminUsers: [],
 			adminUsersLoaded: false,
 			adminUsersLoading: false,
+			adminUsersLoadBackoff: initialLoadBackoff,
 			adminUserSubmitting: false,
 			adminRuntimeHealth: null,
 			adminRuntimeHealthLoading: false,
 			adminMigrations: [],
 			adminMigrationsLoading: false,
 			adminMigrationsLoaded: false,
+			adminMigrationsLoadBackoff: initialLoadBackoff,
 			adminMigrateSubmitting: false,
 			adminDumpSubmitting: false,
 			adminRestoreSubmitting: false,

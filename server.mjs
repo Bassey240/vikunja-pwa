@@ -6,6 +6,7 @@ import path from 'node:path'
 import {fileURLToPath} from 'node:url'
 import {createAdminBridge} from './server/admin-bridge.mjs'
 import {createAdminConfig} from './server/admin-config.mjs'
+import {resolveBuildId} from './server/build-info.mjs'
 import {loadConfig, normalizeBaseUrl} from './server/config.mjs'
 import {parseCookies, serializeCookie, clearCookie} from './server/cookies.mjs'
 import {readJsonBody, readRawBody, sendBuffer, sendJson} from './server/http.mjs'
@@ -81,7 +82,12 @@ const sessionMutationRateLimiter = createRateLimiter({
 	max: sessionMutationRateLimitMax,
 })
 const legacyConfigured = Boolean(vikunjaBaseUrl && vikunjaApiToken)
-const buildId = '2026-06-11-release-0.5'
+// build-info.json is the deploy-time stamp for environments without git
+// (the docker image); dev falls through to git.
+const buildId = resolveBuildId({
+	fileCandidates: [path.join(__dirname, 'build-info.json')],
+	gitCwd: __dirname,
+})
 const openIdLoginState = new Map()
 const adminBridge = createAdminBridge({
 	bridgeMode: vikunjaBridgeMode,

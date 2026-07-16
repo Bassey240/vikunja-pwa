@@ -358,7 +358,8 @@ test('switching to initials updates the current-user avatar on task surfaces', a
 	await accountSection.locator('[data-avatar-provider-option="initials"]').click()
 	await expect(page.getByText('Avatar provider updated.')).toBeVisible()
 
-	await page.getByRole('navigation', {name: 'Primary'}).getByRole('button', {name: 'Today'}).click()
+	await page.getByRole('navigation', {name: 'Primary'}).getByRole('button', {name: 'Menu'}).click()
+	await page.locator('[data-action="go-today"]').click()
 	await expect(page.getByRole('heading', {name: 'Today'})).toBeVisible()
 
 	const taskRow = page.locator('.task-row').filter({hasText: 'Prepare daily summary'})

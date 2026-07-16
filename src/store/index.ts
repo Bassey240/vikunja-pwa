@@ -1,5 +1,6 @@
 import {create} from 'zustand'
 import {createAuthSlice, type AuthSlice} from './slices/auth'
+import {createCalendarSlice, type CalendarSlice} from './slices/calendar'
 import {createLabelsSlice, type LabelsSlice} from './slices/labels'
 import {createMutationsSlice, type MutationsSlice} from './slices/mutations'
 import {createMigrationSlice, type MigrationSlice} from './slices/migration'
@@ -32,6 +33,7 @@ export type AppStore =
 	& ProjectsSlice
 	& ViewsSlice
 	& TasksSlice
+	& CalendarSlice
 	& UsersSlice
 
 export const useAppStore = create<AppStore>()((...args) => ({
@@ -51,4 +53,5 @@ export const useAppStore = create<AppStore>()((...args) => ({
 	...createViewsSlice(...args),
 	...createProjectsSlice(...args),
 	...createTasksSlice(...args),
+	...createCalendarSlice(...args),
 }))

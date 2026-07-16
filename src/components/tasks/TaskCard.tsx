@@ -15,16 +15,27 @@ interface TaskCardProps {
 	task: Task
 	childCount: number
 	compact?: boolean
+	hideDueDate?: boolean
+	// A pre-formatted time string shown first in the meta row (the calendar grid
+	// passes a task's placement start time so timeline cards read their hour).
+	timeLabel?: string
 }
 
-export default function TaskCard({task, childCount, compact = false}: TaskCardProps) {
-	const dueDateValue = normalizeTaskDateValue(task.due_date || null)
+export default function TaskCard({task, childCount, compact = false, hideDueDate = false, timeLabel}: TaskCardProps) {
+	const dueDateValue = hideDueDate ? null : normalizeTaskDateValue(task.due_date || null)
 	const dueDate = dueDateValue ? formatShortDate(dueDateValue) : ''
 	const percentDone = normalizePercentDone(task.percent_done)
 	const repeatAfter = normalizeRepeatAfter(task.repeat_after)
 	const repeatLabel = repeatAfter ? `Repeats every ${formatRepeatInterval(repeatAfter)}` : ''
 	const commentCount = Math.max(0, Number(task.comment_count || 0))
 	const metaParts = [
+		timeLabel
+			? {
+				key: 'time',
+				label: timeLabel,
+				attribute: {'data-task-time': 'true'},
+			}
+			: null,
 		percentDone > 0
 			? {
 				key: 'progress',

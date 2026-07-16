@@ -24,6 +24,7 @@ export type TopLevelTaskCollectionKey =
 	| 'todayTasks'
 	| 'inboxTasks'
 	| 'upcomingTasks'
+	| 'calendarTasks'
 	| 'searchTasks'
 	| 'savedFilterTasks'
 	| 'projectFilterTasks'
@@ -54,6 +55,7 @@ export interface TaskDeletionSnapshot {
 	todayTasks: Task[]
 	inboxTasks: Task[]
 	upcomingTasks: Task[]
+	calendarTasks: Task[]
 	searchTasks: Task[]
 	savedFilterTasks: Task[]
 	projectFilterTasks: Task[]
@@ -216,6 +218,7 @@ export function applyTaskAssigneesOptimisticUpdate(state: AppStore, taskId: numb
 		nextCollections.todayTasks,
 		nextCollections.inboxTasks,
 		nextCollections.upcomingTasks,
+		nextCollections.calendarTasks,
 		nextCollections.searchTasks,
 		nextCollections.savedFilterTasks,
 		nextCollections.projectFilterTasks,
@@ -270,6 +273,7 @@ export function applyTaskCommentsOptimisticUpdate(state: AppStore, taskId: numbe
 		nextCollections.todayTasks,
 		nextCollections.inboxTasks,
 		nextCollections.upcomingTasks,
+		nextCollections.calendarTasks,
 		nextCollections.searchTasks,
 		nextCollections.savedFilterTasks,
 		nextCollections.projectFilterTasks,
@@ -393,6 +397,7 @@ export function applyTaskDoneOptimisticUpdate(
 		todayTasks: patchList(state.todayTasks, hasTargetBucket),
 		inboxTasks: patchList(state.inboxTasks, hasTargetBucket),
 		upcomingTasks: patchList(state.upcomingTasks, hasTargetBucket),
+		calendarTasks: patchList(state.calendarTasks, hasTargetBucket),
 		searchTasks: patchList(state.searchTasks, hasTargetBucket),
 		savedFilterTasks: patchList(state.savedFilterTasks, hasTargetBucket),
 		projectFilterTasks: patchList(state.projectFilterTasks, hasTargetBucket),
@@ -487,6 +492,7 @@ export function applyTaskPatchOptimisticUpdate(state: AppStore, taskId: number, 
 		todayTasks: patchList(state.todayTasks),
 		inboxTasks: patchList(state.inboxTasks),
 		upcomingTasks: patchList(state.upcomingTasks),
+		calendarTasks: patchList(state.calendarTasks),
 		searchTasks: patchList(state.searchTasks),
 		savedFilterTasks: patchList(state.savedFilterTasks),
 		projectFilterTasks: patchList(state.projectFilterTasks),
@@ -538,6 +544,7 @@ export function applyTaskRelationRefsOptimisticUpdate(
 		todayTasks: patchList(state.todayTasks),
 		inboxTasks: patchList(state.inboxTasks),
 		upcomingTasks: patchList(state.upcomingTasks),
+		calendarTasks: patchList(state.calendarTasks),
 		searchTasks: patchList(state.searchTasks),
 		savedFilterTasks: patchList(state.savedFilterTasks),
 		projectFilterTasks: patchList(state.projectFilterTasks),
@@ -670,6 +677,7 @@ export function applyBulkTaskOptimisticUpdate(
 		todayTasks: patchList(state.todayTasks),
 		inboxTasks: patchList(state.inboxTasks),
 		upcomingTasks: patchList(state.upcomingTasks),
+		calendarTasks: patchList(state.calendarTasks),
 		searchTasks: patchList(state.searchTasks),
 		savedFilterTasks: patchList(state.savedFilterTasks),
 		projectFilterTasks: patchList(state.projectFilterTasks),
@@ -704,6 +712,7 @@ export function restoreBulkTaskSnapshots(state: AppStore, snapshots: Map<number,
 		todayTasks: patchList(state.todayTasks),
 		inboxTasks: patchList(state.inboxTasks),
 		upcomingTasks: patchList(state.upcomingTasks),
+		calendarTasks: patchList(state.calendarTasks),
 		searchTasks: patchList(state.searchTasks),
 		savedFilterTasks: patchList(state.savedFilterTasks),
 		projectFilterTasks: patchList(state.projectFilterTasks),
@@ -732,6 +741,7 @@ export function getTaskCollections(state: AppStore) {
 		todayTasks: state.todayTasks,
 		inboxTasks: state.inboxTasks,
 		upcomingTasks: state.upcomingTasks,
+		calendarTasks: state.calendarTasks,
 		searchTasks: state.searchTasks,
 		savedFilterTasks: state.savedFilterTasks,
 		projectPreviewTasksById: state.projectPreviewTasksById,
@@ -827,6 +837,7 @@ export function getClonedTaskCollections(state: AppStore) {
 		todayTasks: state.todayTasks.slice(),
 		inboxTasks: state.inboxTasks.slice(),
 		upcomingTasks: state.upcomingTasks.slice(),
+		calendarTasks: state.calendarTasks.slice(),
 		searchTasks: state.searchTasks.slice(),
 		savedFilterTasks: state.savedFilterTasks.slice(),
 		projectFilterTasks: state.projectFilterTasks.slice(),
@@ -1061,6 +1072,7 @@ export function captureTaskDeletionSnapshot(state: AppStore): TaskDeletionSnapsh
 		todayTasks: state.todayTasks.map(cloneTaskSnapshot),
 		inboxTasks: state.inboxTasks.map(cloneTaskSnapshot),
 		upcomingTasks: state.upcomingTasks.map(cloneTaskSnapshot),
+		calendarTasks: state.calendarTasks.map(cloneTaskSnapshot),
 		searchTasks: state.searchTasks.map(cloneTaskSnapshot),
 		savedFilterTasks: state.savedFilterTasks.map(cloneTaskSnapshot),
 		projectFilterTasks: state.projectFilterTasks.map(cloneTaskSnapshot),
@@ -1090,6 +1102,7 @@ export function restoreTaskDeletionSnapshot(snapshot: TaskDeletionSnapshot): Par
 		todayTasks: snapshot.todayTasks.map(cloneTaskSnapshot),
 		inboxTasks: snapshot.inboxTasks.map(cloneTaskSnapshot),
 		upcomingTasks: snapshot.upcomingTasks.map(cloneTaskSnapshot),
+		calendarTasks: snapshot.calendarTasks.map(cloneTaskSnapshot),
 		searchTasks: snapshot.searchTasks.map(cloneTaskSnapshot),
 		savedFilterTasks: snapshot.savedFilterTasks.map(cloneTaskSnapshot),
 		projectFilterTasks: snapshot.projectFilterTasks.map(cloneTaskSnapshot),
@@ -1127,6 +1140,7 @@ export function applyTaskDeletionOptimisticUpdate(state: AppStore, taskIds: numb
 		state.todayTasks,
 		state.inboxTasks,
 		state.upcomingTasks,
+		state.calendarTasks,
 		state.searchTasks,
 		state.savedFilterTasks,
 		state.projectFilterTasks,
@@ -1152,6 +1166,7 @@ export function applyTaskDeletionOptimisticUpdate(state: AppStore, taskIds: numb
 		todayTasks: state.todayTasks.slice(),
 		inboxTasks: state.inboxTasks.slice(),
 		upcomingTasks: state.upcomingTasks.slice(),
+		calendarTasks: state.calendarTasks.slice(),
 		searchTasks: state.searchTasks.slice(),
 		savedFilterTasks: state.savedFilterTasks.slice(),
 		projectFilterTasks: state.projectFilterTasks.slice(),
@@ -1200,6 +1215,7 @@ function getTaskCollectionEntries(state: AppStore): AnyTaskCollectionEntry[] {
 		{kind: 'topLevel', key: 'todayTasks', list: state.todayTasks},
 		{kind: 'topLevel', key: 'inboxTasks', list: state.inboxTasks},
 		{kind: 'topLevel', key: 'upcomingTasks', list: state.upcomingTasks},
+		{kind: 'topLevel', key: 'calendarTasks', list: state.calendarTasks},
 		{kind: 'topLevel', key: 'searchTasks', list: state.searchTasks},
 		{kind: 'topLevel', key: 'savedFilterTasks', list: state.savedFilterTasks},
 		{kind: 'topLevel', key: 'projectFilterTasks', list: state.projectFilterTasks},

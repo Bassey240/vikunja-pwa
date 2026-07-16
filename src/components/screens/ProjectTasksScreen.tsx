@@ -99,6 +99,9 @@ export default function ProjectTasksScreen({
 	const [searchOpen, setSearchOpen] = useState(false)
 	const [filterOpen, setFilterOpen] = useState(false)
 	const [viewAnchor, setViewAnchor] = useState<ReturnType<typeof getMenuAnchor> | null>(null)
+	// The view popover opens as a plain switcher; create/delete live behind
+	// "Manage views" so a mis-tap while switching can't hit a destructive control.
+	const [viewMenuMode, setViewMenuMode] = useState<'switch' | 'manage'>('switch')
 	const [panelAnchor, setPanelAnchor] = useState<ReturnType<typeof getMenuAnchor> | null>(null)
 	const [newViewTitle, setNewViewTitle] = useState('')
 	const [newViewKind, setNewViewKind] = useState<'list' | 'kanban' | 'table' | 'gantt'>('list')
@@ -417,7 +420,10 @@ export default function ProjectTasksScreen({
 	}
 
 	const showProjectMenu = !isSharedLinkPresentation
-	const showSearchAction = !isSharedLinkPresentation
+	// Narrow folds search into the ⋮ menu (audit H3): the project header carried
+	// six icon buttons on a 390px bar; wide keeps the dedicated icon.
+	const showSearchAction = !isSharedLinkPresentation && isWideLayout
+	const showSearchMenuItem = !isSharedLinkPresentation && !isWideLayout
 	const rootComposerPlacement = isWideLayout ? 'center' : 'sheet'
 	const topbarActions = [
 		...(showSearchAction
@@ -472,6 +478,7 @@ export default function ProjectTasksScreen({
 							const trigger = event.currentTarget
 							await loadProjectViews(selectedProject.id)
 							setPanelAnchor(null)
+							setViewMenuMode('switch')
 							setViewAnchor(getMenuAnchor(trigger))
 							return
 						}
@@ -748,7 +755,7 @@ export default function ProjectTasksScreen({
 									>
 										{view.title || view.view_kind}
 									</button>
-									{canManageViewDefinitions && visibleViews.length > 1 ? (
+									{viewMenuMode === 'manage' && canManageViewDefinitions && visibleViews.length > 1 ? (
 										<button
 											className="menu-item subtle view-menu-delete"
 											data-action="delete-project-view"
@@ -764,7 +771,17 @@ export default function ProjectTasksScreen({
 									) : null}
 								</div>
 							))}
-							{canManageViewDefinitions ? (
+							{viewMenuMode === 'switch' && canManageViewDefinitions ? (
+								<button
+									className="menu-item subtle"
+									data-action="manage-project-views"
+									type="button"
+									onClick={() => setViewMenuMode('manage')}
+								>
+									Manage views…
+								</button>
+							) : null}
+							{viewMenuMode === 'manage' && canManageViewDefinitions ? (
 								<form className="view-menu-add" data-form="project-view" onSubmit={handleCreateProjectView}>
 									<label className="inline-field">
 										<span>Name</span>
@@ -814,6 +831,15 @@ export default function ProjectTasksScreen({
 						</div>
 					) : panelAnchor ? (
 						<div className="inline-menu topbar-action-menu" data-menu-root="true">
+							{showSearchMenuItem ? (
+								<button className="menu-item" data-action="go-search" type="button" onClick={() => {
+									setPanelAnchor(null)
+									setFilterOpen(false)
+									setSearchOpen(true)
+								}}>
+									Search tasks
+								</button>
+							) : null}
 							{canCreateRootTask ? (
 								<button className="menu-item" data-action="open-root-composer" data-project-id={selectedProject.id} type="button" onClick={() => {
 									setPanelAnchor(null)

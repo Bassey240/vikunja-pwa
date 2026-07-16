@@ -1,212 +1,73 @@
 # Vikunja PWA
 
-Unofficial third-party Vikunja client.
-
-This project is a free, independent PWA client for the Vikunja API. It is not
-affiliated with, endorsed by, or maintained by the official Vikunja project or
-its maintainers.
+Unofficial third-party client for [Vikunja](https://vikunja.io). This project is
+free and independent. It is not affiliated with, endorsed by, or maintained by
+the official Vikunja project or its maintainers.
 
 Vikunja PWA is a mobile-first, installable client for self-hosted Vikunja
-instances. It keeps the real Vikunja API and data model, but wraps them in a
-faster touch-friendly shell with better task-tree handling, stronger
-cross-device ergonomics, and a same-origin backend for sessions and optional
-admin tooling.
+instances. It uses the real Vikunja API and data model, wrapped in a faster,
+touch-friendly interface with real project and task trees, a calendar, and
+offline editing. It runs its own small backend in front of Vikunja, which holds
+your login server-side, so your Vikunja token never reaches the browser.
 
-## Why This Client
+## Features
 
-- interactive Gantt planning and drag-and-drop friendly task handling across supported project views
-- real project and task tree browsing instead of flattening everything into a single list
-- mobile-first interaction model that still scales up to tablet and desktop layouts
-- installable PWA shell with offline reopen support and browser notification setup
-- same-origin backend for safer session handling, share flows, and optional CLI-backed admin actions
+### Views
 
-## Current product state
+- **Calendar** in month, week and day. Drag a task to reschedule it, drag its edge to change how long it runs, or tap an empty day or hour slot to add one already dated to that spot. Overlapping items stay readable instead of collapsing into slivers.
+- **Gantt** planning with zoom presets, dependency arrows, progress and priority on the bars, assignee and label chips, and direct drag or resize scheduling.
+- **Kanban** with full drag and drop: reorder in a column, move across columns, drop onto a card to make it a subtask, move from the task menu, and complete or reopen a task by moving it in or out of the done column.
+- **List and table** views, plus **Today**, **Inbox** and **Upcoming** screens.
+- **Saved filters** built from a cross-project form (status, project, label, priority, due date, text, favourites, sort order) or written as raw clauses. They open as normal project workspaces.
+- **A default view per device**, set separately for desktop and mobile.
 
-The current public release target is `0.5`. It builds on `0.3.1` and moves
-the app from a drag-and-drop stabilization hotfix into a broader integration
-and control-plane release: webhooks, migration imports, OpenID Connect login,
-saved-filter workspaces, project views, project backgrounds, background refresh
-polling, and a clearer in-app administration surface are now part of the same
-product.
+### Projects and tasks
 
-The main remaining release risk is testing depth rather than missing
-implementation. Webhooks, migration imports, and OpenID Connect still need
-broader real-instance validation on real providers and receivers before this
-release should be treated as fully baked.
+- Nested sub-projects, with task trees you expand in place.
+- Quick add that stays open after Enter, with dates, `+project`, `*label`, `@assignee`, `!priority` and repeats highlighted as you type.
+- Subtasks inline, labels on the cards, favourites, priorities and due dates.
+- Task detail with comments, emoji reactions, attachments, assignees and per-task subscriptions.
+- Bulk edit across list and tree views.
+- Search across every project, from any screen.
+- Project backgrounds: upload your own, pick from Unsplash, or remove.
+- Drag to reorder or re-parent both tasks and projects.
 
-- Today-first shell with Inbox, Upcoming, Projects, Search, Filters, Labels, and Settings
-- nested sub-project browsing with inline parent/child task trees and continuous add flows
-- list, Kanban, Table, and enhanced Gantt project views backed by the real Vikunja API
-- responsive desktop and tablet shell with sidebar and inspector behavior
-- collaboration flows for users, teams, project sharing, link shares, and shared-project access
-- user and project webhooks with in-app event selection and per-project management
-- migration tools for Todoist, Trello, Microsoft To Do, TickTick, WeKan, generic CSV, and Vikunja export imports, with OAuth callback completion, guided CSV mapping/preview, and file-upload flows
-- OpenID Connect sign-in with provider discovery, redirect initiation, callback completion, and session bootstrap
-- project view management with create/delete flows and seeded views from current filters
-- project background management with upload/remove, Unsplash support, blur-hash previews, and project-surface rendering
-- saved filters with a structured builder, advanced-clause composition, and project-style workspace integration
-- expanded account/security coverage: avatar control, session management, password/email changes, data export, deletion scheduling, 2FA, CalDAV tokens, and API tokens
-- full offline editing for supported task and project mutations with IndexedDB persistence and reconnect replay
-- backend-managed account sessions, onboarding flows, instance-aware auth capability checks, background refresh polling, and notification preferences
-- installable PWA runtime with offline reopen support, service-worker shell caching, offline queue restore, and notification setup
-- optional administration features for operator status, user management, SMTP diagnostics, migration-provider configuration, dump/restore, repair, and deployment-aware apply/restart
+### Offline
 
-Recent work has shifted from baseline parity to operational coherence:
-planning, offline resilience, external integrations, auth flexibility, and
-operator-facing configuration now live in the same shell instead of forcing a
-handoff back to the stock Vikunja frontend.
+- Install it and it opens without a connection, with your projects and tasks already there.
+- Edits you make offline queue up and sync when you reconnect, and you can see what is still pending.
+- Attachments, sharing changes and admin actions still need a live connection.
 
-## 0.5 scope
+### Sharing and collaboration
 
-`0.5` is the first release where the PWA can cover the main external
-integration loops directly: subscribe to Vikunja webhooks, start supported
-imports, complete OIDC login, manage project backgrounds, create project views,
-and work from saved filters as first-class project workspaces. It also rolls in
-the recent permission/admin cleanup and security-hardening pass.
+- Teams, with member and admin management.
+- Share a project with users or teams as read-only, writer or admin.
+- Link shares, optionally password protected, that open in their own view.
+- The app shows the access the current session actually has before offering controls, so nothing dangles that you cannot use.
 
-For release readiness, the remaining caveat is testing depth rather than
-missing implementation: the heaviest remaining manual validation is still on
-real webhook delivery, real OAuth migration providers, and real OIDC providers.
+### Account and security
 
-## What's New In 0.5
+- Sign in with a password (including "stay logged in"), an API token, or OpenID Connect.
+- Two-factor auth, CalDAV tokens and scoped API tokens.
+- See and revoke your active Vikunja sessions.
+- Change your password or email, export your data, or schedule account deletion.
+- Avatars, timezone, and notification preferences per category.
+- Registration and password-reset options appear only when your server actually supports them.
 
-- The entire UI was rebuilt around a single flat design language — a tokenized system of surfaces, hairline dividers, squared corners, and no elevation shadows, applied consistently across mobile and desktop, with Geist Sans/Mono as the app typefaces.
-- The header notification panel is now opaque and correctly centered on mobile, and notification read actions are hidden on API-token logins (which Vikunja's backend cannot mark read) instead of surfacing a raw `invalid token` error.
-- User webhooks are now manageable from `Settings`, and project webhooks are now manageable from `Project detail`, including target URL, secret, and event selection.
-- Migration imports are now available inside the PWA for Todoist, Trello, Microsoft To Do, TickTick, and Vikunja export flows, with OAuth callback handling and per-service status reporting.
-- OpenID Connect login is now fully wired end to end: provider discovery, redirect launch, callback completion, and PWA session creation.
-- Project views can now be created and deleted inside the PWA, and new views can be seeded directly from the current task-filter state.
-- Project backgrounds are now supported end to end in the PWA, including upload/remove, Unsplash selection, blur-hash fallback previews, project-tree rendering, and project/task workspace backgrounds.
-- Saved filters can now be created, edited, and deleted in-app, then opened as filter projects in the normal Projects workspace with the same task surfaces and drag handling as other project workspaces.
-- The settings admin surface has been clarified into `Administration`, with explicit operator status plus SMTP and migration-provider configuration in the same operator area.
-- Migration settings now keep disabled providers visible, explain why they are unavailable, and link operators directly to the provider-configuration area.
-- Background refresh polling now keeps task collections and the project tree fresher after external changes, with mutation debounce and visibility-return refresh behavior.
-- The audit remediation pass added raw-body limits on sensitive upload endpoints, stricter cookie-auth origin checks, shared helper cleanup, and missing token definitions.
+### Integrations
 
-Included in `0.5`:
+- Webhooks for a user or a project, with event selection and an optional secret.
+- Migration imports from Todoist, Trello, Microsoft To Do, TickTick, WeKan, CSV and Vikunja exports, with a guided analyse, map and preview flow for CSV.
+- Background refresh, so changes made elsewhere appear without a manual reload.
 
-- everything from `0.3.1`
-- user and project webhook management
-- in-app migration tools and migration-provider configuration
-- end-to-end OpenID Connect login
-- project view management
-- project background management
-- saved filter builder and filter-project workspace integration
-- background external-change polling
-- permission/admin cleanup and access visibility improvements
-- security hardening from the audit remediation plan
+### Administration (optional)
 
-Explicitly not in `0.5`:
+- Create, edit, enable, disable, reset the password for, and delete users.
+- SMTP settings with delivery diagnostics.
+- Configure migration providers, including the redirect URLs they need.
+- Requires an operator allowlist and a bridge to your own Vikunja container. Without it, the rest of the app works normally.
 
-- webhook-driven realtime push invalidation
-- a global instance-user role editor beyond the current CLI bridge surface
-- full raw-query saved-filter editing parity for every possible Vikunja clause/operator combination
-- app-store packaging or share-target flows
-
-## 0.3.1 hotfix scope
-
-This release is intentionally narrow. The goal for `0.3.1` is to stabilize
-existing task movement behavior without widening scope or introducing a broad
-drag-and-drop redesign.
-
-## What's New In 0.3.1
-
-- Same-list task reorder in Inbox and Today now respects the actual screen sort mode, so non-manual views no longer animate a move and then snap back.
-- The post-drop background refresh path now preserves a freshly moved task instead of letting stale positive positions temporarily restore the old order.
-- Drag lifecycle cleanup now rebinds correctly across screen switches, fixing the case where a successful or interrupted drag on one view could leave the next view temporarily non-draggable.
-- Expanded project previews in the main project tree now stay task-list-only even if the focused project view was set to Kanban.
-- Regression coverage was extended around Inbox/Today DnD, stale-refresh ordering, and project preview isolation.
-
-Included in `0.3.1`:
-
-- everything from `0.3.0-alpha`
-- Inbox/Today reorder gating based on the real screen-aware manual-sort rules
-- drag-session cleanup hardening across screen changes
-- stale-refresh protection for just-moved tasks
-- project preview isolation from focused Kanban view state
-
-Explicitly not in `0.3.1`:
-
-- a full drag-and-drop rewrite
-- realtime external-change polling
-- permission-model cleanup or other broader roadmap items
-
-## What's New In 0.3.0-alpha
-
-- The Gantt view was rebuilt into an interactive planner with zoom presets, richer task bars, priority and progress cues, assignee and label chips, dependency arrows, hover tooltips, and drag/resize scheduling.
-- Supported task and project edits now work offline: the app stores snapshots and mutation queues in IndexedDB, applies optimistic local changes, and replays them automatically when connectivity returns.
-- Kanban drag-and-drop was finished end-to-end: sort within bucket, move across buckets, drop onto a card to create a subtask, use "Move to bucket" from the task menu, and reopen or complete tasks by moving them in or out of the done bucket.
-- Account/auth/security coverage expanded with instance-aware registration and password-reset gating, 2FA sign-in and management, CalDAV tokens, scoped API tokens, session inspection and revocation, password/email changes, data export, and account-deletion scheduling.
-- Release readiness improved with broader smoke coverage for Gantt, offline, Kanban, and security flows plus a cleaner curated-GitHub release workflow.
-
-Included in `0.3.0-alpha`:
-
-- everything from `0.2.x`
-- enhanced Gantt planning with zoom, dependencies, tooltip details, and direct schedule manipulation
-- offline queueing and reconnect replay for supported task/project mutations
-- Kanban drag-and-drop parity across sort, bucket move, subtask drop, menu move, and done toggle
-- expanded account/security settings for sessions, avatars, 2FA, CalDAV, API tokens, export, email/password changes, and deletion controls
-- instance-aware auth UX that hides unsupported registration/password paths instead of presenting dead ends
-- broader regression coverage around Gantt, offline sync, Kanban DnD, and settings/security flows
-
-Explicitly not in `0.3.0-alpha`:
-
-- offline support for attachments, sharing changes, admin settings, or security-admin flows
-- push-based realtime sync or background conflict resolution beyond reconnect replay
-- richer post-v1 platform work like OIDC-first multi-account UX, share target flows, or app-store packaging
-
-## What's New In 0.2.1
-
-- Expired or invalid persisted password sessions are now cleared cleanly instead of leaving the app stuck in a refresh-token failure loop.
-- The stale-session path now drops back to sign-in after the first failed refresh attempt, which also avoids the follow-on `Too many requests` noise that could appear during bootstrap.
-
-## 0.2 alpha scope
-
-The first public alpha is intentionally narrower than the full roadmap. The aim
-is to ship a coherent, open-source-shareable snapshot with strong core task
-handling, collaboration coverage, and a realistic deployment story.
-
-## What's New In 0.2.0-alpha
-
-- Full avatar management was added, including provider switching (`Default avatar`, `Initials`, `Gravatar`, `Marble`, `Upload`) and uploaded-avatar support.
-- Account onboarding now includes registration, forgot-password, reset-password, and reset-link handoff for single-instance deployments.
-- Email delivery can now be configured from the PWA through SMTP settings, test mail diagnostics, and apply/restart support instead of requiring manual server-side edits only.
-- Admin bridge access is now explicitly operator-gated, and the email/SMTP settings UI now reflects whether the current deployment is writable or read-only.
-- Mail diagnostics were tightened so email test failures are reported correctly even when the Vikunja CLI exits with status `0`.
-- The Docker release target was updated to Node 22, and the image now includes the Compose support needed for admin apply/restart flows.
-- The post-0.1 stabilization work also includes task-move and completion-refresh fixes across list, Kanban, Today, and cross-project drag/drop flows.
-- Smoke coverage was expanded for avatars, onboarding/auth, drag-and-drop, task detail, email admin flows, operator auth, compose apply, and mail diagnostics.
-
-Included in `0.2.0-alpha`:
-
-- mobile-first shell with Today, Inbox, Upcoming, Projects, Search, Labels, and Settings
-- nested project and task hierarchy handling
-- task/project detail overlays and responsive desktop/tablet shell
-- list, Kanban, Table, and Gantt project views
-- collaboration suite: users, teams, sharing, link shares, and shared-project shell
-- read-only offline restore and cached browsing
-- browser notification capability setup plus notification-center preferences
-- first-pass bulk task editing on list/tree task surfaces
-- first-pass onboarding and auth flows: registration, forgot password, reset password, and reset-link handoff
-- SMTP administration with operator-only bridge access, testmail diagnostics, and deploy-aware apply/restart
-
-Explicitly not in `0.2.0-alpha`:
-
-- offline sync, queued edits, or conflict handling
-- real event-driven push delivery
-- richer post-v1 platform features like OIDC, share target, app-store packaging, or multi-account switching UX
-
-## Changes Since 0.2.1
-
-Since `0.2.1`, this repo gained:
-
-- A substantially richer Gantt view with zoom presets, dependency arrows, progress-aware task bars, assignee and label rendering, hover tooltips, and direct drag/resize scheduling.
-- Full offline editing for supported task and project flows, backed by IndexedDB snapshots, a reconnect replay queue, and visible pending/failed sync state in the UI.
-- A fully reworked Kanban drag-and-drop model that now correctly handles sorting, cross-bucket moves, subtask drops, menu-triggered bucket moves, done-bucket completion toggles, and stale-view refreshes.
-- Expanded account and security surfaces, including 2FA login and management, CalDAV tokens, scoped API tokens, active-session management, password/email changes, export/download flow, and account-deletion scheduling.
-- Server-aware auth gating so registration and password-reset affordances are only shown when the connected Vikunja instance actually supports them.
-- Broader regression coverage and release tooling, including stronger Gantt/offline/Kanban smoke coverage, local Docker LAN startup polish, and a cleaner curated-GitHub release workflow.
-- Migration support now covers Vikunja 2.3.0's new WeKan and generic CSV import flows, including a dedicated CSV detect/map/preview/import screen and gateway compatibility with both older and newer upstream migration route methods.
+Release history lives in [CHANGELOG.md](CHANGELOG.md).
 
 ## Screenshots
 
@@ -458,6 +319,21 @@ Deployment safety note:
 - keep runtime-only certs and SSH keys local to the deployment host under `./deploy/`
 - if you sync the repo to another machine, exclude `.env`, `deploy/*.pem`, and other local runtime files from the sync
 
+## Versioning And Build Identification
+
+Settings → App Data shows three identifiers:
+
+- **App version** is the release number from `package.json` (for example `0.5.0`). It is bumped by hand at each release cut, not per deploy.
+- **Server build** and **Client build** identify the exact deployed code. They are stamped automatically at build time as `YYYY-MM-DD-<git commit>` (with a `-dirty` suffix when built from uncommitted changes), so every deploy is distinguishable without manual bumps.
+
+How the stamp is resolved:
+
+1. A `build-info.json` at the repo root, written by `node scripts/generate-build-info.mjs`. Deploy scripts should run this before shipping; it refuses to produce an unstamped deploy with `--require-git`.
+2. Otherwise live git metadata at build/start time.
+3. Otherwise `unknown`.
+
+Git checkouts get correct stamps with no extra steps. Docker builds exclude `.git` from the build context, so run `node scripts/generate-build-info.mjs` before `docker compose up --build` if you want the image stamped; without it the build IDs show `unknown`.
+
 ## CLI Bridge (Optional)
 
 The Vikunja CLI bridge is optional. You only need it if you want to create,
@@ -492,14 +368,14 @@ kept outside this public repo.
 ## How it works
 
 - The browser never receives your Vikunja API token.
-- The browser now talks to a same-origin Node backend that owns the Vikunja credentials/session.
+- The browser talks to a same-origin Node backend that owns the Vikunja credentials/session.
 - For self-hosted Vikunja, the intended path is `Settings > Accounts` with username/password login.
-- Password login now exposes Vikunja's native `Stay logged in` / `long_token` remembered-session mode.
-- API token mode still exists, but the token is submitted to the backend and kept out of browser storage.
-- Account sessions are now stored server-side in an encrypted local file, so ordinary backend restarts keep interactive sessions.
-- To keep remembered Vikunja sessions valid across upstream restarts, the Vikunja deployment itself still needs a fixed `service.JWTSecret` / `VIKUNJA_SERVICE_JWTSECRET`.
+- Password login supports Vikunja's native `Stay logged in` / `long_token` remembered-session mode.
+- API token mode is also available. The token is submitted to the backend and kept out of browser storage.
+- Account sessions are stored server-side in an encrypted local file, so ordinary backend restarts keep interactive sessions.
+- To keep remembered Vikunja sessions valid across upstream restarts, the Vikunja deployment needs a fixed `service.JWTSecret` / `VIKUNJA_SERVICE_JWTSECRET`.
 - Admin user lifecycle actions and bridge-only administration operations run through a backend-only Vikunja CLI bridge; the browser never gets Docker or CLI access.
-- Administration currently exposes operator-gated lifecycle operations plus SMTP and migration-provider config. Instance-level user roles or global permissions are not exposed by the current Vikunja CLI bridge.
+- Administration exposes operator-gated lifecycle operations plus SMTP and migration-provider config. Instance-level user roles and global permissions are not exposed by the Vikunja CLI bridge.
 - Deployment-level SMTP/admin config is only written to an explicit host config path. The running Vikunja container filesystem is never treated as the source of truth.
 - Shared project links authenticate into a dedicated public/shared shell instead of the normal signed-in app shell.
 - The app can also run directly over HTTPS with local certs for secure mobile PWA testing, including iPhone installed-app notification checks.
@@ -572,61 +448,15 @@ Not supported:
 - `tests/helpers/app-under-test.mjs`: unified smoke harness that builds `dist/` and boots the app server against it.
 - Internal planning, audit, and deployment documents are intentionally kept outside the public repo.
 
-## Implemented
-
-- project tree browser with nested sub-projects
-- project contents screen with both sub-projects and tasks
-- task tree with inline expand/collapse
-- today, projects, labels, and account settings screens
-- inbox and upcoming screens
-- inline global search across project and task pages
-- quick-add flow that stays active after `Enter`
-- inline subtask creation
-- task and project detail overlays
-- global top-header back behavior for detail overlays
-- task and project favorite toggles in detail overlays
-- task completion and label assignment
-- task labels surfaced directly on task cards
-- label detail editing
-- global task query support for cross-project search and upcoming filters
-- saved filter browsing, structured authoring, editing, deletion, and task loading through Vikunja pseudo-projects
-- enhanced Gantt planning with zoom presets, dependency arrows, richer task bars, and direct drag/resize scheduling
-- Kanban drag-and-drop across sort, bucket move, subtask drop, menu move, and done-bucket toggle flows
-- offline snapshot restore plus queued supported task/project edits with reconnect replay and visible sync status
-- backend-managed account sessions with `HttpOnly` app cookies and encrypted file-backed persistence
-- Vikunja-native remembered password sessions through `long_token` / `Stay logged in`
-- remote Vikunja session listing/revocation for password-based connections
-- account/security settings for avatars, active sessions, password/email changes, 2FA, CalDAV tokens, API tokens, export, and deletion scheduling
-- instance-aware auth gating for registration and password-reset flows
-- project-view-aware task loading through Vikunja list views
-- task position endpoint wiring and in-app reorder prototype
-- first-pass bulk task editing across list/tree task surfaces
-- admin user CRUD through the backend Vikunja CLI bridge
-- visible operator/bridge status in Settings plus explicit permission/access indicators for project sharing and team management
-- collaboration/privacy settings for the signed-in user
-- team CRUD plus team member/admin management
-- project user sharing, project team sharing, and link sharing
-- dedicated shared-project shell and password-protected link-share auth flow
-- per-category notification-center preferences stored in Vikunja `frontend_settings`
-- user and project webhook management
-- migration imports for supported OAuth and file-based providers
-- OpenID Connect login through the connected Vikunja instance
-- background polling for task collections and the project tree after external changes
-- operator-managed migration-provider settings, including redirect-URL helpers for PWA callback flows
-- zero-date normalization so unset Vikunja dates do not render as fake `1 Jan` values
-
 ## Known constraints
 
-- This is still a prototype, not a production client.
-- Vikunja supports labels on tasks, but not project labels through the upstream API route set currently used here.
-- Bridge/admin routes depend on an explicit operator email allowlist configured in the deployment environment.
-- The current bridge does not expose instance-user role editing, so Administration is limited to create, edit identity, enable/disable, reset password, and delete for user lifecycle management.
-- The smoke suite now covers collaboration, shared-link, notification-preference, and bulk-edit flows. Continue maintaining selectors as the shell evolves.
-- Offline support now includes cached reopen plus queued replay for supported task and project mutations, but attachments, sharing changes, admin config, and security-admin actions still require a live connection.
-- Browser notification setup and test alerts now work on supported desktop browsers and installed HTTPS iPhone web apps. Notification-center preferences are also shipped, but event-driven push delivery is still not built yet.
-- The server now exposes `/health`, request/error logs, trusted-origin checks, and rate limiting on auth/session routes.
-- All app responses now carry baseline security headers, JSON request bodies are capped at 1 MB, and `X-Forwarded-For` is only trusted when `APP_TRUST_PROXY=true`.
-- For Todoist, Trello, or Microsoft To Do imports to return to the PWA instead of the stock Vikunja frontend, the redirect URL must be updated both in Vikunja and in the external provider developer app.
+- This is an independent client, not a production-grade or officially supported one.
+- Vikunja supports labels on tasks, but not project labels through the API routes used here.
+- Offline covers cached reopen and queued task/project edits. Attachments, sharing changes, admin config, and security-admin actions need a live connection.
+- Notification setup and test alerts work on supported desktop browsers and installed HTTPS iPhone web apps, and notification preferences are stored per category. Event-driven push delivery is not built yet.
+- Administration is limited to user lifecycle: create, edit identity, enable/disable, reset password, and delete. The CLI bridge does not expose instance-user role editing.
+- Administration also requires an operator email allowlist set in the deployment environment. Without it, the rest of the app still works.
+- Todoist, Trello, and Microsoft To Do imports only return to this app if the redirect URL is updated in both Vikunja and the provider's developer app. Otherwise the import finishes in the stock Vikunja frontend.
 
 ## Testing
 
@@ -653,12 +483,7 @@ The full local verification command is:
 npm run ci
 ```
 
-For alpha release signoff, the manual mobile PWA regression gate is treated as covered by the normal Mac + iPhone PWA testing workflow. Run a separate iPad-specific pass only if tablet behavior becomes a hard release target.
-
-CI is wired for both GitHub Actions and Forgejo Actions in:
-
-- `.github/workflows/ci.yml`
-- `.forgejo/workflows/ci.yml`
+CI runs the same suite via GitHub Actions (`.github/workflows/ci.yml`).
 
 ## Troubleshooting
 
@@ -668,7 +493,3 @@ CI is wired for both GitHub Actions and Forgejo Actions in:
 - If UI smoke tests fail locally before the browser starts, run `npx playwright install chromium`.
 - If the shell looks stale after a rebuild/deploy, use `Settings > App Data > Refresh app data`.
 
-## Next recommended passes
-
-1. Decide how far post-v1 offline work should go beyond the current queued task/project editing milestone.
-2. Decide whether saved filters should eventually grow beyond the current structured builder into full raw-query editing and sidebar-level favorites management.

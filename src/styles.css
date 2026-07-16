@@ -12,16 +12,19 @@
 	--surface: #131318;
 	--surface-2: #191920;
 	--surface-3: #20202a;
-	--hairline: rgba(255, 255, 255, 0.14);
-	--hairline-2: rgba(255, 255, 255, 0.09);
-	--stroke: rgba(255, 255, 255, 0.20);
+	/* Dark hairlines run hotter than light: a white line at the light theme's
+	   black-line alpha reads much fainter on near-black, so dark mode lifts all
+	   three a step to keep the same structural definition. */
+	--hairline: rgba(255, 255, 255, 0.30);
+	--hairline-2: rgba(255, 255, 255, 0.18);
+	--stroke: rgba(255, 255, 255, 0.40);
 	--proj-ink: #ffffff;
 	--ink-line: var(--proj-ink);
 	--ink-line-soft: rgba(255, 255, 255, 0.30);
 
 	--text: #ededf2;
-	--text-dim: #9b9ba8;
-	--text-faint: #5f5f6c;
+	--text-dim: #b6b6c2;
+	--text-faint: #84848f;
 
 	--accent: oklch(0.66 0.16 265);
 	--accent-2: oklch(0.55 0.18 265);
@@ -34,6 +37,26 @@
 	--lbl-red: oklch(0.68 0.18 25);       --lbl-red-bg: oklch(0.68 0.18 25 / 0.16);
 	--lbl-violet: oklch(0.70 0.13 305);   --lbl-violet-bg: oklch(0.70 0.13 305 / 0.16);
 	--lbl-cyan: oklch(0.74 0.11 210);     --lbl-cyan-bg: oklch(0.74 0.11 210 / 0.16);
+
+	/* Completed-task green — OKLCH sibling of --accent (same L/C, hue rotated to
+	 * green) so the green done check reads as a designed pair with the blue
+	 * bulk-select check. */
+	--done-green: oklch(0.66 0.15 168);
+
+	/* Shared task checkbox geometry — done and bulk-select boxes read the same
+	 * token so they stay identical in size; the compact value is re-declared in
+	 * the narrow-viewport block. */
+	--checkbox-size: 1.1rem;
+	--checkbox-border-width: 1.5px;
+
+	/* Quick Add Magic inline-highlight tokens — alias the label palette so no new
+	 * colours are introduced. */
+	--qam-date: var(--lbl-blue);       --qam-date-bg: var(--lbl-blue-bg);
+	--qam-project: var(--lbl-violet);  --qam-project-bg: var(--lbl-violet-bg);
+	--qam-label: var(--lbl-green);     --qam-label-bg: var(--lbl-green-bg);
+	--qam-assignee: var(--lbl-cyan);   --qam-assignee-bg: var(--lbl-cyan-bg);
+	--qam-priority: var(--lbl-amber);  --qam-priority-bg: var(--lbl-amber-bg);
+	--qam-repeat: var(--lbl-red);      --qam-repeat-bg: var(--lbl-red-bg);
 
 	--radius-card: 12px;
 	--radius-chip: 999px;
@@ -104,6 +127,14 @@
 	--bottom-nav-pill-block-size: 4.15rem;
 	--bottom-nav-divider-gap: 0.4rem;
 	--bottom-nav-clearance: 4rem;
+	/* The calendar body's inline gutter. The day-head's black backdrop bleeds by
+	   exactly this so it spans the full board width — aliased so that coupling is
+	   intentional, not a coincidental reuse of the control padding. */
+	--calendar-gutter: var(--control-padding-inline);
+	/* Height of the pinned day/week head card row — the header's black backdrop
+	   extends down by exactly this to sit behind the card (0.3rem padding each side
+	   over a ~1.5rem weekday/date row, matching .calendar-board-head). */
+	--calendar-head-row: 2.4rem;
 	/* Composer (add-task/subtask) sheet gaps. --sheet-keyboard-gap: flush gap above
 	 * the keyboard when editing; --sheet-edge-gap: extra lift above the footer when
 	 * closed. Tokenized so the composer's two resting positions stay rule-driven. */
@@ -273,6 +304,15 @@ select {
 	position: relative;
 	background: transparent;
 	border-inline: 1px solid var(--line-subtle);
+}
+
+/* Keyboard focus is visible everywhere (audit A2): one accent ring on any
+   focusable primitive. :where() keeps specificity at zero so the few bespoke
+   :focus-visible styles (auth link, avatar, gantt menu) and field focus
+   borders keep winning where they exist. */
+:where(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
 }
 
 /* Narrow (mobile) shell: the *document* does not scroll — only .surface-content does.
@@ -1088,7 +1128,57 @@ select {
 	flex: 0 0 auto;
 	box-shadow: none;
 	position: relative;
+	/* Continued below: on fine pointers the aria-label doubles as a hover
+	   tooltip (audit A3) — see .topbar-nav-button[aria-label]::after. */
 	transition: background 0.15s ease, color 0.15s ease;
+}
+
+/* Icon-only buttons reveal their label on hover — the aria-label is the
+   tooltip text, so the two can't drift. Hover-intent delay keeps pass-through
+   mouse travel quiet; fine pointers only (touch has no hover). Right-aligned
+   to the button so the cluster at the pane edge never overflows the viewport. */
+@media (hover: hover) and (pointer: fine) {
+	/* The two pane-toggle circles are icon-only too (audit H7). */
+	.wide-sidebar-toggle[aria-label],
+	.shell-inspector-toggle[aria-label] {
+		position: relative;
+	}
+
+	.wide-sidebar-toggle[aria-label]::after,
+	.shell-inspector-toggle[aria-label]::after,
+	.topbar-nav-button[aria-label]::after {
+		content: attr(aria-label);
+		position: absolute;
+		top: calc(100% + 0.35rem);
+		inset-inline-end: 0;
+		z-index: 60;
+		white-space: nowrap;
+		padding: 0.25rem 0.55rem;
+		border: 1px solid var(--line);
+		border-radius: var(--radius-control);
+		background: var(--surface-card);
+		color: var(--text-dim);
+		font-size: 0.72rem;
+		pointer-events: none;
+		opacity: 0;
+		visibility: hidden;
+		transition: opacity 0.12s ease, visibility 0s linear 0.12s;
+	}
+
+	/* The sidebar toggle hugs the left viewport edge when collapsed; a
+	   right-aligned tooltip would clip off-screen there. */
+	.wide-sidebar-toggle[aria-label]::after {
+		inset-inline-start: 0;
+		inset-inline-end: auto;
+	}
+
+	.wide-sidebar-toggle[aria-label]:hover::after,
+	.shell-inspector-toggle[aria-label]:hover::after,
+	.topbar-nav-button[aria-label]:hover::after {
+		opacity: 1;
+		visibility: visible;
+		transition-delay: 0.4s, 0.4s;
+	}
 }
 
 .topbar-nav-button:hover {
@@ -1239,153 +1329,9 @@ select {
 }
 
 .topbar-icon {
-	position: relative;
-	display: inline-block;
-	inline-size: 1.2rem;
-	block-size: 1.2rem;
-	/* Match the footer icon size — scale keeps the pseudo-element drawings centered. */
-	transform: scale(1.18);
-	transform-origin: center;
-}
-
-.topbar-icon-search::before {
-	content: '';
-	position: absolute;
-	inset: 0.1rem 0.34rem 0.34rem 0.1rem;
-	border: 0.14rem solid currentColor;
-	border-radius: 999px;
-}
-
-.topbar-icon-search::after {
-	content: '';
-	position: absolute;
-	inline-size: 0.48rem;
-	block-size: 0.14rem;
-	border-radius: 999px;
-	background: currentColor;
-	inset-inline-end: 0.06rem;
-	inset-block-end: 0.18rem;
-	transform: rotate(45deg);
-	transform-origin: center;
-}
-
-.topbar-icon-filter::before {
-	content: '';
-	position: absolute;
-	inset-block-start: 0.2rem;
-	inset-inline-start: 0.18rem;
-	inline-size: 0.84rem;
-	block-size: 0.12rem;
-	border-radius: 999px;
-	background: currentColor;
-	box-shadow: 0 0.34rem 0 currentColor, 0 0.68rem 0 currentColor;
-}
-
-.topbar-icon-filter::after {
-	content: '';
-	position: absolute;
-	inline-size: 0.22rem;
-	block-size: 0.22rem;
-	border-radius: 999px;
-	background: currentColor;
-	inset-inline-start: 0.62rem;
-	inset-block-start: 0.15rem;
-	box-shadow: -0.26rem 0.34rem 0 currentColor, 0.18rem 0.68rem 0 currentColor;
-}
-
-.topbar-icon-view-list::before {
-	content: '';
-	position: absolute;
-	inset: 0.16rem;
-	border: 0.12rem solid currentColor;
-	border-radius: 0.36rem;
-}
-
-.topbar-icon-view-list::after {
-	content: '';
-	position: absolute;
-	inset-inline: 0.34rem;
-	inset-block-start: 0.36rem;
-	block-size: 0.12rem;
-	border-radius: 999px;
-	background: currentColor;
-	box-shadow: 0 0.24rem 0 currentColor, 0 0.48rem 0 currentColor;
-}
-
-.topbar-icon-view-kanban::before {
-	content: '';
-	position: absolute;
-	inset: 0.14rem;
-	border: 0.12rem solid currentColor;
-	border-radius: 0.32rem;
-}
-
-.topbar-icon-view-kanban::after {
-	content: '';
-	position: absolute;
-	inset-block: 0.28rem;
-	inset-inline-start: 0.36rem;
-	inline-size: 0.14rem;
-	border-radius: 999px;
-	background: currentColor;
-	box-shadow: 0.34rem 0 0 currentColor;
-}
-
-.topbar-icon-view-table::before,
-.topbar-icon-view-table::after,
-.topbar-icon-view-gantt::before,
-.topbar-icon-view-gantt::after {
-	content: '';
-	position: absolute;
-}
-
-.topbar-icon-view-table::before {
-	inset: 0.14rem;
-	border: 0.12rem solid currentColor;
-	border-radius: 0.32rem;
-}
-
-.topbar-icon-view-table::after {
-	inset-block: 0.26rem;
-	inset-inline-start: 0.5rem;
-	inline-size: 0.12rem;
-	background: currentColor;
-	box-shadow: -0.3rem 0 0 currentColor, 0.3rem 0 0 currentColor;
-}
-
-.topbar-icon-view-gantt::before {
-	inset-inline: 0.28rem;
-	inset-block-end: 0.26rem;
-	block-size: 0.12rem;
-	border-radius: 999px;
-	background: currentColor;
-}
-
-.topbar-icon-view-gantt::after {
-	inset-inline: 0.26rem;
-	inset-block-start: 0.22rem;
-	block-size: 0.54rem;
-	background:
-		linear-gradient(
-			to right,
-			currentColor 0 24%,
-			transparent 24% 34%,
-			currentColor 34% 68%,
-			transparent 68% 78%,
-			currentColor 78% 100%
-		);
-	border-radius: 0.14rem;
-}
-
-.topbar-icon-bell {
-	inline-size: 1.22rem;
-	block-size: 1.22rem;
-}
-
-.topbar-icon-bell svg {
-	inline-size: 100%;
-	block-size: 100%;
-	display: block;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
 }
 
 .topbar-notification-badge {
@@ -2229,7 +2175,7 @@ select {
 }
 
 .task-row.is-bulk-selected {
-	background: color-mix(in srgb, var(--accent-strong, #1973ff) 12%, var(--bg-soft));
+	background: color-mix(in srgb, var(--accent-strong, #1973ff) 12%, var(--surface-card));
 	border-color: color-mix(in srgb, var(--accent-strong, #1973ff) 36%, var(--line-ui));
 }
 
@@ -2240,6 +2186,12 @@ select {
 
 .task-row.is-done {
 	opacity: 0.68;
+}
+
+/* Strikethrough keeps "done" legible even in bulk mode, where the green done
+ * check is replaced by the blue bulk-select check. */
+.task-row.is-done .task-title {
+	text-decoration: line-through;
 }
 
 .task-row.is-completing,
@@ -2287,7 +2239,9 @@ select {
 	min-height: 1.5rem;
 	cursor: grab;
 	opacity: 0;
-	color: var(--text-faint);
+	/* Row chrome (grip + ⋮) reads at one secondary brightness; the ⋮ otherwise
+	   inherited full --text and the grip sat at --text-faint — badly mismatched. */
+	color: var(--text-dim);
 	transition: opacity 150ms ease, color 150ms ease;
 	-webkit-user-select: none;
 	user-select: none;
@@ -2308,6 +2262,13 @@ select {
 .task-row:hover .menu-button,
 [data-handles="always"] .task-row .menu-button {
 	opacity: 1;
+}
+
+/* Match the grip's secondary brightness — the row ⋮ inherited full --text and
+   read brighter than the grip beside it (desktop already harmonizes via .shell-wide). */
+.task-row .menu-button,
+.project-node-row .menu-button {
+	color: var(--text-dim);
 }
 
 .drag-handle svg {
@@ -2439,13 +2400,13 @@ select {
 /* Checkbox — redesigned. 19px equivalent, 6px radius, transparent until
  * checked. Checked = accent fill, accent-fg glyph (not gradient). */
 .checkbox-button {
-	inline-size: 1.1rem;
-	block-size: 1.1rem;
+	inline-size: var(--checkbox-size);
+	block-size: var(--checkbox-size);
 	border-radius: var(--radius-badge);
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	border: 1.5px solid var(--text-faint);
+	border: var(--checkbox-border-width) solid var(--line-strong);
 	background: transparent;
 	color: var(--accent-fg);
 	/* Check glyph sized to the smaller box so it doesn't crowd the border. */
@@ -2460,28 +2421,37 @@ select {
 }
 
 .bulk-select-checkbox {
-	inline-size: 1.72rem;
-	block-size: 1.72rem;
+	inline-size: var(--checkbox-size);
+	block-size: var(--checkbox-size);
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	border: 1.5px solid color-mix(in srgb, var(--accent-strong, #1973ff) 46%, var(--line-strong));
-	background: color-mix(in srgb, var(--accent-strong, #1973ff) 9%, var(--surface-card));
+	border: var(--checkbox-border-width) solid var(--line-strong);
+	background: transparent;
 	color: transparent;
-	font-weight: 800;
-	border-radius: 0.42rem;
+	font-weight: 700;
+	border-radius: var(--radius-badge);
 }
 
+/* Done check = green fill (scoped to task-completion checkboxes so other
+ * .checkbox-button users — webhook toggles etc. — keep the accent fill). */
 .checkbox-button.is-checked {
 	background: var(--accent);
 	border-color: var(--accent);
 	color: var(--accent-fg);
 }
 
+.task-row .checkbox-button.is-checked,
+.kanban-task-frame .checkbox-button.is-checked {
+	background: var(--done-green);
+	border-color: var(--done-green);
+}
+
+/* Bulk-select check = flat accent blue, distinct from the green done check. */
 .bulk-select-checkbox.is-checked {
-	background: linear-gradient(135deg, #1973ff, #4c91ff);
-	border-color: rgba(120, 169, 255, 0.88);
-	color: #fff;
+	background: var(--accent);
+	border-color: var(--accent);
+	color: var(--accent-fg);
 }
 
 .task-toggle-end {
@@ -2667,17 +2637,12 @@ select {
 	display: inline;
 }
 
-/* Icon box stays at the size the pseudo-element drawings were designed for, so
- * they stay centered; scale enlarges them around their center (bigger AND still
- * vertically aligned — resizing the box alone shoved the drawings off-centre). */
 .bottom-nav-icon {
-	position: relative;
-	inline-size: 1.2rem;
-	block-size: 1.2rem;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
 	align-self: center;
 	flex: 0 0 auto;
-	transform: scale(1.18);
-	transform-origin: center;
 }
 
 .task-completion-toast {
@@ -2782,83 +2747,6 @@ select {
 .sync-conflict-bar span {
 	flex: 1;
 	min-inline-size: 0;
-}
-
-.bottom-nav-icon-today::before {
-	content: '';
-	position: absolute;
-	inset: 0.12rem;
-	border: 0.12rem solid currentColor;
-	border-radius: 0.32rem;
-}
-
-.bottom-nav-icon-today::after {
-	content: '';
-	position: absolute;
-	inset-inline: 0.22rem;
-	inset-block-start: 0.34rem;
-	block-size: 0.12rem;
-	background: currentColor;
-	box-shadow: 0 -0.36rem 0 0 currentColor;
-}
-
-.bottom-nav-icon-inbox::before {
-	content: '';
-	position: absolute;
-	inset: 0.28rem 0.12rem 0.16rem;
-	border: 0.12rem solid currentColor;
-	border-radius: 0.25rem 0.25rem 0.4rem 0.4rem;
-}
-
-.bottom-nav-icon-inbox::after {
-	content: '';
-	position: absolute;
-	inset-inline: 0.34rem;
-	inset-block-end: 0.28rem;
-	block-size: 0.12rem;
-	background: currentColor;
-}
-
-.bottom-nav-icon-projects::before,
-.bottom-nav-icon-projects::after {
-	content: '';
-	position: absolute;
-	inline-size: 0.24rem;
-	block-size: 0.24rem;
-	background: currentColor;
-	border-radius: 0.08rem;
-}
-
-.bottom-nav-icon-projects::before {
-	inset-block-start: 0.14rem;
-	inset-inline-start: 0.14rem;
-	box-shadow:
-		0.5rem 0 0 0 currentColor,
-		0 0.5rem 0 0 currentColor,
-		0.5rem 0.5rem 0 0 currentColor;
-}
-
-.bottom-nav-icon-projects::after {
-	display: none;
-}
-
-.bottom-nav-icon-menu::before,
-.bottom-nav-icon-menu::after {
-	content: '';
-	position: absolute;
-	inset-inline: 0.08rem;
-	block-size: 0.12rem;
-	border-radius: 999px;
-	background: currentColor;
-}
-
-.bottom-nav-icon-menu::before {
-	inset-block-start: 0.24rem;
-	box-shadow: 0 0.34rem 0 0 currentColor;
-}
-
-.bottom-nav-icon-menu::after {
-	inset-block-start: 0.92rem;
 }
 
 /* Center FAB — redesigned. 44px rounded square in the accent, not a circle.
@@ -3293,6 +3181,21 @@ select {
 	gap: 0.55rem;
 }
 
+.task-move-date-row {
+	position: relative;
+	margin-inline-start: 2.3rem;
+	margin-block-start: 0.35rem;
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	min-inline-size: 0;
+}
+
+.task-move-date-row .compact-date-picker {
+	flex: 1 1 auto;
+	min-inline-size: 0;
+}
+
 .project-preview {
 	margin: 0.6rem 0 0 2.45rem;
 	display: grid;
@@ -3558,6 +3461,88 @@ select {
 	color: rgba(255, 247, 241, 0.56);
 }
 
+/* Quick Add Magic inline highlight. The real <input> stays the visible field
+ * (transparent glyphs, visible caret); a mirror carrying the SAME input class
+ * sits on top and renders identical geometry with coloured token spans, so the
+ * highlight aligns to the caret exactly. */
+.qam-field {
+	position: relative;
+	display: block;
+	inline-size: 100%;
+	min-inline-size: 0;
+}
+
+.qam-field > input {
+	position: relative;
+	z-index: 1;
+	color: transparent;
+	-webkit-text-fill-color: transparent;
+	caret-color: var(--text);
+}
+
+/* The transparent fill above hides the typed value (so only the mirror shows)
+ * but WebKit inherits it into the placeholder too — restore the placeholder's
+ * own colour so it stays visible. */
+.qam-field > input::placeholder {
+	-webkit-text-fill-color: currentColor;
+}
+
+.qam-field > .qam-mirror {
+	position: absolute;
+	inset: 0;
+	z-index: 2;
+	margin: 0;
+	display: flex;
+	align-items: center;
+	overflow: hidden;
+	pointer-events: none;
+	background: transparent;
+	border-color: transparent;
+	color: var(--text);
+}
+
+.qam-mirror-text {
+	flex: 0 0 auto;
+	white-space: pre;
+	min-inline-size: 0;
+}
+
+/* Token spans add only colour — no padding/margin/border — so glyph advances
+ * stay identical to the input underneath. */
+.qam-token {
+	border-radius: 3px;
+}
+
+.qam-token-date {
+	color: var(--qam-date);
+	background: var(--qam-date-bg);
+}
+
+.qam-token-project {
+	color: var(--qam-project);
+	background: var(--qam-project-bg);
+}
+
+.qam-token-label {
+	color: var(--qam-label);
+	background: var(--qam-label-bg);
+}
+
+.qam-token-assignee {
+	color: var(--qam-assignee);
+	background: var(--qam-assignee-bg);
+}
+
+.qam-token-priority {
+	color: var(--qam-priority);
+	background: var(--qam-priority-bg);
+}
+
+.qam-token-repeat {
+	color: var(--qam-repeat);
+	background: var(--qam-repeat-bg);
+}
+
 .sheet-backdrop {
 	position: fixed;
 	inset: var(--mobile-overlay-top-clearance) 0 0 0;
@@ -3567,6 +3552,175 @@ select {
 	justify-content: center;
 	padding: 0 1rem calc(1rem + env(safe-area-inset-bottom));
 	z-index: 20;
+}
+
+/* Large date overlay: fills the space between the masthead and the bottom nav,
+   undismissable by scroll/outside-tap (no backdrop close handler) — closes only
+   via its ✕ / Done. */
+.date-overlay-backdrop {
+	position: fixed;
+	inset: var(--mobile-overlay-top-clearance) 0 var(--bottom-nav-clearance) 0;
+	z-index: 120;
+	display: flex;
+	align-items: stretch;
+	justify-content: center;
+	padding: 1rem var(--shell-gutter, 1rem);
+	background: rgba(9, 8, 8, 0.45);
+}
+
+.date-overlay-panel {
+	display: flex;
+	flex-direction: column;
+	inline-size: min(30rem, 100%);
+	max-block-size: 100%;
+	gap: 0.75rem;
+	padding: 1rem;
+	background: var(--surface);
+	border: 1px solid var(--line);
+	border-radius: var(--radius-lg, var(--radius-md));
+	box-shadow: var(--shadow-overlay);
+}
+
+.date-overlay-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.5rem;
+}
+
+.date-overlay-title {
+	margin: 0;
+	font-size: 1.05rem;
+	font-weight: 700;
+}
+
+.date-overlay-close {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	inline-size: 2rem;
+	block-size: 2rem;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-control);
+	background: var(--surface-field);
+	color: var(--text-dim);
+	font-size: 1rem;
+	cursor: pointer;
+}
+
+.date-overlay-monthnav {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.5rem;
+}
+
+.date-overlay-month {
+	font-size: 1rem;
+	font-weight: 600;
+}
+
+.date-overlay-nav {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	inline-size: 2.2rem;
+	block-size: 2.2rem;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-control);
+	background: var(--surface-field);
+	color: var(--text-dim);
+	font-size: 1.2rem;
+	cursor: pointer;
+}
+
+.date-overlay-weekdays,
+.date-overlay-grid {
+	display: grid;
+	grid-template-columns: repeat(7, minmax(0, 1fr));
+	gap: 0.3rem;
+}
+
+.date-overlay-weekday {
+	text-align: center;
+	font-size: 0.7rem;
+	color: var(--text-faint);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+
+/* The grid grows to fill the panel so the day cells stay large and tappable.
+   On a short viewport the 2.5rem-min rows can't all fit — scroll inside the grid
+   rather than letting cells spill over the pinned footer. */
+.date-overlay-grid {
+	flex: 1 1 auto;
+	grid-auto-rows: minmax(2.5rem, 1fr);
+	min-block-size: 0;
+	overflow: auto;
+}
+
+.date-overlay-day {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	min-block-size: 2.5rem;
+	border: 1px solid transparent;
+	border-radius: var(--radius-control);
+	background: var(--surface-field);
+	color: var(--text);
+	font-size: 0.95rem;
+	font-variant-numeric: tabular-nums;
+	cursor: pointer;
+}
+
+.date-overlay-day.is-muted {
+	color: var(--text-faint);
+	background: transparent;
+}
+
+.date-overlay-day.is-today {
+	border-color: var(--accent);
+}
+
+.date-overlay-day.is-selected {
+	background: var(--accent);
+	color: var(--accent-fg);
+	font-weight: 700;
+}
+
+.date-overlay-actions {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.5rem;
+}
+
+.date-overlay-today {
+	border: 1px solid var(--line);
+	background: var(--surface-field);
+	color: var(--text-dim);
+	border-radius: var(--radius-control);
+	padding-inline: var(--control-padding-inline);
+	padding-block: 0.5rem;
+	font-size: 0.9rem;
+	cursor: pointer;
+}
+
+.date-overlay-done {
+	border: 1px solid var(--accent);
+	background: var(--accent);
+	color: var(--accent-fg);
+	border-radius: var(--radius-control);
+	padding-inline: 1.4rem;
+	padding-block: 0.5rem;
+	font-size: 0.95rem;
+	font-weight: 600;
+	cursor: pointer;
+}
+
+.date-overlay-done:disabled {
+	opacity: 0.5;
+	cursor: default;
 }
 
 .composer-backdrop {
@@ -5905,7 +6059,9 @@ select {
 		min-height: 100dvh;
 		min-inline-size: 0;
 		overflow: hidden;
-		background: var(--surface-pane);
+		/* Match the sidebar/inspector's pitch-black backing (--bg), not the lighter
+		 * --surface-pane, so the desktop center pane isn't a visibly different shade. */
+		background: var(--bg);
 	}
 
 	/* Desktop sidebar — ported to the prototype's .vk-side exactly. */
@@ -6346,6 +6502,9 @@ select {
 		align-items: baseline;
 		gap: 10px;
 		min-inline-size: 0;
+		/* The narrow base rule zeroes inline-size; without this reset the wide
+		 * heading renders 0px wide and the screen title disappears (audit H2). */
+		inline-size: auto;
 		flex: 0 1 auto;
 		margin-inline-end: auto;
 		overflow: hidden;
@@ -7023,22 +7182,22 @@ body.shell-resize-active {
 
 	.kanban-task-frame {
 		padding: 0.5rem 0.56rem 0.52rem 0.46rem;
-		background: var(--bg-soft);
+		background: var(--surface-card);
 		border-radius: var(--radius-md);
 	}
 
 	.chevron-button,
-	.bulk-select-checkbox,
 	.task-toggle-end {
 		inline-size: 1.68rem;
 		block-size: 1.68rem;
 	}
 
-	/* Done checkbox is a deliberately small box — distinctly smaller than the
-	 * chevron/toggle tap targets above, per the flat language. */
-	.checkbox-button {
-		inline-size: 1.25rem;
-		block-size: 1.25rem;
+	/* Done + bulk checkboxes are a deliberately small box — distinctly smaller
+	 * than the chevron/toggle tap targets above, per the flat language. Both read
+	 * the shared token so they stay identical in size. */
+	.checkbox-button,
+	.bulk-select-checkbox {
+		--checkbox-size: 1.25rem;
 	}
 
 	.menu-button {
@@ -7145,11 +7304,13 @@ body.shell-resize-active {
 	align-items: stretch;
 	justify-content: space-between;
 	gap: 0.75rem;
-	padding: 0.62rem 0.72rem;
+	/* Height fits its content — the fixed two-row heading (~3.13rem) plus this
+	   block padding and the border. The old 6rem min forced ~23px of dead space. */
+	padding-block: 0.5rem;
+	padding-inline: 0.72rem;
 	border: 1.5px solid var(--line-ui);
 	border-radius: var(--radius-md);
-	background: var(--bg-soft);
-	min-block-size: 6rem;
+	background: var(--surface-card);
 }
 
 .kanban-lane-heading {
@@ -7252,7 +7413,7 @@ body.shell-resize-active {
 	padding: 0.48rem 0.52rem 0.5rem 0.48rem;
 	border: 1.5px solid var(--line-ui);
 	border-radius: var(--radius-md);
-	background: var(--bg-soft);
+	background: var(--surface-card);
 	min-inline-size: 0;
 }
 
@@ -7290,8 +7451,8 @@ body.shell-resize-active {
 }
 
 .kanban-task-frame .checkbox-button {
-	inline-size: 1.68rem;
-	block-size: 1.68rem;
+	inline-size: var(--checkbox-size);
+	block-size: var(--checkbox-size);
 	align-self: center;
 }
 
@@ -7569,8 +7730,22 @@ body.shell-resize-active {
 }
 
 .compact-date-picker-popover {
+	/* A floating overlay, not a nested card. Detail sections, sheets and dialogs
+	   flatten nested cards by zeroing these tokens (transparent surface, no border,
+	   no shadow) — which left the calendar see-through and unreadable over the task
+	   detail. Re-assert the real, theme-aware sources so the popover stays an opaque
+	   surface wherever it's anchored. No-op outside the flattened scopes. */
+	--surface-pane: var(--surface);
+	--line-ui: var(--hairline);
+	--radius-md: var(--radius-card);
+	--shadow: var(--shadow-overlay);
 	position: absolute;
-	inset-inline-start: 0;
+	/* Hang from the field's right edge so the popover grows inward instead of
+	   spilling off the right viewport edge when the field sits near it. Fields
+	   are full-width or right-aligned everywhere this is used, so this stays
+	   on-screen without per-site overrides. */
+	inset-inline-start: auto;
+	inset-inline-end: 0;
 	inset-block-start: calc(100% + 0.45rem);
 	z-index: 160;
 	inline-size: 14.5rem;
@@ -7653,6 +7828,32 @@ body.shell-resize-active {
 .compact-date-picker-day.is-selected {
 	background: var(--accent-soft);
 	color: var(--accent-strong);
+}
+
+/* Label + native time input on one row. The input must carry min-inline-size:0
+   inside the 1fr track, otherwise its intrinsic min-width (much larger on iOS
+   than Chromium) refuses to shrink and spills past the popover's right edge. */
+.compact-date-picker-time-row {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr);
+	align-items: center;
+	gap: 0.4rem;
+}
+
+.compact-date-picker-time-label {
+	font-size: 0.74rem;
+	color: var(--muted);
+}
+
+.compact-date-picker-time-input {
+	min-inline-size: 0;
+	inline-size: 100%;
+	/* iOS gives a native time input an intrinsic min-width that ignores the grid
+	   track's minmax(0,1fr) clamp, so the control spills past the popover's right
+	   edge. Dropping the native appearance lets the CSS width win; tapping the
+	   field still opens the iOS wheel picker. */
+	appearance: none;
+	-webkit-appearance: none;
 }
 
 .project-gantt-presets {
@@ -8352,4 +8553,796 @@ body.shell-resize-active {
 
 .unsplash-grid-copy strong {
 	font-size: 0.95rem;
+}
+
+/* Calendar (roadmap item 1) — scaffolding shell */
+.calendar-header {
+	display: flex;
+	align-items: center;
+	justify-content: flex-start;
+	gap: var(--control-padding-inline);
+	padding-inline: var(--control-padding-inline);
+	padding-block: var(--control-padding-inline);
+}
+
+/* Day/week: the date controls paint the page's black plane. The day-head row below
+   carries its own matching black backdrop (see .calendar-board-heads), so the two
+   read as one continuous plane that ends at the card's bottom edge. */
+.calendar-timeline-surface .calendar-header {
+	position: relative;
+	/* Above the day-head row (z-index 1) so the day-view date picker's popover,
+	   which overflows downward past the header, isn't painted over by the heads. */
+	z-index: 2;
+	background: var(--bg);
+}
+
+/* Month has no day-head row, but the date controls still get the same black
+   backdrop. Matches day/week (relative, not sticky) so it sits flush against the
+   main header and the grid never bleeds into the glass-bar clearance above it. */
+.surface:not(.calendar-timeline-surface) .calendar-header {
+	position: relative;
+	z-index: 1;
+	background: var(--bg);
+}
+
+.calendar-title {
+	margin: 0;
+	font-size: 1.15rem;
+}
+
+/* The title is the go-to-date control in every zoom: an unboxed button that
+   reads as the heading, with a hover cue so it's discoverably clickable. */
+.calendar-title-button {
+	margin: 0;
+	padding: 0.2rem 0.45rem;
+	border: 0;
+	border-radius: var(--radius-control);
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	text-align: start;
+	cursor: pointer;
+	min-inline-size: 0;
+	flex: 0 1 auto;
+	overflow: hidden;
+	/* Same target height as the nav cluster beside it. */
+	min-block-size: 2.25rem;
+	display: inline-flex;
+	align-items: center;
+}
+
+.calendar-title-button .calendar-title {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+@media (hover: hover) and (pointer: fine) {
+	.calendar-title-button:hover {
+		background: var(--surface-field);
+	}
+}
+
+/* Phone-width header: even the short day form ("Tue 14 Jul", ~92px at 1.15rem)
+   ellipsized between the nav cluster and the zoom segment. Smaller title,
+   tighter padding, and tighter cluster gaps buy the ~25px it needs (audit H7). */
+@media (max-width: 540px) {
+	.calendar-header {
+		gap: 0.4rem;
+	}
+
+	.calendar-title {
+		font-size: 1rem;
+	}
+
+	.calendar-title-button {
+		padding-inline: 0.25rem;
+	}
+}
+
+.calendar-filter-panel {
+	padding-inline: var(--control-padding-inline);
+}
+
+.calendar-nav {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.25rem;
+}
+
+.calendar-nav-button,
+.calendar-today-button {
+	border: 1px solid var(--line);
+	background: var(--surface-card);
+	color: var(--text-dim);
+	border-radius: var(--radius-control);
+	padding-inline: var(--control-padding-inline);
+	padding-block: 0.3rem;
+	font-size: 0.9rem;
+	cursor: pointer;
+	/* Real targets: 36px on desktop, 40px on touch (audit M1/D3). */
+	min-block-size: 2.25rem;
+	min-inline-size: 2.25rem;
+}
+
+.calendar-nav-button {
+	padding-inline: 0.6rem;
+	line-height: 1;
+	font-size: 1.1rem;
+}
+
+/* Zoom segment: always-visible Month | Week | Day (audit D2) — one hairline
+   group on the header plane, active segment filled. Pinned to the header's
+   right edge; single letters below 540px so the header never wraps. */
+.calendar-zoom-segment {
+	display: inline-flex;
+	margin-inline-start: auto;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-control);
+	background: var(--surface-card);
+	overflow: hidden;
+	/* overflow:hidden (corner clipping) zeroes the automatic minimum, letting
+	   flex crush the options below their target size — the title is the only
+	   item meant to shrink. */
+	flex: 0 0 auto;
+}
+
+.calendar-zoom-option {
+	border: 0;
+	background: transparent;
+	color: var(--text-dim);
+	font-size: 0.9rem;
+	padding-inline: 0.7rem;
+	min-block-size: calc(2.25rem - 2px);
+	min-inline-size: 2.25rem;
+	cursor: pointer;
+}
+
+.calendar-zoom-option + .calendar-zoom-option {
+	border-inline-start: 1px solid var(--line);
+}
+
+.calendar-zoom-option.is-active {
+	background: var(--surface-field);
+	color: var(--text);
+}
+
+.calendar-zoom-letter {
+	display: none;
+}
+
+@media (pointer: coarse) {
+	.calendar-nav-button,
+	.calendar-today-button,
+	.calendar-zoom-option {
+		min-block-size: 2.5rem;
+	}
+}
+
+@media (max-width: 540px) {
+	.calendar-zoom-full {
+		display: none;
+	}
+
+	.calendar-zoom-letter {
+		display: inline;
+	}
+}
+
+.calendar-body {
+	display: flex;
+	flex-direction: column;
+	gap: var(--control-padding-inline);
+	padding-inline: var(--calendar-gutter);
+	padding-block-end: var(--control-padding-inline);
+}
+
+.calendar-placeholder {
+	margin: 0;
+	padding-block: 2rem;
+	color: var(--text-faint);
+	align-self: center;
+}
+
+.calendar-month {
+	display: flex;
+	flex-direction: column;
+	flex: 0 0 auto;
+}
+
+.calendar-month-weekdays,
+.calendar-month-grid {
+	display: grid;
+	grid-template-columns: 1.6rem repeat(7, minmax(0, 1fr));
+}
+
+/* Tiny ISO week number in the leading column of each month row. */
+.calendar-weeknum {
+	display: flex;
+	align-items: flex-start;
+	justify-content: center;
+	padding-block: 0.3rem;
+	/* Receding gutter: the page plane, never a grey fill (--surface-field popped
+	   brighter than the cells in dark mode). */
+	background: var(--bg);
+	color: var(--text-faint);
+	font-size: 0.62rem;
+	font-variant-numeric: tabular-nums;
+}
+
+.calendar-weekday {
+	padding-block: 0.35rem;
+	text-align: center;
+	font-size: 0.75rem;
+	color: var(--text-faint);
+	text-transform: uppercase;
+	letter-spacing: 0.03em;
+}
+
+.calendar-month-grid {
+	gap: 1px;
+	background: var(--line);
+	border: 1px solid var(--line);
+	border-radius: var(--radius-control);
+	overflow: hidden;
+}
+
+.calendar-day-cell {
+	display: flex;
+	flex-direction: column;
+	gap: 0.2rem;
+	align-items: stretch;
+	min-block-size: 5.5rem;
+	padding: 0.3rem;
+	border: 0;
+	/* The day cell is a black plane (like the timeline track); the task pills on it
+	   are the raised --surface-card cards. */
+	background: var(--bg);
+	color: var(--text);
+	text-align: start;
+	cursor: pointer;
+	font: inherit;
+}
+
+.calendar-day-cell.is-outside-month {
+	background: var(--bg);
+	color: var(--text-faint);
+}
+
+.calendar-day-cell.is-selected {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+
+/* Drag a selected-day-list task onto a day: the hovered cell highlights. */
+.calendar-day-cell.is-drop-target {
+	outline: 2px dashed var(--accent);
+	outline-offset: -2px;
+	background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.calendar-day-number {
+	font-size: 0.8rem;
+	font-variant-numeric: tabular-nums;
+	align-self: flex-end;
+}
+
+.calendar-day-cell.is-today .calendar-day-number {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-inline-size: 1.4rem;
+	block-size: 1.4rem;
+	border-radius: 999px;
+	background: var(--accent);
+	color: var(--accent-fg);
+}
+
+.calendar-day-tasks {
+	display: flex;
+	flex-direction: column;
+	gap: 0.15rem;
+	min-block-size: 0;
+}
+
+.calendar-day-task {
+	font-size: 0.72rem;
+	line-height: 1.25;
+	padding-inline: 0.3rem;
+	padding-block: 0.05rem;
+	border-radius: var(--radius-badge);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.calendar-day-task.is-all-day {
+	background: var(--accent);
+	color: var(--accent-fg);
+}
+
+.calendar-day-task.is-timed {
+	background: var(--surface-card);
+	color: var(--text-dim);
+	border-inline-start: 2px solid var(--accent);
+	border-radius: 0 var(--radius-badge) var(--radius-badge) 0;
+}
+
+.calendar-day-task.is-done {
+	text-decoration: line-through;
+	color: var(--done-green);
+}
+
+.calendar-day-more {
+	font-size: 0.68rem;
+	color: var(--text-faint);
+	padding-inline: 0.3rem;
+}
+
+.calendar-day-list {
+	flex: 0 0 auto;
+}
+
+.calendar-day-list-header {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 0.5rem;
+	margin-bottom: 0.5rem;
+}
+
+.calendar-day-list-title {
+	margin: 0;
+	font-size: 0.95rem;
+	color: var(--text-dim);
+}
+
+.calendar-day-add {
+	flex: 0 0 auto;
+	padding: 0.2rem 0.6rem;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-control);
+	background: var(--surface-field);
+	color: var(--accent);
+	font-size: 0.85rem;
+	font-weight: 600;
+	cursor: pointer;
+	/* Usable target (audit D4) — the old 25px height was hard to hit. */
+	min-block-size: 2rem;
+}
+
+.calendar-day-add:active {
+	background: var(--surface);
+}
+
+.calendar-day-list-actions {
+	display: inline-flex;
+	flex: 0 0 auto;
+	align-items: center;
+	gap: 0.35rem;
+}
+
+.calendar-day-list-empty {
+	margin: 0;
+	color: var(--text-faint);
+	font-size: 0.9rem;
+}
+
+/* Empty states carry the primary action (audit D6) — one tap from "nothing
+   here" to the composer, instead of hunting for the + elsewhere. The month
+   day list opts out: its header's "+ Add task" sits right there already. */
+.empty-state-add {
+	flex: 0 0 auto;
+	padding: 0.2rem 0.7rem;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-control);
+	background: var(--surface-field);
+	color: var(--accent);
+	font-size: 0.85rem;
+	font-weight: 600;
+	cursor: pointer;
+	min-block-size: 2rem;
+}
+
+.empty-state .empty-state-add {
+	margin-inline-start: 0.6rem;
+}
+
+/* Week / Day timeline, rendered as a Kanban board: each day is a Kanban lane
+   (header + all-day card band + an hour-rail timeline). Lanes scroll like Kanban. */
+.calendar-board {
+	--calendar-hour-height: 3.5rem;
+	--calendar-gutter-width: 2.6rem;
+}
+
+/* Week/Day: the controls + day-head row stay put while only the timeline scrolls.
+   The board fills the surface and scrolls internally (2D: days across, hours
+   down) so the page itself doesn't move — the header row pins via sticky. */
+/* Both calendar zooms pin the date controls and scroll only the content below:
+   the surface-content is a non-scrolling flex column (timeline scrolls its lanes,
+   month scrolls its body — see below). */
+.calendar-surface .surface-content {
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	/* .shell-wide .surface-content sets align-items:start for its grid layout; in
+	   this flex column that is the inline axis, which shrink-wraps the header and
+	   body to content width (collapsing the board + month grid). Fill the pane. */
+	align-items: stretch;
+}
+
+/* The timeline surface is not the scroller — only .calendar-board-lanes scrolls —
+   so it must not inherit the narrow-shell scroller's reserve of
+   clearance + --safe-bottom + scroll-reserve. The footer pins to the bottom
+   rounding without --safe-bottom, so that extra reserve only lifted the timeline
+   off the footer and opened a black gap above it. Reserve just the footer
+   footprint (this 4-class selector out-specifies the base scroller rule). */
+.shell:not(.shell-wide) .calendar-surface .surface-content {
+	padding-block-end: var(--bottom-nav-clearance);
+}
+
+.calendar-timeline-surface .calendar-body {
+	flex: 1 1 auto;
+	min-block-size: 0;
+}
+
+/* Per-view width ceilings: a single day column or a month grid stretched across
+   an ultrawide pane is unreadable. Cap and center day + month (header included,
+   so the date controls stay over the content). Auto cross-axis margins would
+   normally cancel the stretch, so pin inline-size to 100% under the cap. Week
+   stays uncapped — it needs every pixel for its seven columns. */
+.calendar-surface[data-calendar-view='day'] .calendar-header,
+.calendar-surface[data-calendar-view='day'] .calendar-body {
+	inline-size: 100%;
+	max-inline-size: 56rem;
+	margin-inline: auto;
+}
+
+.calendar-surface[data-calendar-view='month'] .calendar-header,
+.calendar-surface[data-calendar-view='month'] .calendar-body {
+	inline-size: 100%;
+	max-inline-size: 80rem;
+	margin-inline: auto;
+}
+
+/* Month: the date controls stay pinned (flex column above) and the grid +
+   selected-day list scroll inside the body, mirroring the timeline's pinned head
+   over a scrolling lane. */
+.calendar-surface:not(.calendar-timeline-surface) .calendar-body {
+	flex: 1 1 auto;
+	min-block-size: 0;
+	overflow-y: auto;
+}
+
+/* The board stacks the day-head row over the scrolling timeline. The head row is
+   grouped with the date controls — it never scrolls vertically — so the day cards
+   sit on the header's black plane, not on the timeline. Only the lanes scroll. */
+.calendar-timeline-surface .calendar-board {
+	block-size: 100%;
+	min-block-size: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+.calendar-timeline-surface .calendar-board-lanes {
+	flex: 1 1 auto;
+	min-block-size: 0;
+	overflow: auto;
+}
+
+.calendar-board-lanes {
+	align-items: flex-start;
+}
+
+/* The day-head row mirrors the lanes' columns (same widths + gap) and tracks their
+   horizontal scroll, but never scrolls on its own — it's part of the header group.
+   It carries the black backdrop that continues the date controls' plane and stops
+   exactly at the card's bottom edge (no padding below). */
+.calendar-board-heads {
+	display: flex;
+	flex: 0 0 auto;
+	gap: 1rem;
+	overflow: hidden;
+	align-items: flex-start;
+	background: var(--bg);
+	/* The lanes below are a scroll container (its own paint layer); without an
+	   explicit stacking context the head row paints under it and only its top
+	   border shows. Lift the heads above the timeline plane. */
+	position: relative;
+	z-index: 1;
+}
+
+.calendar-board-lane {
+	gap: 0.6rem;
+}
+
+.calendar-board[data-calendar-zoom='day'] .calendar-board-lane,
+.shell-wide .calendar-board[data-calendar-zoom='day'] .calendar-board-lane {
+	inline-size: 100%;
+	min-inline-size: 0;
+	max-inline-size: none;
+}
+
+/* Day view is a single full-width column: it must never scroll sideways. */
+.calendar-board[data-calendar-zoom='day'] .calendar-board-lanes {
+	overflow-x: clip;
+}
+
+/* Week day-paging is JS-driven (see TimeGrid pageWeekDay). touch-action:pan-y lets
+   the browser scroll the hours natively and axis-lock, while refusing native
+   horizontal panning — so a vertical swipe never drifts the week sideways and only
+   a distinct horizontal swipe steps a day. overflow-x stays auto (NOT hidden): iOS
+   clamps scrollLeft to 0 on a hidden axis, which flopped paging back to day one. */
+.calendar-board[data-calendar-zoom='week'] .calendar-board-lanes {
+	overflow-x: auto;
+	touch-action: pan-y;
+	scroll-padding-inline: var(--calendar-gutter);
+	scroll-behavior: smooth;
+}
+
+/* Wide shell: week lanes flex to share the pane (audit D1) and only
+   overflow-scroll below the floor. The floor is generous — 15rem — because
+   readable task cards beat cramming all seven days (user call 2026-07-07):
+   ultrawide monitors still fit the full week, laptops scroll sideways. Heads
+   get identical sizing so the rows stay column-aligned. The narrow shell
+   keeps the fixed-width day-pager (that pattern is right on touch).
+   Overrides .shell-wide .kanban-lane's fixed 18rem. */
+.shell-wide .calendar-board[data-calendar-zoom='week'] .calendar-board-lanes,
+.shell-wide .calendar-board[data-calendar-zoom='week'] .calendar-board-heads {
+	gap: 0.5rem;
+}
+
+.shell-wide .calendar-board[data-calendar-zoom='week'] .calendar-board-lane,
+.shell-wide .calendar-board[data-calendar-zoom='week'] .calendar-board-heads > .calendar-board-head {
+	flex: 1 1 0;
+	inline-size: auto;
+	min-inline-size: 15rem;
+	max-inline-size: none;
+}
+
+/* Each day card matches the width of the timeline column beneath it so the head
+   row and the lanes stay aligned as they scroll together (week). */
+.calendar-board-heads > .calendar-board-head {
+	flex: 0 0 auto;
+	inline-size: min(84vw, 22rem);
+	min-inline-size: min(84vw, 22rem);
+}
+
+.shell-wide .calendar-board-heads > .calendar-board-head {
+	inline-size: 18rem;
+	min-inline-size: 18rem;
+}
+
+.calendar-board[data-calendar-zoom='day'] .calendar-board-heads > .calendar-board-head {
+	inline-size: 100%;
+	min-inline-size: 0;
+}
+
+.calendar-board-head {
+	cursor: default;
+	font: inherit;
+	color: inherit;
+	text-align: start;
+	/* The day head is a card on the black heads plane; the kanban lane-head's
+	   --bg-soft fill read too bright, so take the shared card token. */
+	background: var(--surface-card);
+	/* Compact day card — the kanban lane head is sized for whole columns of work;
+	   here it only carries a weekday, a date and a count. */
+	min-block-size: 0;
+	align-items: center;
+	padding-block: 0.3rem;
+}
+
+.calendar-board-head .kanban-lane-heading {
+	grid-template-rows: auto;
+	grid-auto-flow: column;
+	align-items: center;
+	gap: 0.4rem;
+}
+
+button.calendar-board-head {
+	cursor: pointer;
+}
+
+.calendar-board-head.is-today {
+	border-color: var(--accent);
+	/* Opaque accent-tinted surface, not a translucent wash: the head sits on the
+	   header's bare plane, so a see-through fill reads as no card at all. */
+	background: color-mix(in srgb, var(--accent) 14%, var(--surface-card));
+}
+
+.calendar-board-date {
+	font-size: 1.05rem;
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+	color: var(--text);
+}
+
+.calendar-board-head.is-today .calendar-board-date {
+	color: var(--accent);
+}
+
+.calendar-board-allday {
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+}
+
+.calendar-board-timeline {
+	display: grid;
+	grid-template-columns: var(--calendar-gutter-width) minmax(0, 1fr);
+	border: 1.5px solid var(--line-ui);
+	border-radius: var(--radius-md);
+	/* Page plane (--bg), not a grey fill: the cards are --surface-card, so a
+	   --bg-soft plane here is lighter than its own cards (inverted). On --bg the
+	   cards read as raised, matching the project board. */
+	background: var(--bg);
+	overflow: hidden;
+}
+
+.calendar-board-gutter {
+	display: flex;
+	flex-direction: column;
+	border-inline-end: 1px solid var(--line);
+}
+
+.calendar-board-hour-label {
+	block-size: var(--calendar-hour-height);
+	padding-inline-end: 0.3rem;
+	text-align: end;
+	font-size: 0.6rem;
+	font-variant-numeric: tabular-nums;
+	color: var(--text-faint);
+	transform: translateY(-0.5em);
+}
+
+.calendar-board-track {
+	position: relative;
+}
+
+.calendar-board-slot {
+	display: block;
+	inline-size: 100%;
+	block-size: var(--calendar-hour-height);
+	margin: 0;
+	padding: 0;
+	border: 0;
+	border-block-start: 1px solid var(--line);
+	background: transparent;
+	cursor: pointer;
+	font: inherit;
+}
+
+.calendar-board-slot:first-child {
+	border-block-start: 0;
+}
+
+.calendar-board-slot:active {
+	background: var(--surface-field);
+}
+
+/* Desktop affordance for click-to-add (audit D5): hovering an empty hour
+   shows the target instead of keeping it secret. Fine pointers only, so no
+   sticky hover on touch. */
+@media (hover: hover) and (pointer: fine) {
+	.calendar-board-slot:hover {
+		background: var(--surface-field);
+	}
+}
+
+/* Timed card: a positioned wrapper around the shared kanban task frame. The
+   frame keeps the board's look; min-height keeps short durations usable. */
+.calendar-board-card {
+	position: absolute;
+	z-index: 1;
+	min-block-size: 3rem;
+	overflow: hidden;
+}
+
+.calendar-board-card .kanban-task-frame {
+	block-size: 100%;
+	align-items: start;
+	background: var(--surface-card);
+}
+
+/* A tapped card pops to full width on top of the cascade; an accent ring marks it
+   as focused (flat design, so no elevation shadow). */
+.calendar-board-card.is-focused .kanban-task-frame {
+	outline: 1.5px solid var(--accent);
+	outline-offset: -1.5px;
+}
+
+/* Compact chip for an overlapped (narrow) card: small-font name + time only, no
+   controls — they reappear when the card is tapped to full width. Mirrors the
+   kanban frame's border/surface so it reads as the same card, shrunk. */
+.calendar-board-chip {
+	display: flex;
+	flex-direction: column;
+	gap: 0.05rem;
+	block-size: 100%;
+	padding: 0.24rem 0.3rem;
+	border: 1.5px solid var(--line-ui);
+	border-radius: var(--radius-md);
+	background: var(--surface-card);
+	overflow: hidden;
+}
+
+.calendar-board-chip-title {
+	font-size: 0.68rem;
+	line-height: 1.15;
+	font-weight: 500;
+	color: var(--text);
+	overflow: hidden;
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+}
+
+.calendar-board-chip-time {
+	font-size: 0.62rem;
+	color: var(--text-faint);
+}
+
+.calendar-board-chip.is-done .calendar-board-chip-title {
+	text-decoration: line-through;
+	color: var(--text-faint);
+}
+
+/* Label colour dots under the time — glanceable in the cramped column; the full
+   label text shows once the card is tapped to its frame. Clipped by the chip's
+   overflow when a short card has no room. */
+.calendar-board-chip-labels {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.15rem;
+	margin-block-start: 0.1rem;
+}
+
+.calendar-board-chip-label {
+	inline-size: 0.5rem;
+	block-size: 0.5rem;
+	border-radius: 0.15rem;
+	flex: 0 0 auto;
+}
+
+/* All-day tasks reuse the kanban frame at natural height. */
+.calendar-board-allday-item .kanban-task-frame {
+	background: var(--surface-card);
+}
+
+/* Drag-to-reschedule grips. The handle starts a move; edge zones resize spans.
+   touch-action:none keeps the gesture from scrolling the lane on touch. */
+.calendar-board-grab {
+	cursor: grab;
+	touch-action: none;
+}
+
+.calendar-board-grab:active {
+	cursor: grabbing;
+}
+
+.calendar-board-resize {
+	position: absolute;
+	inset-inline: 0;
+	z-index: 3;
+	block-size: 0.5rem;
+	cursor: ns-resize;
+	touch-action: none;
+}
+
+.calendar-board-resize.is-start {
+	inset-block-start: 0;
+}
+
+.calendar-board-resize.is-end {
+	inset-block-end: 0;
+}
+
+.calendar-now-line {
+	position: absolute;
+	inset-inline: 0;
+	z-index: 2;
+	block-size: 0;
+	border-block-start: 2px solid var(--danger);
+	pointer-events: none;
 }

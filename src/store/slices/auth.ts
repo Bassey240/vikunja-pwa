@@ -17,6 +17,12 @@ import {storageKeys} from '@/storageKeys'
 import {clearLegacyUiState, loadJson, saveJson, saveNumber} from '@/utils/storage'
 import type {StateCreator} from 'zustand'
 import type {AppStore} from '../index'
+import {
+	type LoadBackoffState,
+	canAttemptLoad,
+	initialLoadBackoff,
+	recordLoadFailure,
+} from '../load-backoff'
 import {persistOfflineBrowseSnapshot} from '../offline-browse-cache'
 import {clearOfflineSnapshot, loadOfflineSnapshot, mergeOfflineSnapshot} from '../offline-snapshot'
 import {loadDefaultDesktopViewKind, loadDefaultMobileViewKind} from '../view-selections'
@@ -435,6 +441,7 @@ export interface AuthSlice {
 	accountDeletionNotice: string | null
 	accountSessionsLoading: boolean
 	accountSessionsLoaded: boolean
+	accountSessionsLoadBackoff: LoadBackoffState
 	accountSessions: Session[]
 	passwordChangeSubmitting: boolean
 	changePasswordForm: ChangePasswordForm
@@ -478,7 +485,7 @@ export interface AuthSlice {
 	disconnectAccount: () => Promise<boolean>
 	logoutAccount: () => Promise<boolean>
 	restoreLegacyFallback: () => Promise<boolean>
-	loadAccountSessions: () => Promise<void>
+	loadAccountSessions: (options?: {force?: boolean}) => Promise<void>
 	revokeAccountSession: (sessionId: string) => Promise<boolean>
 	loadTimezoneOptions: () => Promise<void>
 	updateTimezone: (timezone: string) => Promise<boolean>
@@ -529,6 +536,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 	accountDeletionNotice: null,
 	accountSessionsLoading: false,
 	accountSessionsLoaded: false,
+	accountSessionsLoadBackoff: initialLoadBackoff,
 	accountSessions: [],
 	passwordChangeSubmitting: false,
 	changePasswordForm: defaultChangePasswordForm,
@@ -704,6 +712,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 			defaultProjectId: null,
 			accountSessionsLoading: false,
 			accountSessionsLoaded: false,
+			accountSessionsLoadBackoff: initialLoadBackoff,
 			accountSessions: [],
 				passwordChangeSubmitting: false,
 				changePasswordForm: defaultChangePasswordForm,
@@ -965,14 +974,22 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 		}
 	},
 
-	async loadAccountSessions() {
+	async loadAccountSessions({force = false} = {}) {
 		const account = get().account
 		if (!get().connected || !account?.sessionsSupported) {
 			set({
 				accountSessions: [],
 				accountSessionsLoading: false,
 				accountSessionsLoaded: false,
+				accountSessionsLoadBackoff: initialLoadBackoff,
 			})
+			return
+		}
+
+		// The backoff gate must stay ahead of any state write: the settings
+		// effect re-fires on every accountSessionsLoading flip, so an ungated
+		// failure loops hot.
+		if (!force && (get().accountSessionsLoading || get().accountSessionsLoaded || !canAttemptLoad(get().accountSessionsLoadBackoff))) {
 			return
 		}
 
@@ -983,9 +1000,23 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 			set({
 				accountSessions: payload.sessions || [],
 				accountSessionsLoaded: true,
+				accountSessionsLoadBackoff: initialLoadBackoff,
 			})
 		} catch (error) {
-			set({error: formatError(error as Error)})
+			const statusCode = (error as ApiError).statusCode
+			const message = formatError(error as Error)
+			set({
+				error: message,
+				accountSessionsLoadBackoff: recordLoadFailure(get().accountSessionsLoadBackoff, statusCode),
+			})
+			if (statusCode === 401) {
+				// Reuses the session-expiry pathway: disconnects and surfaces
+				// the sign-in-again error when the session is actually dead.
+				await get().loadCurrentUser()
+				if (get().connected && !get().error) {
+					set({error: message})
+				}
+			}
 		} finally {
 			set({accountSessionsLoading: false})
 		}
@@ -1004,7 +1035,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 			await api<{ok: boolean}>(`/api/session/sessions/${encodeURIComponent(sessionId)}`, {
 				method: 'DELETE',
 			})
-			await get().loadAccountSessions()
+			await get().loadAccountSessions({force: true})
 			return true
 		} catch (error) {
 			set({error: formatError(error as Error)})

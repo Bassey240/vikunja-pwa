@@ -35,6 +35,7 @@ export interface TaskComposersSlice {
 		projectId?: number | null
 		placement?: 'sheet' | 'center' | 'project-preview'
 		defaultDueToday?: boolean
+		defaultDueDate?: string | null
 		initialTitle?: string
 	}) => void
 	consumeComposerInitialTitle: () => string | null
@@ -70,14 +71,16 @@ export const createTaskComposersSlice: StateCreator<AppStore, [], [], TaskCompos
 		projectId = null,
 		placement = 'sheet',
 		defaultDueToday = false,
+		defaultDueDate = null,
 		initialTitle = undefined,
 	} = {}) {
 		const composerProjectId = projectId || getCurrentComposeProjectId(get())
 		const nextParentTaskId = parentTaskId ?? getCurrentComposeParentTaskId(get())
-		const composerDueDate =
-			!nextParentTaskId && (defaultDueToday || shouldDefaultComposeToToday(get(), nextParentTaskId))
+		const composerDueDate = nextParentTaskId
+			? null
+			: defaultDueDate ?? (defaultDueToday || shouldDefaultComposeToToday(get(), nextParentTaskId)
 				? getTodayDueDateIso()
-				: null
+				: null)
 		set({
 			rootComposerOpen: true,
 			rootComposerPlacement: placement,

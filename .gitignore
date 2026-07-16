@@ -24,3 +24,9 @@ deploy/*
 
 # Prototype/design scratch — not part of the app
 /Vikunja PWA CSS re-design/
+
+# Local dev/test secrets — never committed
+.dev-test-token
+.env.dev-preview
+
+build-info.json

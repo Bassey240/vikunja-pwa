@@ -8,6 +8,7 @@ interface TaskCollectionsLookup {
 	todayTasks: Task[]
 	inboxTasks: Task[]
 	upcomingTasks: Task[]
+	calendarTasks?: Task[]
 	searchTasks: Task[]
 	savedFilterTasks: Task[]
 	projectPreviewTasksById: Record<number, Task[]>
@@ -138,6 +139,12 @@ export function isSameListManualTaskReorderAllowed({
 }) {
 	if (screen === 'tasks' && activeProjectViewKind === 'kanban') {
 		return true
+	}
+
+	// The calendar's selected-day list is date-sorted; an in-list drag there is a
+	// date move onto a day cell, never a position reorder.
+	if (screen === 'calendar') {
+		return false
 	}
 
 	const activeSortBy = screen === 'projects'
@@ -324,6 +331,7 @@ export function findTaskInAnyContext(taskId: number, collections: TaskCollection
 		collections.todayTasks,
 		collections.inboxTasks,
 		collections.upcomingTasks,
+		collections.calendarTasks ?? [],
 		collections.searchTasks,
 		collections.savedFilterTasks,
 	]) {

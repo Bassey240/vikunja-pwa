@@ -104,7 +104,7 @@ export const defaultProjectFilters: ProjectFilters = {
 }
 
 export function getTaskFilterUiConfig(screen: Screen) {
-	const allowProject = ['today', 'inbox', 'upcoming'].includes(screen)
+	const allowProject = ['today', 'inbox', 'upcoming', 'calendar'].includes(screen)
 	return {
 		enabled: allowProject || screen === 'tasks',
 		allowProject,

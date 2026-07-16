@@ -1,3 +1,4 @@
+import MoveToDateField from './MoveToDateField'
 import SubtaskComposer from './SubtaskComposer'
 import TaskCard from './TaskCard'
 import TaskMenu from './TaskMenu'
@@ -12,9 +13,10 @@ import {
 	type TaskMatcher,
 } from '@/store/selectors'
 import type {Task} from '@/types'
+import {ScreenActiveContext} from '@/components/layout/ScreenActiveContext'
 import {isTaskDropTraceTarget, markTaskDropTrace} from '@/utils/dragPerf'
 import {getMenuAnchor} from '@/utils/menuPosition'
-import {type CSSProperties, useLayoutEffect, useRef} from 'react'
+import {type CSSProperties, useContext, useLayoutEffect, useRef, useState} from 'react'
 
 interface TaskBranchProps {
 	task: Task
@@ -25,6 +27,8 @@ interface TaskBranchProps {
 	matcher?: TaskMatcher
 	sortBy?: TaskSortBy
 	bulkMode?: boolean
+	flat?: boolean
+	onMoveToDate?: (task: Task) => void
 	focusProjectIdOverride?: number | null
 }
 
@@ -37,6 +41,8 @@ export default function TaskBranch({
 	matcher,
 	sortBy = 'position',
 	bulkMode = false,
+	flat = false,
+	onMoveToDate,
 	focusProjectIdOverride = null,
 }: TaskBranchProps) {
 	const isWideLayout = useWideLayout()
@@ -63,14 +69,21 @@ export default function TaskBranch({
 	const closeInlineSubtaskComposer = useAppStore(state => state.closeInlineSubtaskComposer)
 	const submitSubtask = useAppStore(state => state.submitSubtask)
 	const rowRef = useRef<HTMLDivElement | null>(null)
+	const [moveDateActive, setMoveDateActive] = useState(false)
+	// Kept-warm hidden screens must not render this task's menu/picker (they'd
+	// duplicate the active screen's body-level portal).
+	const screenActive = useContext(ScreenActiveContext)
 
-	const children = getSubtasksFor(task, taskList, matcher, sortBy)
+	const children = flat ? [] : getSubtasksFor(task, taskList, matcher, sortBy)
 	const selfMatches = matcher ? matcher(task) : !task.done
 	const expanded = expandedTaskIds.has(task.id)
-	const menuOpen = openMenu?.kind === 'task' && openMenu.id === task.id
+	const menuOpen = screenActive && openMenu?.kind === 'task' && openMenu.id === task.id
 	const toggling = togglingTaskIds.has(task.id)
 	const recentlyCompleted = recentlyCompletedTaskIds.has(task.id)
-	const childCount = children.length
+	// Flat rows never expand, so the count comes from the task graph (total
+	// subtasks) rather than what's in this list — open the task to see them.
+	const childCount = flat ? (task.related_tasks?.subtask?.length ?? 0) : children.length
+	const showToggle = !flat && childCount > 0
 	const reorderable = canTaskUsePositionReorder(task, sortBy)
 	const structuralDragEnabled = canTaskUseStructuralDrag(task)
 	const subtaskComposerOpen = activeSubtaskParentId === task.id && activeSubtaskSource === 'list'
@@ -81,7 +94,7 @@ export default function TaskBranch({
 		screen === 'projects' ||
 		screen === 'today' ||
 		(screen === 'inbox' && inboxProjectId === task.project_id)
-	const showChildrenWrap = subtaskComposerOpen || (expanded && children.length > 0)
+	const showChildrenWrap = !flat && (subtaskComposerOpen || (expanded && children.length > 0))
 	const childDepth = selfMatches ? depth + 1 : depth
 
 	useLayoutEffect(() => {
@@ -140,8 +153,8 @@ export default function TaskBranch({
 						.join(' ')}
 					data-task-row-id={task.id}
 				>
-					<div className={`task-leading ${childCount > 0 ? 'has-toggle' : 'has-no-toggle'}`}>
-						{childCount > 0 ? (
+					<div className={`task-leading ${showToggle ? 'has-toggle' : 'has-no-toggle'}`}>
+						{showToggle ? (
 							<button
 								className="task-toggle-end"
 								data-action="toggle-task"
@@ -235,10 +248,27 @@ export default function TaskBranch({
 						setOpenMenu(null)
 						openInlineSubtaskComposer(task.id, 'list')
 					}}
+					extraItems={[{
+						action: 'move-task-to-date',
+						label: 'Move to date',
+						onClick: () => {
+							setOpenMenu(null)
+							// Calendar passes onMoveToDate to host its large date overlay;
+							// elsewhere fall back to an inline picker on the row.
+							if (onMoveToDate) {
+								onMoveToDate(task)
+							} else {
+								setMoveDateActive(true)
+							}
+						},
+					}]}
 					onEdit={() => openTaskDetail(task.id)}
 					onDuplicate={() => void duplicateTask(task.id)}
 					onDelete={() => void deleteTask(task.id)}
 				/>
+			) : null}
+			{moveDateActive && screenActive ? (
+				<MoveToDateField task={task} onClose={() => setMoveDateActive(false)} />
 			) : null}
 			{showChildrenWrap ? (
 				<div className="task-children-wrap">

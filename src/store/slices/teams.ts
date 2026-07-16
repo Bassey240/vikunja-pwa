@@ -1,9 +1,15 @@
-import {api} from '@/api'
+import {api, type ApiError} from '@/api'
 import type {Team} from '@/types'
 import {formatError} from '@/utils/formatting'
 import {canManageTeam, canManageTeamMember} from '@/utils/settings-helpers'
 import type {StateCreator} from 'zustand'
 import type {AppStore} from '../index'
+import {
+	type LoadBackoffState,
+	canAttemptLoad,
+	initialLoadBackoff,
+	recordLoadFailure,
+} from '../load-backoff'
 
 interface TeamsPayload {
 	teams?: Team[]
@@ -27,6 +33,7 @@ export interface TeamsSlice {
 	teams: Team[]
 	teamsLoaded: boolean
 	teamsLoading: boolean
+	teamsLoadBackoff: LoadBackoffState
 	teamSubmitting: boolean
 	loadTeams: (options?: {force?: boolean}) => Promise<void>
 	createTeam: (payload: {name: string; description: string; isPublic?: boolean}) => Promise<boolean>
@@ -42,6 +49,7 @@ export const createTeamsSlice: StateCreator<AppStore, [], [], TeamsSlice> = (set
 	teams: [],
 	teamsLoaded: false,
 	teamsLoading: false,
+	teamsLoadBackoff: initialLoadBackoff,
 	teamSubmitting: false,
 
 	async loadTeams({force = false} = {}) {
@@ -50,11 +58,14 @@ export const createTeamsSlice: StateCreator<AppStore, [], [], TeamsSlice> = (set
 				teams: [],
 				teamsLoaded: false,
 				teamsLoading: false,
+				teamsLoadBackoff: initialLoadBackoff,
 			})
 			return
 		}
 
-		if (!force && (get().teamsLoading || get().teamsLoaded)) {
+		// The backoff gate must stay ahead of any state write: settings effects
+		// re-fire on every teamsLoading flip, so an ungated failure loops hot.
+		if (!force && (get().teamsLoading || get().teamsLoaded || !canAttemptLoad(get().teamsLoadBackoff))) {
 			return
 		}
 
@@ -87,9 +98,23 @@ export const createTeamsSlice: StateCreator<AppStore, [], [], TeamsSlice> = (set
 					.slice()
 					.sort((left, right) => `${left.name || ''}`.localeCompare(`${right.name || ''}`)),
 				teamsLoaded: true,
+				teamsLoadBackoff: initialLoadBackoff,
 			})
 		} catch (error) {
-			set({error: formatError(error as Error)})
+			const statusCode = (error as ApiError).statusCode
+			const message = formatError(error as Error)
+			set({
+				error: message,
+				teamsLoadBackoff: recordLoadFailure(get().teamsLoadBackoff, statusCode),
+			})
+			if (statusCode === 401) {
+				// Reuses the session-expiry pathway: disconnects and surfaces
+				// the sign-in-again error when the session is actually dead.
+				await get().loadCurrentUser()
+				if (get().connected && !get().error) {
+					set({error: message})
+				}
+			}
 		} finally {
 			set({teamsLoading: false})
 		}
@@ -294,6 +319,7 @@ export const createTeamsSlice: StateCreator<AppStore, [], [], TeamsSlice> = (set
 			teams: [],
 			teamsLoaded: false,
 			teamsLoading: false,
+			teamsLoadBackoff: initialLoadBackoff,
 			teamSubmitting: false,
 		})
 	},

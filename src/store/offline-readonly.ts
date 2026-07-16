@@ -8,6 +8,8 @@ const QUEUEABLE_ACTIONS = new Set([
 	'deleteTask',
 	'moveTask',
 	'duplicateTask',
+	'rescheduleCalendarTask',
+	'moveTaskToDay',
 	'saveTaskDetailPatch',
 	'submitRootTask',
 	'submitSubtask',

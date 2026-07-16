@@ -1,4 +1,4 @@
-import {addDays} from '@/utils/date-helpers'
+import {addDays} from './date-helpers.ts'
 
 const WEEKDAY_INDEX: Record<string, number> = {
 	sun: 0,
@@ -57,6 +57,25 @@ const REPEAT_UNIT_SECONDS: Record<string, number> = {
 }
 
 type QuickAddPrefix = '*' | '+' | '@'
+
+const MONTH_NAME_GROUP =
+	'jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?'
+
+const SIMPLE_DATE_KEYWORDS = ['today', 'tonight', 'tomorrow', 'next week', 'next month', 'end of month'] as const
+
+const PRIORITY_SOURCE = '(^|\\s)!([1-5])(?=$|\\s)'
+const REPEAT_SOURCE =
+	'(^|\\s)((every|each)\\s+((\\d+|one|two|three|four|five|six|seven|eight|nine|ten)\\s+)?(hours?|days?|weeks?|months?|years?)|daily|weekly|monthly|yearly)(?=$|\\s)'
+const IN_DATE_SOURCE = '(^|\\s)(in\\s+(\\d+)\\s+(hours?|days?|weeks?|months?))(?=$|\\s)'
+const WEEKDAY_SOURCE =
+	'(^|\\s)(next\\s+)?(monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|sunday|sun)(?=$|\\s)'
+const NUMERIC_DATE_SOURCE =
+	'(^|\\s)((\\d{4})-(\\d{2})-(\\d{2})|(\\d{1,2})\\/(\\d{1,2})(?:\\/(\\d{2,4}))?|(\\d{1,2})\\.(\\d{1,2})(?:\\.(\\d{2,4}))?)(?=$|\\s)'
+const MONTH_NAME_SOURCE = `(^|\\s)((\\d{1,2})\\s+(${MONTH_NAME_GROUP})|(${MONTH_NAME_GROUP})\\s+(\\d{1,2}))(?=$|\\s)`
+
+function prefixedSource(prefix: QuickAddPrefix) {
+	return `(^|\\s)\\${prefix}(?:"([^"]+)"|'([^']+)'|([^\\s]+))`
+}
 
 export interface QuickAddMagicResult {
 	title: string
@@ -135,7 +154,7 @@ function extractSinglePrefixedItem(text: string, prefix: QuickAddPrefix) {
 }
 
 function matchPrefixedItem(text: string, prefix: QuickAddPrefix) {
-	const matcher = new RegExp(`(^|\\s)\\${prefix}(?:"([^"]+)"|'([^']+)'|([^\\s]+))`, 'i')
+	const matcher = new RegExp(prefixedSource(prefix), 'i')
 	const match = matcher.exec(text)
 	if (!match) {
 		return null
@@ -158,7 +177,7 @@ function matchPrefixedItem(text: string, prefix: QuickAddPrefix) {
 }
 
 function extractPriority(text: string) {
-	const match = /(^|\s)!([1-5])(?=$|\s)/.exec(text)
+	const match = new RegExp(PRIORITY_SOURCE).exec(text)
 	if (!match) {
 		return {
 			value: null,
@@ -175,7 +194,7 @@ function extractPriority(text: string) {
 }
 
 function extractRepeat(text: string) {
-	const match = /(^|\s)((every|each)\s+((\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+)?(hours?|days?|weeks?|months?|years?)|daily|weekly|monthly|yearly)(?=$|\s)/i.exec(text)
+	const match = new RegExp(REPEAT_SOURCE, 'i').exec(text)
 	if (!match) {
 		return {
 			repeatAfter: null,
@@ -227,7 +246,7 @@ function extractDate(text: string, now: Date) {
 		}
 	}
 
-	const inMatch = /(^|\s)(in\s+(\d+)\s+(hours?|days?|weeks?|months?))(?=$|\s)/i.exec(text)
+	const inMatch = new RegExp(IN_DATE_SOURCE, 'i').exec(text)
 	if (inMatch) {
 		const amount = Number(inMatch[3] || 0)
 		const unit = (inMatch[4] || '').toLowerCase()
@@ -247,7 +266,7 @@ function extractDate(text: string, now: Date) {
 		return removeAndApplyDate(text, inMatch[2].trim(), date)
 	}
 
-	const weekdayMatch = /(^|\s)(next\s+)?(monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|sunday|sun)(?=$|\s)/i.exec(text)
+	const weekdayMatch = new RegExp(WEEKDAY_SOURCE, 'i').exec(text)
 	if (weekdayMatch) {
 		const useNextWeek = Boolean(weekdayMatch[2])
 		const weekday = WEEKDAY_INDEX[(weekdayMatch[3] || '').toLowerCase()]
@@ -257,7 +276,7 @@ function extractDate(text: string, now: Date) {
 		}
 	}
 
-	const numericMatch = /(^|\s)((\d{4})-(\d{2})-(\d{2})|(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?|(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?)(?=$|\s)/i.exec(text)
+	const numericMatch = new RegExp(NUMERIC_DATE_SOURCE, 'i').exec(text)
 	if (numericMatch) {
 		const date = parseNumericDate(numericMatch, now)
 		if (date) {
@@ -265,7 +284,7 @@ function extractDate(text: string, now: Date) {
 		}
 	}
 
-	const monthMatch = /(^|\s)((\d{1,2})\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)|(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2}))(?=$|\s)/i.exec(text)
+	const monthMatch = new RegExp(MONTH_NAME_SOURCE, 'i').exec(text)
 	if (monthMatch) {
 		const leftDay = monthMatch[3]
 		const leftMonth = monthMatch[4]
@@ -430,4 +449,115 @@ function dedupe(items: string[]) {
 
 function collapseWhitespace(value: string) {
 	return value.replace(/\s+/g, ' ').trim()
+}
+
+export type QuickAddTokenType = 'date' | 'label' | 'project' | 'priority' | 'assignee' | 'repeat'
+
+export interface QuickAddToken {
+	start: number
+	end: number
+	type: QuickAddTokenType
+}
+
+interface TokenRange {
+	start: number
+	end: number
+}
+
+// Produces highlight ranges over the *original* string, sharing the same pattern
+// sources as parseQuickAddMagic so the two cannot drift. Mirrors the parser's
+// consumption order (labels, project, priority, assignees, repeat, date) and
+// claims character spans so a later matcher never highlights inside an earlier
+// token (e.g. a "today" that lives inside a *label value).
+export function tokenizeQuickAddMagic(text: string): QuickAddToken[] {
+	const tokens: QuickAddToken[] = []
+	const claimed = new Array<boolean>(text.length).fill(false)
+
+	const overlaps = (start: number, end: number) => {
+		for (let index = start; index < end; index += 1) {
+			if (claimed[index]) {
+				return true
+			}
+		}
+		return false
+	}
+
+	const claim = (range: TokenRange | null, type: QuickAddTokenType) => {
+		if (!range || range.start >= range.end || overlaps(range.start, range.end)) {
+			return false
+		}
+		for (let index = range.start; index < range.end; index += 1) {
+			claimed[index] = true
+		}
+		tokens.push({start: range.start, end: range.end, type})
+		return true
+	}
+
+	// Span excludes the leading (^|\s) capture (group 1) and runs to the end of
+	// the full match — the trailing lookahead in every source is zero-width.
+	const rangeFromMatch = (match: RegExpExecArray): TokenRange => {
+		const lead = match[1] ? match[1].length : 0
+		return {start: match.index + lead, end: match.index + match[0].length}
+	}
+
+	const eachMatch = (source: string, flags: string, onMatch: (range: TokenRange) => void) => {
+		const matcher = new RegExp(source, flags.includes('g') ? flags : `${flags}g`)
+		let match = matcher.exec(text)
+		while (match) {
+			onMatch(rangeFromMatch(match))
+			if (match.index === matcher.lastIndex) {
+				matcher.lastIndex += 1
+			}
+			match = matcher.exec(text)
+		}
+	}
+
+	const firstNonOverlapping = (source: string, flags: string): TokenRange | null => {
+		let found: TokenRange | null = null
+		eachMatch(source, flags, range => {
+			if (!found && !overlaps(range.start, range.end)) {
+				found = range
+			}
+		})
+		return found
+	}
+
+	eachMatch(prefixedSource('*'), 'i', range => claim(range, 'label'))
+	claim(firstNonOverlapping(prefixedSource('+'), 'i'), 'project')
+	claim(firstNonOverlapping(PRIORITY_SOURCE, ''), 'priority')
+	eachMatch(prefixedSource('@'), 'i', range => claim(range, 'assignee'))
+	claim(firstNonOverlapping(REPEAT_SOURCE, 'i'), 'repeat')
+	claim(firstDateRange(text, overlaps), 'date')
+
+	return tokens.sort((a, b) => a.start - b.start)
+}
+
+// Resolves a single date span using the parser's matcher order: simple keywords
+// (by keyword priority, like the parser's array lookup), then "in N", weekday,
+// numeric, then month-name. Returns the first span not already claimed.
+function firstDateRange(text: string, overlaps: (start: number, end: number) => boolean): TokenRange | null {
+	const rangeFor = (match: RegExpExecArray | null): TokenRange | null => {
+		if (!match) {
+			return null
+		}
+		const lead = match[1] ? match[1].length : 0
+		const range = {start: match.index + lead, end: match.index + match[0].length}
+		return overlaps(range.start, range.end) ? null : range
+	}
+
+	for (const keyword of SIMPLE_DATE_KEYWORDS) {
+		const range = rangeFor(new RegExp(`(^|\\s)(${keyword})(?=$|\\s)`, 'i').exec(text))
+		if (range) {
+			return range
+		}
+	}
+
+	for (const source of [IN_DATE_SOURCE, WEEKDAY_SOURCE, NUMERIC_DATE_SOURCE, MONTH_NAME_SOURCE]) {
+		const range = rangeFor(new RegExp(source, 'i').exec(text))
+		if (range) {
+			return range
+		}
+	}
+
+	return null
 }

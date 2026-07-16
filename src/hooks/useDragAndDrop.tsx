@@ -70,6 +70,8 @@ interface DragContext {
 	dropTargetProjectElement: HTMLElement | null
 	dropTargetTaskId: number | null
 	dropTargetTaskElement: HTMLElement | null
+	dropTargetCalendarDayKey: string | null
+	dropTargetCalendarDayElement: HTMLElement | null
 	lastX: number | null
 	lastY: number | null
 }
@@ -79,6 +81,7 @@ interface TaskCollectionsLookup {
 	todayTasks: Task[]
 	inboxTasks: Task[]
 	upcomingTasks: Task[]
+	calendarTasks: Task[]
 	searchTasks: Task[]
 	savedFilterTasks: Task[]
 	projectPreviewTasksById: Record<number, Task[]>
@@ -370,6 +373,8 @@ function startDragTracking(
 		dropTargetProjectElement: null,
 		dropTargetTaskId: null,
 		dropTargetTaskElement: null,
+		dropTargetCalendarDayKey: null,
+		dropTargetCalendarDayElement: null,
 		lastX: null,
 		lastY: null,
 	}
@@ -395,10 +400,11 @@ function handleSortableOnMove(event: SortableEvent) {
 		return false
 	}
 
-	if (activeDragContext.dropTargetProjectId || activeDragContext.dropTargetTaskId) {
+	if (activeDragContext.dropTargetProjectId || activeDragContext.dropTargetTaskId || activeDragContext.dropTargetCalendarDayKey) {
 		debugDragLog('[DnD:onMove] blocked: explicit drop target active', {
 			projectId: activeDragContext.dropTargetProjectId,
 			taskId: activeDragContext.dropTargetTaskId,
+			calendarDayKey: activeDragContext.dropTargetCalendarDayKey,
 		})
 		return false
 	}
@@ -441,6 +447,16 @@ function handleDragOverDropTargetDetection(event: MouseEvent | PointerEvent | To
 	}
 
 	if (activeDragContext.type === 'task') {
+		// A month-grid day cell is a non-sortable drop target, hit-tested exactly
+		// like a project row; dropping commits a date move (moveTaskToDay).
+		const dayTarget = hitTestCalendarDays(activeDragContext, clientX, clientY)
+		if (dayTarget) {
+			applyDropTarget(activeDragContext, null, null, dayTarget)
+			return
+		}
+	}
+
+	if (activeDragContext.type === 'task') {
 		// When dragging from a Kanban bucket, skip subtask hit-testing during the
 		// drag. Without this, every Kanban card under the pointer registers as a
 		// subtask drop target, which sets dropTargetTaskId — and that makes
@@ -471,7 +487,7 @@ function handleDragOverDropTargetDetection(event: MouseEvent | PointerEvent | To
 		}
 	}
 
-	if (activeDragContext.dropTargetProjectId || activeDragContext.dropTargetTaskId) {
+	if (activeDragContext.dropTargetProjectId || activeDragContext.dropTargetTaskId || activeDragContext.dropTargetCalendarDayKey) {
 		applyDropTarget(activeDragContext, null, null)
 	}
 }
@@ -544,6 +560,33 @@ function hitTestTaskRows(context: DragContext, clientX: number, clientY: number,
 	return null
 }
 
+function hitTestCalendarDays(context: DragContext, clientX: number, clientY: number) {
+	// Spill cells (data-outside-month) are excluded so a drop always lands on a
+	// day that belongs to the visible month.
+	const cells = context.app.querySelectorAll(
+		'.workspace-screen.is-active .calendar-day-cell[data-day-key]:not([data-outside-month])',
+	)
+	for (const cell of cells) {
+		if (!(cell instanceof HTMLElement)) {
+			continue
+		}
+
+		const dayKey = cell.dataset.dayKey
+		if (!dayKey) {
+			continue
+		}
+
+		const rect = cell.getBoundingClientRect()
+		if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
+			continue
+		}
+
+		return {dayKey, element: cell}
+	}
+
+	return null
+}
+
 function isInMiddleZone(clientY: number, rect: DOMRect, fraction = 0.75) {
 	const margin = rect.height * ((1 - fraction) / 2)
 	return clientY >= rect.top + margin && clientY <= rect.bottom - margin
@@ -553,13 +596,16 @@ function applyDropTarget(
 	context: DragContext,
 	targetProject: {projectId: number; element: HTMLElement} | null,
 	targetTask: {taskId: number; element: HTMLElement} | null,
+	targetCalendarDay: {dayKey: string; element: HTMLElement} | null = null,
 ) {
 	const targetProjectId = targetProject?.projectId ?? null
 	const targetTaskId = targetTask?.taskId ?? null
+	const targetDayKey = targetCalendarDay?.dayKey ?? null
 	const projectChanged = targetProjectId !== context.dropTargetProjectId || targetProject?.element !== context.dropTargetProjectElement
 	const taskChanged = targetTaskId !== context.dropTargetTaskId || targetTask?.element !== context.dropTargetTaskElement
+	const dayChanged = targetDayKey !== context.dropTargetCalendarDayKey || targetCalendarDay?.element !== context.dropTargetCalendarDayElement
 
-	if (!projectChanged && !taskChanged) {
+	if (!projectChanged && !taskChanged && !dayChanged) {
 		return
 	}
 
@@ -569,17 +615,25 @@ function applyDropTarget(
 	if (context.dropTargetTaskElement && taskChanged) {
 		context.dropTargetTaskElement.classList.remove('is-drop-target')
 	}
+	if (context.dropTargetCalendarDayElement && dayChanged) {
+		context.dropTargetCalendarDayElement.classList.remove('is-drop-target')
+	}
 
 	context.dropTargetProjectId = targetProjectId
 	context.dropTargetProjectElement = targetProject?.element ?? null
 	context.dropTargetTaskId = targetTaskId
 	context.dropTargetTaskElement = targetTask?.element ?? null
+	context.dropTargetCalendarDayKey = targetDayKey
+	context.dropTargetCalendarDayElement = targetCalendarDay?.element ?? null
 
 	if (targetProject?.element) {
 		targetProject.element.classList.add('is-drop-target')
 	}
 	if (targetTask?.element) {
 		targetTask.element.classList.add('is-drop-target')
+	}
+	if (targetCalendarDay?.element) {
+		targetCalendarDay.element.classList.add('is-drop-target')
 	}
 }
 
@@ -600,6 +654,9 @@ function cleanupDragTracking({scheduleRebind = true}: {scheduleRebind?: boolean}
 	}
 	if (activeDragContext.dropTargetTaskElement) {
 		activeDragContext.dropTargetTaskElement.classList.remove('is-drop-target')
+	}
+	if (activeDragContext.dropTargetCalendarDayElement) {
+		activeDragContext.dropTargetCalendarDayElement.classList.remove('is-drop-target')
 	}
 
 	const context = activeDragContext
@@ -660,6 +717,13 @@ function handleSidebarDropPointerUp(event: PointerEvent) {
 
 function blockDragClick(event: Event) {
 	if (!activeDragContext && !shouldSuppressDragClicks()) {
+		return
+	}
+
+	// While a drag is live, the pointerup/touchend that ends it must reach
+	// SortableJS to complete the drop; stopping it here cancels onEnd. Only the
+	// synthesized trailing click is suppressed (post-drop window covers it).
+	if (activeDragContext && event.type !== 'click') {
 		return
 	}
 
@@ -732,6 +796,13 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 			|| (dragContext?.dropTargetTaskId
 				? {taskId: dragContext.dropTargetTaskId, element: dragContext.dropTargetTaskElement}
 				: null)
+	const releaseCalendarDay =
+		(dragContext && dragContext.lastX != null && dragContext.lastY != null
+			? hitTestCalendarDays(dragContext, dragContext.lastX, dragContext.lastY)
+			: null)
+		|| (dragContext?.dropTargetCalendarDayKey
+			? {dayKey: dragContext.dropTargetCalendarDayKey}
+			: null)
 
 	const kanbanBucketId = Number((event.to instanceof HTMLElement ? event.to.dataset.kanbanBucketId : 0) || 0)
 	const fromBucketId = Number((event.from instanceof HTMLElement ? (event.from as HTMLElement).dataset.kanbanBucketId : 0) || 0)
@@ -753,6 +824,17 @@ async function handleSortableTaskEnd(event: SortableEvent) {
 		lastX: dragContext?.lastX,
 		lastY: dragContext?.lastY,
 	})
+
+	if (releaseCalendarDay?.dayKey) {
+		debugDragLog('[DnD:end] calendar day drop', {dayKey: releaseCalendarDay.dayKey})
+		const dayKey = releaseCalendarDay.dayKey
+		await commitTaskDrop(event, {
+			traceToken: null,
+			suppressRollbackFlash: false,
+			commitMove: () => store.moveTaskToDay(taskId, dayKey),
+		})
+		return
+	}
 
 	if (releaseProjectTarget?.projectId && releaseProjectTarget.projectId > 0) {
 		debugDragLog('[DnD:end] project drop', {projectId: releaseProjectTarget.projectId})
@@ -1381,6 +1463,7 @@ function getTaskCollections(state: AppStore): TaskCollectionsLookup {
 		todayTasks: state.todayTasks,
 		inboxTasks: state.inboxTasks,
 		upcomingTasks: state.upcomingTasks,
+		calendarTasks: state.calendarTasks,
 		searchTasks: state.searchTasks,
 		savedFilterTasks: state.savedFilterTasks,
 		projectPreviewTasksById: state.projectPreviewTasksById,

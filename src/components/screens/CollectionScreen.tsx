@@ -137,7 +137,12 @@ export default function CollectionScreen({
 							/>
 						) : null}
 						{!unavailableMessage && taskListEnabled && !loading && rootTasks.length === 0 ? (
-							<div className="empty-state">{emptyMessage}</div>
+							<div className="empty-state">
+								<span>{emptyMessage}</span>
+								<button className="empty-state-add" type="button" data-action="empty-add-task" onClick={onOpenComposer}>
+									+ Add task
+								</button>
+							</div>
 						) : null}
 					</div>
 				</section>

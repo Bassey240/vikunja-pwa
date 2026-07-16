@@ -191,6 +191,27 @@ test('task delete can be undone before the deferred commit runs', async ({page})
 	await expect(page.locator('.workspace-screen.is-active .task-row').filter({hasText: 'Prepare daily summary (Copy)'})).toHaveCount(1)
 })
 
+test('move to date: the task menu opens the large date overlay that writes the move', async ({page}) => {
+	const summaryRow = page.locator('.workspace-screen.is-active .task-row').filter({hasText: 'Prepare daily summary'})
+	await summaryRow.locator('[data-action="toggle-task-menu"]').click()
+	await page.locator('[data-action="move-task-to-date"][data-task-id="102"]').click()
+
+	// The same large date overlay the calendar uses opens, seeded with the row's day.
+	const overlay = page.locator('.date-overlay-backdrop')
+	await expect(overlay).toBeVisible()
+	await expect(overlay.locator('.date-overlay-panel')).toBeVisible()
+
+	// Picking a different day then Done commits a move write and closes the overlay.
+	const movePost = page.waitForRequest(
+		request => request.method() === 'POST' && /\/api\/tasks\/102$/.test(request.url()),
+	)
+	await overlay.locator('.date-overlay-day:not(.is-selected):not(.is-muted)').first().click()
+	await page.locator('[data-action="commit-date-overlay"]').click()
+	await movePost
+
+	await expect(overlay).toHaveCount(0)
+})
+
 test('quick consecutive completions replace the undo notice without blocking the next task', async ({page}) => {
 	const firstRow = page.locator('.workspace-screen.is-active .task-row').filter({hasText: 'Buy milk'})
 	const secondRow = page.locator('.workspace-screen.is-active .task-row').filter({hasText: 'Prepare daily summary'})

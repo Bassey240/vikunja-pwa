@@ -2,16 +2,24 @@ import path from 'node:path'
 import {fileURLToPath} from 'node:url'
 import {defineConfig} from 'vite'
 import react from '@vitejs/plugin-react'
+import {resolveBuildId} from './server/build-info.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+// Deploy stamp if present (docker builds have no git), else live git state.
+const buildId = resolveBuildId({
+	fileCandidates: [path.resolve(__dirname, 'build-info.json')],
+	gitCwd: __dirname,
+})
 
 export default defineConfig({
 	plugins: [react()],
-	// The project-root `.env` is a symlink to a private-local file outside the
-	// repo (backend secrets read by scripts/start-server.mjs). Sandboxed runners
-	// can't follow that symlink out of the project dir, so Vite's loadEnv() dies
-	// with EPERM. Point envDir at an in-repo dir with no `.env` — the frontend
-	// has no VITE_* vars in that file anyway, and VITE_TARGET still arrives via
+	define: {
+		__CLIENT_BUILD_ID__: JSON.stringify(buildId),
+	},
+	// The project-root `.env` holds backend secrets read by
+	// scripts/start-server.mjs and has no VITE_* vars. Point envDir at an in-repo
+	// dir with no `.env` so Vite's loadEnv() never reads the secrets file (and a
+	// sandboxed runner never trips on it); VITE_TARGET still arrives via
 	// process.env. See vite-env/README.md.
 	envDir: path.resolve(__dirname, 'vite-env'),
 	build: {

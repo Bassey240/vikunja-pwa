@@ -5,6 +5,7 @@ import WideSidebar from '@/components/layout/WideSidebar'
 import AuthScreen from '@/components/auth/AuthScreen'
 import {getPlatform} from '@/platform/registry'
 import TodayScreen from '@/components/screens/TodayScreen'
+import CalendarScreen from '@/components/screens/CalendarScreen'
 import InboxScreen from '@/components/screens/InboxScreen'
 import UpcomingScreen from '@/components/screens/UpcomingScreen'
 import ProjectsScreen from '@/components/screens/ProjectsScreen'
@@ -14,11 +15,13 @@ import FiltersScreen from '@/components/screens/FiltersScreen'
 import LabelsScreen from '@/components/screens/LabelsScreen'
 import SettingsScreen from '@/components/screens/SettingsScreen'
 import SharedProjectShell from '@/components/sharing/SharedProjectShell'
+import {ScreenActiveContext} from '@/components/layout/ScreenActiveContext'
 import useCollectionPolling from '@/hooks/useCollectionPolling'
 import useWideLayout, {useCompactWideLayout} from '@/hooks/useWideLayout'
 import {shouldSuppressDragClicks, useSortableBridge} from '@/hooks/useDragAndDrop'
 import {getProjectDescendantIds} from '@/store/project-helpers'
-import {memo, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction, useEffect, useLayoutEffect, useRef, useState} from 'react'
+import useGlobalShortcuts from '@/hooks/useGlobalShortcuts'
+import {memo, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react'
 import {useLocation, useNavigate} from 'react-router-dom'
 import {useAppStore} from '@/store'
 import type {Screen} from '@/types'
@@ -37,6 +40,9 @@ function screenFromPath(pathname: string): Screen {
 	}
 	if (pathname === '/upcoming') {
 		return 'upcoming'
+	}
+	if (pathname === '/calendar') {
+		return 'calendar'
 	}
 	if (pathname === '/projects') {
 		return 'projects'
@@ -137,6 +143,7 @@ export default function AppShell() {
 	const currentProjectShellBrightness = getProjectBackgroundBrightness(account?.user?.settings?.frontend_settings)
 	const [mountedScreens, setMountedScreens] = useState<Record<Screen, boolean>>({
 		today: true,
+		calendar: false,
 		inbox: false,
 		upcoming: false,
 		projects: false,
@@ -179,6 +186,13 @@ export default function AppShell() {
 	const effectiveWideInspectorWidth =
 		compactWideShell && !wideInspectorWidthStored ? DEFAULT_COMPACT_WIDE_INSPECTOR_WIDTH : wideInspectorWidth
 	const collectionPollingConfig = getCollectionPollingConfig()
+
+	// Shell-wide single-key map (audit A1): / jumps to search. Typing contexts
+	// are guarded inside the hook; screens add their own maps (calendar).
+	const shellShortcuts = useMemo(() => ({
+		'/': () => navigate('/search'),
+	}), [navigate])
+	useGlobalShortcuts(shellShortcuts, initialized && connected && !linkShareAuth)
 
 	useCollectionPolling({
 		enabled: initialized && connected && !linkShareAuth && isOnline && !offlineReadOnlyMode,
@@ -782,6 +796,9 @@ export default function AppShell() {
 					<WorkspaceScreen screen="upcoming" active={currentScreen === 'upcoming'} mounted={mountedScreens.upcoming}>
 						<UpcomingScreen />
 					</WorkspaceScreen>
+					<WorkspaceScreen screen="calendar" active={currentScreen === 'calendar'} mounted={mountedScreens.calendar}>
+						<CalendarScreen />
+					</WorkspaceScreen>
 					<WorkspaceScreen screen="projects" active={currentScreen === 'projects'} mounted={mountedScreens.projects}>
 						<ProjectsScreen />
 					</WorkspaceScreen>
@@ -832,7 +849,9 @@ export default function AppShell() {
 							className="shell-inspector-toggle"
 							type="button"
 							aria-label={effectiveWideInspectorCollapsed ? 'Open detail pane' : 'Collapse detail pane'}
-							onClick={() => setWideInspectorCollapsed(!effectiveWideInspectorCollapsed)}
+							onClick={() => {
+								setWideInspectorCollapsed(!effectiveWideInspectorCollapsed)
+							}}
 						>
 							{effectiveWideInspectorCollapsed ? '◂' : '▸'}
 						</button>
@@ -907,7 +926,7 @@ const WorkspaceScreen = memo(
 				data-screen={screen}
 				aria-hidden={active ? undefined : true}
 			>
-				{children}
+				<ScreenActiveContext.Provider value={active}>{children}</ScreenActiveContext.Provider>
 			</div>
 		)
 	},

@@ -4,6 +4,7 @@ import {calculateMenuPosition, getMenuAnchor} from '@/utils/menuPosition'
 import useWideLayout from '@/hooks/useWideLayout'
 import UserAvatar from '@/components/common/UserAvatar'
 import Caret from '@/components/common/Caret'
+import Icon from '@/components/common/icons'
 import InlineRootProjectComposer from '@/components/projects/InlineRootProjectComposer'
 import type {Project} from '@/types'
 import {normalizeHexColor} from '@/utils/formatting'
@@ -25,83 +26,16 @@ interface WideNavItem {
 	match: (pathname: string) => boolean
 }
 
-// Nav icons ported verbatim from the redesign prototype (vikunja-data.jsx DICONS).
-const NAV_ICONS: Record<string, ReactNode> = {
-	today: (
-		<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-			<rect x="3" y="5" width="18" height="16" rx="2" />
-			<line x1="16" y1="3" x2="16" y2="7" />
-			<line x1="8" y1="3" x2="8" y2="7" />
-			<line x1="3" y1="11" x2="21" y2="11" />
-			<circle cx="12" cy="16" r="1.5" fill="currentColor" />
-		</svg>
-	),
-	inbox: (
-		<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-			<path d="M22 12h-6l-2 3h-4l-2-3H2" />
-			<path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
-		</svg>
-	),
-	upcoming: (
-		<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-			<polyline points="12 6 12 12 16 14" />
-			<circle cx="12" cy="12" r="10" />
-		</svg>
-	),
-	projects: (
-		<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-			<rect x="3" y="3" width="7" height="7" rx="1" />
-			<rect x="14" y="3" width="7" height="7" rx="1" />
-			<rect x="3" y="14" width="7" height="7" rx="1" />
-			<rect x="14" y="14" width="7" height="7" rx="1" />
-		</svg>
-	),
-	search: (
-		<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-			<circle cx="11" cy="11" r="7" />
-			<line x1="21" y1="21" x2="16.65" y2="16.65" />
-		</svg>
-	),
-	filters: (
-		<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-			<line x1="4" y1="6" x2="14" y2="6" />
-			<circle cx="17" cy="6" r="2" />
-			<line x1="20" y1="12" x2="10" y2="12" />
-			<circle cx="7" cy="12" r="2" />
-			<line x1="4" y1="18" x2="14" y2="18" />
-			<circle cx="17" cy="18" r="2" />
-		</svg>
-	),
-	labels: (
-		<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-			<path d="M20.59 13.41L13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
-			<line x1="7" y1="7" x2="7.01" y2="7" />
-		</svg>
-	),
-	settings: (
-		<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-			<line x1="4" y1="21" x2="4" y2="14" />
-			<line x1="4" y1="10" x2="4" y2="3" />
-			<line x1="12" y1="21" x2="12" y2="12" />
-			<line x1="12" y1="8" x2="12" y2="3" />
-			<line x1="20" y1="21" x2="20" y2="16" />
-			<line x1="20" y1="12" x2="20" y2="3" />
-			<line x1="1" y1="14" x2="7" y2="14" />
-			<line x1="9" y1="8" x2="15" y2="8" />
-			<line x1="17" y1="16" x2="23" y2="16" />
-		</svg>
-	),
-}
-
 const NAV_ITEMS: WideNavItem[] = [
-	{label: 'Today', path: '/', short: 'T', icon: NAV_ICONS.today, match: pathname => pathname === '/'},
-	{label: 'Inbox', path: '/inbox', short: 'I', icon: NAV_ICONS.inbox, match: pathname => pathname === '/inbox'},
-	{label: 'Upcoming', path: '/upcoming', short: 'U', icon: NAV_ICONS.upcoming, match: pathname => pathname === '/upcoming'},
-	{label: 'Projects', path: '/projects', short: 'P', icon: NAV_ICONS.projects, match: pathname => pathname === '/projects' || pathname.startsWith('/projects/')},
-	{label: 'Search', path: '/search', short: '/', icon: NAV_ICONS.search, match: pathname => pathname === '/search'},
-	{label: 'Filters', path: '/filters', short: 'F', icon: NAV_ICONS.filters, match: pathname => pathname === '/filters'},
-	{label: 'Labels', path: '/labels', short: 'L', icon: NAV_ICONS.labels, match: pathname => pathname === '/labels'},
-	{label: 'Settings', path: '/settings', short: ',', icon: NAV_ICONS.settings, match: pathname => pathname === '/settings'},
+	{label: 'Today', path: '/', short: 'T', icon: <Icon name="today" />, match: pathname => pathname === '/'},
+	{label: 'Inbox', path: '/inbox', short: 'I', icon: <Icon name="inbox" />, match: pathname => pathname === '/inbox'},
+	{label: 'Upcoming', path: '/upcoming', short: 'U', icon: <Icon name="upcoming" />, match: pathname => pathname === '/upcoming'},
+	{label: 'Calendar', path: '/calendar', short: 'C', icon: <Icon name="calendar" />, match: pathname => pathname === '/calendar'},
+	{label: 'Projects', path: '/projects', short: 'P', icon: <Icon name="projects" />, match: pathname => pathname === '/projects' || pathname.startsWith('/projects/')},
+	{label: 'Search', path: '/search', short: '/', icon: <Icon name="search" />, match: pathname => pathname === '/search'},
+	{label: 'Filters', path: '/filters', short: 'F', icon: <Icon name="filter" />, match: pathname => pathname === '/filters'},
+	{label: 'Labels', path: '/labels', short: 'L', icon: <Icon name="labels" />, match: pathname => pathname === '/labels'},
+	{label: 'Settings', path: '/settings', short: ',', icon: <Icon name="settings" />, match: pathname => pathname === '/settings'},
 ]
 
 export default function WideSidebar({collapsed, onToggleCollapsed}: WideSidebarProps) {
