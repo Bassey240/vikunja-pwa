@@ -173,7 +173,7 @@ test('inbox show completed reveals completed inbox tasks', async ({page}) => {
 	await expect(page.locator('.workspace-screen.is-active .task-row').filter({hasText: 'Archive receipts'})).toHaveCount(1)
 })
 
-test('task delete can be undone before the deferred commit runs', async ({page}) => {
+test('task delete goes straight to the server, which soft-deletes it', async ({page}) => {
 	const summaryRow = page.locator('.workspace-screen.is-active .task-row').filter({hasText: 'Prepare daily summary'})
 	await summaryRow.locator('[data-action="toggle-task-menu"]').click()
 	await page.locator('[data-action="duplicate-task"][data-task-id="102"]').click()
@@ -184,11 +184,16 @@ test('task delete can be undone before the deferred commit runs', async ({page})
 	await copiedRow.locator('[data-action="toggle-task-menu"]').click()
 	await page.locator('[data-action="delete-task"]').filter({hasText: 'Delete task'}).click()
 
+	// Vikunja 2.4 soft-deletes server-side (30-day window), so the app deletes
+	// immediately like Vikunja's own frontend — no client-side undo window and
+	// no locally held copy of the deleted task.
 	await expect(copiedRow).toHaveCount(0)
-	await expect(page.locator('.task-completion-toast')).toContainText('Task deleted')
-	await page.locator('.task-completion-toast .ghost-button').filter({hasText: 'Undo'}).click()
 	await expect(page.locator('.task-completion-toast')).toHaveCount(0)
-	await expect(page.locator('.workspace-screen.is-active .task-row').filter({hasText: 'Prepare daily summary (Copy)'})).toHaveCount(1)
+	await expect.poll(async () => {
+		const tasks = await stack.mockApi('projects/2/tasks')
+		return tasks.some(task => `${task.title}`.includes('Prepare daily summary (Copy)'))
+	}).toBe(false)
+	await expect(page.locator('.workspace-screen.is-active .task-row').filter({hasText: 'Prepare daily summary (Copy)'})).toHaveCount(0)
 })
 
 test('move to date: the task menu opens the large date overlay that writes the move', async ({page}) => {
@@ -237,4 +242,32 @@ test('today bulk edit marks selected tasks completed', async ({page}) => {
 	await expect(page.locator('.workspace-screen.is-active .task-row').filter({hasText: 'Buy milk'})).toHaveCount(0)
 	await expect(page.locator('.workspace-screen.is-active .task-row').filter({hasText: 'Prepare daily summary'})).toHaveCount(0)
 	await expect(page.locator('.workspace-screen.is-active .empty-state').filter({hasText: 'No tasks due today.'})).toBeVisible()
+})
+
+test('task descriptions render stored HTML as elements and keep hostile markup inert', async ({page}) => {
+	// Vikunja stores rich text as HTML on every API version, so read mode has to
+	// render it — previously the raw markup showed in the textarea.
+	await page.setViewportSize({width: 1440, height: 900})
+	await page.locator('.workspace-screen.is-active .task-row').filter({hasText: 'Buy milk'}).first().click()
+	await page.locator('[data-detail-section-toggle="description"]').first().click()
+
+	const description = page.locator('.detail-description-read .rich-text').first()
+	await expect(description).toBeVisible()
+	await expect(description.locator('strong')).toHaveText('groceries')
+	await expect(description.locator('ul li')).toHaveText(['Milk'])
+	await expect(description).not.toContainText('<p>')
+
+	// The javascript: link is dropped to plain text; the safe one stays a link.
+	await expect(description.locator('a')).toHaveCount(1)
+	await expect(description.locator('a')).toHaveAttribute('href', 'https://example.test/list')
+	await expect(description.locator('a')).toHaveAttribute('rel', 'noopener noreferrer')
+	await expect(description).toContainText('bad')
+
+	// The embedded script must never have executed.
+	expect(await page.evaluate(() => window.__richTextEscaped ?? null)).toBe(null)
+	await expect(page.locator('script#injected')).toHaveCount(0)
+
+	// Clicking reveals the editor with the stored markup intact for editing.
+	await page.locator('[data-action="edit-task-description"]').first().click()
+	await expect(page.locator('[data-detail-description]').first()).toHaveValue(/<strong>groceries<\/strong>/)
 })

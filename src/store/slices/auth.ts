@@ -489,10 +489,14 @@ export interface AuthSlice {
 	revokeAccountSession: (sessionId: string) => Promise<boolean>
 	loadTimezoneOptions: () => Promise<void>
 	updateTimezone: (timezone: string) => Promise<boolean>
+	updateDefaultDueTime: (time: string) => Promise<boolean>
 	setChangePasswordField: <K extends keyof ChangePasswordForm>(field: K, value: ChangePasswordForm[K]) => void
 	changePassword: () => Promise<boolean>
 	setChangeEmailField: <K extends keyof ChangeEmailForm>(field: K, value: ChangeEmailForm[K]) => void
 	changeEmail: () => Promise<boolean>
+	resendEmailConfirmation: () => Promise<boolean>
+	cancelEmailChange: () => Promise<boolean>
+	refreshEmailStatus: () => Promise<void>
 	checkDataExportStatus: () => Promise<void>
 	requestDataExport: (password: string) => Promise<boolean>
 	downloadDataExport: (password: string) => Promise<boolean>
@@ -705,6 +709,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 		get().resetWebhooksState()
 		get().resetMigrationState()
 		get().resetSubscriptionsState()
+		get().resetTimeTrackingState()
 		set(state => ({
 			connected: false,
 			offlineReadOnlyMode: false,
@@ -881,6 +886,7 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 							name: user.name || '',
 							username: user.username || '',
 							email: user.email || state.account?.user?.email || '',
+							pending_email: user.pending_email || '',
 							deletionScheduledAt,
 							isLocalUser,
 							authProvider,
@@ -1105,6 +1111,34 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 		}
 	},
 
+	async updateDefaultDueTime(time) {
+		const account = get().account
+		const user = account?.user
+		if (!get().connected || !user || account?.authMode !== 'password' || get().settingsSubmitting) {
+			return false
+		}
+		const settings = {
+			...user.settings,
+			name: user.name,
+			frontend_settings: {...user.settings?.frontend_settings, default_due_time: time},
+		}
+		set({settingsSubmitting: true, settingsNotice: null, error: null})
+		try {
+			await api('/api/session/settings/general', {method: 'POST', body: settings})
+			set(state => ({
+				account: state.account ? {...state.account, user: {...user, settings}} : null,
+				settingsNotice: time ? 'Default due time updated.' : 'Default due time cleared.',
+			}))
+			void persistOfflineAuthSnapshot(get())
+			return true
+		} catch (error) {
+			set({error: formatError(error as Error)})
+			return false
+		} finally {
+			set({settingsSubmitting: false})
+		}
+	},
+
 	setChangePasswordField(field, value) {
 		set(state => ({
 			changePasswordForm: {
@@ -1195,12 +1229,62 @@ export const createAuthSlice: StateCreator<AppStore, [], [], AuthSlice> = (set, 
 			set({
 				changeEmailForm: defaultChangeEmailForm,
 				settingsNotice: null,
-				changeEmailNotice: 'Email update requested. Check your inbox for a confirmation link.',
 			})
+			await get().loadCurrentUser()
+			if (get().error || !get().connected) return false
+			set({changeEmailNotice: get().account?.user?.pending_email
+				? 'Email update requested. Check your inbox for a confirmation link.'
+				: get().account?.user?.email.toLowerCase() === newEmail.trim().toLowerCase()
+					? 'Email address updated.'
+					: 'Email update requested. Check your inbox for a confirmation link.'})
 			return true
 		} catch (error) {
 			set({error: formatError(error as Error)})
 			return false
+		} finally {
+			set({changeEmailSubmitting: false})
+		}
+	},
+
+	async resendEmailConfirmation() {
+		if (get().changeEmailSubmitting) return false
+		set({changeEmailSubmitting: true, error: null, settingsNotice: null, changeEmailNotice: null})
+		try {
+			await api('/api/session/settings/email/resend', {method: 'POST'})
+			await get().loadCurrentUser()
+			if (get().error || !get().connected) return false
+			set({changeEmailNotice: 'Confirmation email resent. Earlier confirmation links no longer work.'})
+			return true
+		} catch (error) {
+			set({error: formatError(error as Error)})
+			return false
+		} finally {
+			set({changeEmailSubmitting: false})
+		}
+	},
+
+	async cancelEmailChange() {
+		if (get().changeEmailSubmitting) return false
+		set({changeEmailSubmitting: true, error: null, settingsNotice: null, changeEmailNotice: null})
+		try {
+			await api('/api/session/settings/email', {method: 'DELETE'})
+			await get().loadCurrentUser()
+			if (get().error || !get().connected) return false
+			set({changeEmailNotice: 'Email change cancelled.'})
+			return true
+		} catch (error) {
+			set({error: formatError(error as Error)})
+			return false
+		} finally {
+			set({changeEmailSubmitting: false})
+		}
+	},
+
+	async refreshEmailStatus() {
+		if (get().changeEmailSubmitting) return
+		set({changeEmailSubmitting: true, changeEmailNotice: null})
+		try {
+			await get().loadCurrentUser()
 		} finally {
 			set({changeEmailSubmitting: false})
 		}

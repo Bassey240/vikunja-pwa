@@ -195,41 +195,25 @@ export const createBulkTasksSlice: StateCreator<AppStore, [], [], BulkTasksSlice
 				return true
 			}
 
-			const notice = buildBulkTaskMutationNotice(action, taskIds.length)
-			const started = await get().startUndoableMutation({
-				notice: {
-					id: `bulk-task:${action}:${Date.now()}`,
-					kind: 'task-delete',
-					title: notice.title,
-					body: notice.body,
-				},
-				durationMs: UNDOABLE_MUTATION_MS,
-				commit: async () => {
-					const results = await Promise.allSettled(
-						taskIds.map(taskId =>
-							api(`/api/tasks/${taskId}`, {method: 'DELETE'}),
-						),
-					)
-					const rejected = results.find(result => result.status === 'rejected')
-					if (rejected?.status === 'rejected') {
-						throw rejected.reason
-					}
-				},
-				rollback: () => {
-					set(restoreTaskDeletionSnapshot(snapshot))
-				},
-				onCommitted: async () => {
-					if (!get().pendingUndoMutation) {
-						await get().refreshCurrentCollections()
-					}
-				},
-			})
-
-			if (!started) {
+			// Deletes go out immediately; Vikunja 2.4 keeps them recoverable
+			// server-side for 30 days (see deleteTask in tasks.ts).
+			try {
+				const results = await Promise.allSettled(
+					taskIds.map(taskId =>
+						api(`/api/tasks/${taskId}`, {method: 'DELETE'}),
+					),
+				)
+				const rejected = results.find(result => result.status === 'rejected')
+				if (rejected?.status === 'rejected') {
+					throw rejected.reason
+				}
+				await get().refreshCurrentCollections()
+				return true
+			} catch (error) {
 				set(restoreTaskDeletionSnapshot(snapshot))
+				set({error: formatError(error as Error)})
+				return false
 			}
-
-			return started
 		}
 
 		if (optimisticSupported) {

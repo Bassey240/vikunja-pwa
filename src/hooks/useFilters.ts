@@ -17,7 +17,7 @@ export interface TaskFilters {
 	projectId: number
 	labelId: number
 	priority: 'any' | '0' | '1' | '2' | '3' | '4' | '5'
-	due: 'any' | 'none' | 'overdue' | 'today' | 'next7'
+	due: 'any' | 'none' | 'overdue' | 'today' | 'tomorrow' | 'next7'
 	title: string
 	description: string
 	sortBy: TaskSortBy
@@ -32,7 +32,7 @@ export interface ProjectFilters {
 	taskStatus: 'any' | 'open' | 'done'
 	taskLabelId: number
 	taskPriority: 'any' | '0' | '1' | '2' | '3' | '4' | '5'
-	taskDue: 'any' | 'none' | 'overdue' | 'today' | 'next7'
+	taskDue: 'any' | 'none' | 'overdue' | 'today' | 'tomorrow' | 'next7'
 	taskTitle: string
 	taskDescription: string
 	taskSortBy: TaskSortBy
@@ -218,7 +218,7 @@ export function setTaskFilterField(
 				: defaultTaskFilters.priority
 			break
 		case 'due':
-			nextFilters.due = ['any', 'none', 'overdue', 'today', 'next7'].includes(rawValue)
+			nextFilters.due = ['any', 'none', 'overdue', 'today', 'tomorrow', 'next7'].includes(rawValue)
 				? (rawValue as TaskFilters['due'])
 				: defaultTaskFilters.due
 			break
@@ -287,7 +287,7 @@ export function setProjectFilterField(
 				: defaultProjectFilters.taskPriority
 			break
 		case 'taskDue':
-			nextFilters.taskDue = ['any', 'none', 'overdue', 'today', 'next7'].includes(rawValue)
+			nextFilters.taskDue = ['any', 'none', 'overdue', 'today', 'tomorrow', 'next7'].includes(rawValue)
 				? (rawValue as ProjectFilters['taskDue'])
 				: defaultProjectFilters.taskDue
 			break
@@ -389,6 +389,10 @@ export function taskMatchesFilters(task: Task, filters: TaskFilters) {
 		return false
 	}
 
+	if (filters.due === 'tomorrow' && (dueDate < dueRange.tomorrowStart || dueDate >= dueRange.dayAfterTomorrowStart)) {
+		return false
+	}
+
 	if (filters.due === 'next7' && (dueDate < dueRange.todayStart || dueDate >= dueRange.nextWeekStart)) {
 		return false
 	}
@@ -443,6 +447,10 @@ export function taskMatchesProjectFilters(task: Task, filters: ProjectFilters) {
 	}
 
 	if (filters.taskDue === 'today' && (dueDate < dueRange.todayStart || dueDate >= dueRange.tomorrowStart)) {
+		return false
+	}
+
+	if (filters.taskDue === 'tomorrow' && (dueDate < dueRange.tomorrowStart || dueDate >= dueRange.dayAfterTomorrowStart)) {
 		return false
 	}
 
@@ -630,11 +638,13 @@ function getTaskDueDate(task: Task) {
 function getTaskDueRange() {
 	const todayStart = startOfDay(new Date())
 	const tomorrowStart = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000)
+	const dayAfterTomorrowStart = new Date(todayStart.getTime() + 2 * 24 * 60 * 60 * 1000)
 	const nextWeekStart = new Date(todayStart.getTime() + 7 * 24 * 60 * 60 * 1000)
 
 	return {
 		todayStart,
 		tomorrowStart,
+		dayAfterTomorrowStart,
 		nextWeekStart,
 	}
 }

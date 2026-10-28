@@ -938,6 +938,36 @@ test('offline task completion queues locally and replays after reconnect', async
 	await expect(page.getByText('Load failed')).toHaveCount(0)
 })
 
+test('offline replay retries through a transient 409 instead of surfacing a conflict', async ({page}) => {
+	await openProjects(page)
+	const workNode = page.locator('[data-project-node-id="2"]')
+	await workNode.locator('[data-action="select-project"][data-project-id="2"]').click()
+	await expect(page.getByRole('heading', {name: 'Work'})).toBeVisible()
+	const taskRow = page.locator('[data-task-row-id]').filter({hasText: 'Smoke suite rollout'}).first()
+	await expect(taskRow).toBeVisible()
+
+	await page.context().setOffline(true)
+	await taskRow.locator('[data-action="toggle-done"]').click()
+	await expect(page.locator('.topbar .offline-queue-badge').first()).toHaveText('1')
+
+	// The first replayed write 409s (2.4 atomic position upsert race); the
+	// in-loop retry must land it without a user-facing conflict.
+	stack.mock.conflictNextTaskWritesOnce(1)
+	await page.context().setOffline(false)
+	await page.evaluate(() => {
+		window.dispatchEvent(new Event('online'))
+	})
+	await expect(page.locator('.topbar .offline-queue-badge')).toHaveCount(0, {timeout: 10_000})
+	await expect.poll(async () => (await getOfflineMutations(page)).length).toBe(0)
+	await expect
+		.poll(async () => {
+			const task = await stack.mockApi('tasks/201')
+			return Boolean(task.done || task.done_at)
+		})
+		.toBe(true)
+	await expect(page.locator('.offline-queue-badge.is-failed')).toHaveCount(0)
+})
+
 test('shared link shell keeps header compact after filters and switches views from anchored menu', async ({page}) => {
 	const share = await createMockLinkShare(2, {name: 'Public desktop link'})
 

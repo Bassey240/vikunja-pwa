@@ -2,7 +2,21 @@
 
 Release history for Vikunja PWA, newest first.
 
-Detailed notes for the current release: [docs/release-notes-0.6.md](docs/release-notes-0.6.md).
+Detailed notes for the current release: [docs/release-notes-0.7.md](docs/release-notes-0.7.md).
+
+## 0.7.15
+
+- React Router 7.18.4 addresses reported dependency security advisories.
+- Automatic API v2 use on Vikunja 2.4 and newer, with API v1 compatibility for older servers, including 2.3.
+- Multiple-task creation from one task composer, with older-server and offline support.
+- Audio playback, video previews, and task-link previews in descriptions and comments.
+- Default due time, Due tomorrow filters, and pending email change controls.
+- Planka import, automatic import progress updates, and MCP connection settings on supported servers.
+- Licensed time tracking with task entries and a persistent running-timer bar.
+- API-backed instance user administration and live notification/timer updates on supported sessions.
+- Local-timezone date filters, quieter background refresh failures, expired-token sign-in prompts, and improved offline conflict handling.
+
+See the detailed notes for server requirements and remaining verification limits.
 
 ## 0.6.0
 

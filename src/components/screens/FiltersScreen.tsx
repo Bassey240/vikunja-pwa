@@ -1,3 +1,4 @@
+import {getFilterTimezone} from '@/utils/date-helpers'
 import SavedFilterCard from '@/components/search/SavedFilterCard'
 import StatusCards from '@/components/layout/StatusCards'
 import Topbar from '@/components/layout/Topbar'
@@ -297,7 +298,7 @@ export default function FiltersScreen() {
 					filter_include_nulls: editorDraft.filterIncludeNulls,
 					sort_by: editorDraft.sortBy,
 					order_by: editorDraft.orderBy,
-					filter_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+					filter_timezone: getFilterTimezone(),
 					s: editorDraft.searchText || undefined,
 				},
 			}
@@ -516,6 +517,7 @@ export default function FiltersScreen() {
 														<option value="none">No due date</option>
 														<option value="overdue">Overdue</option>
 														<option value="today">Due today</option>
+														<option value="tomorrow">Due tomorrow</option>
 														<option value="next7">Next 7 days</option>
 													</select>
 												</label>

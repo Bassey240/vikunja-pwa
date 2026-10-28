@@ -1,5 +1,5 @@
 import {api} from '@/api'
-import type {ApiRouteGroups, ApiToken, CalDavToken, TotpSettings} from '@/types'
+import type {ApiRouteGroups, ApiToken, CalDavToken, McpConnectionInfo, TotpSettings} from '@/types'
 import {formatError} from '@/utils/formatting'
 import type {StateCreator} from 'zustand'
 import type {AppStore} from '../index'
@@ -23,6 +23,8 @@ export interface SecuritySlice {
 	newApiToken: string | null
 	availableRoutes: ApiRouteGroups
 	availableRoutesLoaded: boolean
+	mcpInfo: McpConnectionInfo | null
+	mcpInfoLoading: boolean
 
 	loadTotpStatus: () => Promise<void>
 	enrollTotp: () => Promise<boolean>
@@ -37,6 +39,7 @@ export interface SecuritySlice {
 
 	loadApiTokens: () => Promise<void>
 	loadAvailableRoutes: () => Promise<void>
+	loadMcpInfo: () => Promise<void>
 	createApiToken: (title: string, permissions: Record<string, string[]>, expiresAt: string | null) => Promise<boolean>
 	clearNewApiToken: () => void
 	deleteApiToken: (id: number) => Promise<boolean>
@@ -61,6 +64,8 @@ export const createSecuritySlice: StateCreator<AppStore, [], [], SecuritySlice> 
 	newApiToken: null,
 	availableRoutes: {},
 	availableRoutesLoaded: false,
+	mcpInfo: null,
+	mcpInfoLoading: false,
 
 	async loadTotpStatus() {
 		if (!get().connected) {
@@ -314,6 +319,20 @@ export const createSecuritySlice: StateCreator<AppStore, [], [], SecuritySlice> 
 		}
 	},
 
+	async loadMcpInfo() {
+		if (!get().connected) {
+			return
+		}
+		set({mcpInfoLoading: true, error: null})
+		try {
+			set({mcpInfo: await api<McpConnectionInfo>('/api/mcp/info')})
+		} catch (error) {
+			set({mcpInfo: null, error: formatError(error as Error)})
+		} finally {
+			set({mcpInfoLoading: false})
+		}
+	},
+
 	async createApiToken(title, permissions, expiresAt) {
 		if (blockOfflineReadOnlyAction(get, set, 'manage API tokens')) {
 			return false
@@ -407,6 +426,8 @@ export const createSecuritySlice: StateCreator<AppStore, [], [], SecuritySlice> 
 			newApiToken: null,
 			availableRoutes: {},
 			availableRoutesLoaded: false,
+			mcpInfo: null,
+			mcpInfoLoading: false,
 		})
 	},
 })

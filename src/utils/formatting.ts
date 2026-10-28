@@ -291,7 +291,12 @@ export function formatAttachmentSize(size: number | string | null | undefined) {
 
 export function canPreviewAttachment(attachment: Pick<TaskAttachment, 'file'> | null | undefined) {
 	const fileName = `${attachment?.file?.name || ''}`.trim().toLowerCase()
-	return ['.jpeg', '.jpg', '.png', '.bmp', '.gif', '.webp'].some(suffix => fileName.endsWith(suffix))
+	return isVideoAttachment(attachment) || ['.jpeg', '.jpg', '.png', '.bmp', '.gif', '.webp'].some(suffix => fileName.endsWith(suffix))
+}
+
+export function isVideoAttachment(attachment: Pick<TaskAttachment, 'file'> | null | undefined) {
+	return `${attachment?.file?.mime || ''}`.toLowerCase().startsWith('video/')
+		|| /\.(mp4|m4v|mov|webm|ogv|3gp|mkv|avi|mpeg|mpg)$/i.test(`${attachment?.file?.name || ''}`.trim())
 }
 
 function normalizeReminderRelativeTo(value: string | null | undefined) {

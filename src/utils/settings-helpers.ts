@@ -6,6 +6,7 @@ export type SettingsSectionId =
 	| 'offline'
 	| 'notifications'
 	| 'security'
+	| 'mcp'
 	| 'webhooks'
 	| 'migration'
 	| 'collaboration'

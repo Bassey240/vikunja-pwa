@@ -8,9 +8,11 @@ import {
 } from '@/hooks/useFilters'
 import {storageKeys} from '@/storageKeys'
 import type {BackgroundImage, MenuAnchor, Project, SavedFilter, Task} from '@/types'
+import {getFilterTimezone} from '@/utils/date-helpers'
 import {getBlobFromBlurHash} from '@/utils/blurhash'
 import {markProjectDropTrace} from '@/utils/dragPerf'
 import {formatError} from '@/utils/formatting'
+import {clearLoadError, setLoadError} from './load-error'
 import {getProjectBackgroundBlurHash, getProjectBackgroundInformation, projectHasBackground} from '@/utils/project-background'
 import {loadJson, loadNumber, saveJson, saveNumber} from '@/utils/storage'
 import type {StateCreator} from 'zustand'
@@ -32,7 +34,15 @@ import {
 	getSavedFilterProjectId,
 	resolveInboxProjectId,
 } from '../project-helpers'
-import {buildTaskStatusFilter, getTaskSortQuery, isManualTaskSort, normalizeTaskGraph} from '../selectors'
+import {
+	buildTaskStatusFilter,
+	canAdminProject,
+	canWriteProject,
+	getProjectPermissionActor,
+	getTaskSortQuery,
+	isManualTaskSort,
+	normalizeTaskGraph,
+} from '../selectors'
 import {mergeTaskListsWithStablePositions} from '../task-helpers'
 
 export interface ProjectsSlice {
@@ -228,8 +238,9 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 						return get().loadProjectBackground(project.id)
 					}),
 			)
+			clearLoadError(set, get, 'projects:list')
 		} catch (error) {
-			set({error: formatError(error as Error)})
+			setLoadError(set, 'projects:list', formatError(error as Error), silent)
 		} finally {
 			if (!silent) {
 				set({loadingProjects: false})
@@ -642,8 +653,9 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 				},
 			}))
 			persistOfflineBrowseSnapshot(get())
+			clearLoadError(set, get, `projects:preview:${projectId}`)
 		} catch (error) {
-			set({error: formatError(error as Error)})
+			setLoadError(set, `projects:preview:${projectId}`, formatError(error as Error), silent)
 		} finally {
 			if (!silent) {
 				const loadingProjectPreviewIds = new Set(get().loadingProjectPreviewIds)
@@ -683,6 +695,15 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 			(!hasPositionUpdate || nextPosition === Number(project.position || 0))
 		) {
 			return true
+		}
+
+		// Vikunja 2.4 requires Admin to DETACH a project from its parent
+		// (GHSA-44v6-7fxq-vgf4). Re-parenting within a tree still needs only
+		// write, so this gate is scoped to the detach case.
+		const isDetachToRoot = nextParentProjectId === 0 && Number(project.parent_project_id || 0) > 0
+		if (isDetachToRoot && !canAdminProject(project, getProjectPermissionActor(get()))) {
+			set({error: 'Admin permission on this project is required to move it out of its parent.'})
+			return false
 		}
 
 		try {
@@ -785,12 +806,24 @@ export const createProjectsSlice: StateCreator<AppStore, [], [], ProjectsSlice> 
 			return
 		}
 
+		// Vikunja 2.4 enforces write permission on the TARGET parent
+		// (GHSA-f27p-pw2p-9pr4); the copy lands beside the source, so the
+		// source's parent is the target. Root-level copies have no parent to check.
+		const targetParentId = Number(project.parent_project_id || 0)
+		if (targetParentId > 0) {
+			const targetParent = get().projects.find(entry => entry.id === targetParentId)
+			if (!canWriteProject(targetParent, getProjectPermissionActor(get()))) {
+				set({error: 'Write permission on the parent project is required to duplicate this project.'})
+				return
+			}
+		}
+
 		try {
 			set({openMenu: null})
 			await api(`/api/projects/${projectId}/duplicate`, {
 				method: 'POST',
 				body: {
-					parentProjectId: Number(project.parent_project_id || 0),
+					parentProjectId: targetParentId,
 				},
 			})
 			await get().loadProjects()
@@ -1204,7 +1237,7 @@ function buildProjectPreviewTaskQuery(sortBy: string[], orderBy: string[], filte
 	}
 	if (normalizedFilter) {
 		params.set('filter', normalizedFilter)
-		params.set('filter_timezone', 'UTC')
+		params.set('filter_timezone', getFilterTimezone())
 	}
 	params.append('expand', 'subtasks')
 	const query = params.toString()

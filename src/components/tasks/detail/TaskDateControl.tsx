@@ -1,4 +1,5 @@
 import CompactDatePicker from '@/components/common/CompactDatePicker'
+import {useAppStore} from '@/store'
 import {normalizeTaskDateValue} from '@/utils/formatting'
 import type {TaskDateField} from '@/utils/task-detail-helpers'
 
@@ -15,6 +16,7 @@ export default function TaskDateControl({
 	onClear: (field: TaskDateField) => void
 	onChange: (field: TaskDateField, value: string) => Promise<void>
 }) {
+	const defaultDueTime = useAppStore(state => state.account?.user?.settings?.frontend_settings?.default_due_time)
 	const value = normalizeTaskDateValue(task[field] || null)
 	const inputValue = value
 		? new Date(value).toISOString()
@@ -28,6 +30,7 @@ export default function TaskDateControl({
 					label={label}
 					value={inputValue}
 					mode="datetime"
+					defaultTime={field === 'due_date' ? defaultDueTime || undefined : undefined}
 					allowEmpty={true}
 					placeholder="DD/MM/YYYY HH:MM"
 					showLabel={false}

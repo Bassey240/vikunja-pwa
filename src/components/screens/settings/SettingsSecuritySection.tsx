@@ -1,7 +1,8 @@
-import type {ApiRouteGroups, ApiToken, CalDavToken, TotpSettings, VikunjaInfo} from '@/types'
+import type {ApiRouteGroups, ApiToken, CalDavToken, McpConnectionInfo, TotpSettings, VikunjaInfo} from '@/types'
 import Caret from '@/components/common/Caret'
 import CompactDatePicker from '@/components/common/CompactDatePicker'
 import {formatLongDate} from '@/utils/formatting'
+import {mcpConnectionCommand, mcpPermissions, type McpClient, type McpPreset} from '@/utils/mcp'
 import type {SettingsSectionId} from '@/utils/settings-helpers'
 import {type FormEvent, type ReactNode, useEffect, useMemo, useState} from 'react'
 import DetailSheet from '@/components/common/DetailSheet'
@@ -11,6 +12,8 @@ type SecuritySubsectionId = 'totp' | 'caldav' | 'apiTokens'
 
 export default function SettingsSecuritySection({
 	open,
+	mcpOpen,
+	showGatewaySecurity,
 	onToggle,
 	currentBaseUrl,
 	currentUsername,
@@ -39,6 +42,9 @@ export default function SettingsSecuritySection({
 	newApiToken,
 	availableRoutes,
 	availableRoutesLoaded,
+	mcpInfo,
+	mcpInfoLoading,
+	onLoadMcpInfo,
 	onLoadApiTokens,
 	onLoadAvailableRoutes,
 	onCreateApiToken,
@@ -46,6 +52,8 @@ export default function SettingsSecuritySection({
 	onDeleteApiToken,
 }: {
 	open: boolean
+	mcpOpen: boolean
+	showGatewaySecurity: boolean
 	onToggle: (section: SettingsSectionId) => void
 	currentBaseUrl: string
 	currentUsername: string
@@ -74,6 +82,9 @@ export default function SettingsSecuritySection({
 	newApiToken: string | null
 	availableRoutes: ApiRouteGroups
 	availableRoutesLoaded: boolean
+	mcpInfo: McpConnectionInfo | null
+	mcpInfoLoading: boolean
+	onLoadMcpInfo: () => void
 	onLoadApiTokens: () => void
 	onLoadAvailableRoutes: () => void
 	onCreateApiToken: (title: string, permissions: Record<string, string[]>, expiresAt: string | null) => Promise<boolean>
@@ -86,6 +97,10 @@ export default function SettingsSecuritySection({
 	const [apiTokenExpiry, setApiTokenExpiry] = useState('')
 	const [apiTokenPermissions, setApiTokenPermissions] = useState<Record<string, string[]>>({})
 	const [apiTokenDialogOpen, setApiTokenDialogOpen] = useState(false)
+	const [apiTokenKind, setApiTokenKind] = useState<'api' | 'mcp'>('api')
+	const [createdTokenKind, setCreatedTokenKind] = useState<'api' | 'mcp'>('api')
+	const [mcpPreset, setMcpPreset] = useState<McpPreset>('read_only')
+	const [mcpClient, setMcpClient] = useState<McpClient>('other')
 	const [copiedField, setCopiedField] = useState<string | null>(null)
 	const [openSubsections, setOpenSubsections] = useState<Record<SecuritySubsectionId, boolean>>({
 		totp: false,
@@ -98,11 +113,22 @@ export default function SettingsSecuritySection({
 			return
 		}
 
-		onLoadTotpStatus()
-		onLoadCaldavTokens()
+		if (showGatewaySecurity) {
+			onLoadTotpStatus()
+			onLoadCaldavTokens()
+		}
 		onLoadApiTokens()
+	}, [onLoadApiTokens, onLoadCaldavTokens, onLoadTotpStatus, open, showGatewaySecurity])
+
+	useEffect(() => {
 		onLoadAvailableRoutes()
-	}, [onLoadApiTokens, onLoadAvailableRoutes, onLoadCaldavTokens, onLoadTotpStatus, open])
+	}, [onLoadAvailableRoutes])
+
+	useEffect(() => {
+		if (mcpOpen && availableRoutes.mcp?.access) {
+			onLoadMcpInfo()
+		}
+	}, [availableRoutes, mcpOpen, onLoadMcpInfo])
 
 	const routeGroups = useMemo(() => {
 		return Object.entries(availableRoutes)
@@ -130,8 +156,8 @@ export default function SettingsSecuritySection({
 	const caldavEnabled = vikunjaInfo?.caldav_enabled
 	const caldavConnectionReady = Boolean(caldavDetails.baseUrl && caldavDetails.discoveryUrl && caldavDetails.username)
 	const hasSelectedApiPermissions = useMemo(
-		() => Object.values(apiTokenPermissions).some(values => values.length > 0),
-		[apiTokenPermissions],
+		() => apiTokenKind === 'mcp' ? Boolean(mcpInfo) : Object.values(apiTokenPermissions).some(values => values.length > 0),
+		[apiTokenKind, apiTokenPermissions, mcpInfo],
 	)
 
 	async function handleEnableTotp(event: FormEvent<HTMLFormElement>) {
@@ -153,7 +179,7 @@ export default function SettingsSecuritySection({
 			return
 		}
 
-		const permissions = Object.fromEntries(
+		const permissions = apiTokenKind === 'mcp' && mcpInfo ? mcpPermissions(mcpInfo, mcpPreset) : Object.fromEntries(
 			Object.entries(apiTokenPermissions)
 				.map(([resource, values]) => [resource, values.filter(Boolean)])
 				.filter(([, values]) => values.length > 0),
@@ -162,10 +188,19 @@ export default function SettingsSecuritySection({
 		if (!success) {
 			return
 		}
+		setCreatedTokenKind(apiTokenKind)
 		closeApiTokenDialog()
 	}
 
 	function openApiTokenDialog() {
+		setApiTokenKind('api')
+		setApiTokenDialogOpen(true)
+	}
+
+	function openMcpTokenDialog() {
+		setApiTokenKind('mcp')
+		setApiTokenTitle('MCP')
+		setMcpPreset('read_only')
 		setApiTokenDialogOpen(true)
 	}
 
@@ -227,9 +262,56 @@ export default function SettingsSecuritySection({
 		}
 	}
 
+	function manageApiTokens() {
+		setOpenSubsections({totp: false, caldav: false, apiTokens: true})
+		onToggle('security')
+	}
+
 	return (
+		<>
+		{availableRoutes.mcp?.access ? (
+			<SettingsSection title="AI connections (MCP)" section="mcp" open={mcpOpen} onToggle={onToggle}>
+				<p className="detail-meta">Connect an AI assistant to your tasks. Choose what it can read or change.</p>
+				{mcpInfoLoading ? <div className="empty-state compact">Loading MCP connection details…</div> : null}
+				{mcpInfo ? (
+					<div className="detail-grid settings-form">
+						<CopyableField label="MCP endpoint" value={mcpInfo.endpoint} outputId="mcp-endpoint" copyField="mcp-endpoint" copiedField={copiedField} onCopy={copyValue} />
+						<div className="settings-action-row detail-item-full">
+							<button className="pill-button subtle" data-action="open-mcp-token-dialog" type="button" disabled={apiTokenSubmitting} onClick={openMcpTokenDialog}>Create MCP token</button>
+						</div>
+						{newApiToken && createdTokenKind === 'mcp' ? (
+							<>
+								<p className="detail-meta detail-item-full">This token is shown once. Copy it before leaving or reloading.</p>
+								<CopyableField label="New MCP token" value={newApiToken} outputId="new-mcp-token" copyField="new-mcp-token" copiedField={copiedField} onCopy={copyValue} />
+								<label className="detail-item detail-item-full detail-field">
+									<div className="detail-label">Client</div>
+									<select className="detail-input" data-mcp-client value={mcpClient} onChange={event => setMcpClient(event.currentTarget.value as McpClient)}>
+										<option value="other">Other client (Streamable HTTP)</option>
+										<option value="claudeCode">Claude Code</option>
+										<option value="codex">Codex CLI</option>
+									</select>
+								</label>
+								<CopyableField label={mcpClient === 'other' ? 'Authorization header' : 'Setup command'} value={mcpConnectionCommand(mcpClient, mcpInfo.endpoint, newApiToken)} outputId="mcp-command" copyField="mcp-command" copiedField={copiedField} onCopy={copyValue} multiline />
+								{mcpClient === 'codex' ? <p className="detail-meta detail-item-full">Run both commands, then start Codex from the same terminal. Set the variable again in each new terminal.</p> : null}
+								{mcpClient === 'claudeCode' ? <p className="detail-meta detail-item-full">After running the command, open Claude Code and use /mcp to check the connection.</p> : null}
+								<div className="settings-action-row detail-item-full">
+									<button className="pill-button subtle" data-action="clear-mcp-token" type="button" onClick={onClearNewApiToken}>I&apos;ve copied this</button>
+								</div>
+							</>
+						) : null}
+					</div>
+				) : !mcpInfoLoading ? <button className="pill-button subtle" type="button" onClick={onLoadMcpInfo}>Retry connection details</button> : null}
+				<p className="detail-meta">Delete a token in API Tokens to revoke its access.</p>
+				<div className="settings-action-row">
+					<button className="pill-button subtle" data-action="manage-mcp-tokens" type="button" onClick={manageApiTokens}>Manage API tokens</button>
+					<a className="pill-button subtle" href="https://vikunja.io/help/mcp/" target="_blank" rel="noreferrer">Connection guide</a>
+				</div>
+			</SettingsSection>
+		) : null}
+
 		<SettingsSection title="Security" section="security" open={open} onToggle={onToggle}>
 			<div className="detail-section-list">
+				{showGatewaySecurity ? <>
 				<SecuritySubsection
 					title="Two-Factor Authentication"
 					section="totp"
@@ -450,6 +532,8 @@ export default function SettingsSecuritySection({
 					)}
 				</SecuritySubsection>
 
+				</> : null}
+
 				<SecuritySubsection
 					title="API Tokens"
 					section="apiTokens"
@@ -513,6 +597,7 @@ export default function SettingsSecuritySection({
 					) : null}
 				</SecuritySubsection>
 			</div>
+		</SettingsSection>
 			<DetailSheet
 				open={apiTokenDialogOpen}
 				closeAction="close-api-token-dialog"
@@ -520,8 +605,8 @@ export default function SettingsSecuritySection({
 			>
 				<div className="sheet-head">
 					<div>
-						<div className="panel-label">API Tokens</div>
-						<div className="panel-title">Create API token</div>
+						<div className="panel-label">{apiTokenKind === 'mcp' ? 'MCP' : 'API Tokens'}</div>
+						<div className="panel-title">Create {apiTokenKind === 'mcp' ? 'MCP' : 'API'} token</div>
 					</div>
 				</div>
 				<form className="detail-core-card settings-user-dialog" data-form="create-api-token-sheet" onSubmit={handleCreateApiToken}>
@@ -551,7 +636,16 @@ export default function SettingsSecuritySection({
 								}}
 							/>
 						</div>
-						<div className="detail-item detail-item-full detail-field">
+						{apiTokenKind === 'mcp' ? (
+							<label className="detail-item detail-item-full detail-field">
+								<div className="detail-label">Permissions</div>
+								<select className="detail-input" data-mcp-preset value={mcpPreset} disabled={apiTokenSubmitting} onChange={event => setMcpPreset(event.currentTarget.value as McpPreset)}>
+									<option value="read_only">Read only</option>
+									<option value="typed">Read + write</option>
+								</select>
+								<p className="detail-meta">{mcpPreset === 'read_only' ? 'Read data without changing it.' : 'Read and change tasks, projects, labels, assignees and comments. Your project permissions still apply.'}</p>
+							</label>
+						) : <div className="detail-item detail-item-full detail-field">
 							<div className="settings-subsection-header">
 								<div className="detail-label">Permissions</div>
 								<button
@@ -590,7 +684,7 @@ export default function SettingsSecuritySection({
 									</div>
 								</div>
 							))}
-						</div>
+						</div>}
 					</div>
 					<div className="settings-dialog-actions">
 						<button className="ghost-button" type="button" disabled={apiTokenSubmitting} onClick={closeApiTokenDialog}>
@@ -601,12 +695,12 @@ export default function SettingsSecuritySection({
 							type="submit"
 							disabled={apiTokenSubmitting || !apiTokenTitle.trim() || !apiTokenExpiry.trim() || !hasSelectedApiPermissions}
 						>
-							{apiTokenSubmitting ? 'Creating…' : 'Create API token'}
+							{apiTokenSubmitting ? 'Creating…' : `Create ${apiTokenKind === 'mcp' ? 'MCP' : 'API'} token`}
 						</button>
 					</div>
 				</form>
 			</DetailSheet>
-		</SettingsSection>
+		</>
 	)
 }
 
@@ -653,6 +747,7 @@ function CopyableField({
 	copiedField,
 	onCopy,
 	fullWidth = true,
+	multiline = false,
 }: {
 	label: string
 	value: string
@@ -661,12 +756,13 @@ function CopyableField({
 	copiedField: string | null
 	onCopy: (value: string | null, field: string) => Promise<void>
 	fullWidth?: boolean
+	multiline?: boolean
 }) {
 	return (
 		<div className={`detail-item detail-field ${fullWidth ? 'detail-item-full' : ''}`.trim()}>
 			<div className="detail-label">{label}</div>
 			<div className="settings-copy-field-row">
-				<input className="detail-input" data-security-output={outputId} type="text" readOnly value={value} />
+				{multiline ? <textarea className="detail-input" data-security-output={outputId} readOnly rows={3} value={value} /> : <input className="detail-input" data-security-output={outputId} type="text" readOnly value={value} />}
 				<button
 					className="pill-button subtle settings-copy-field-button"
 					data-action="copy-security-output"

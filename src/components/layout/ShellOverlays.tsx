@@ -1,4 +1,5 @@
 import MutationToast from '@/components/layout/MutationToast'
+import RunningTimerBar from '@/components/layout/RunningTimerBar'
 import ProjectComposer from '@/components/projects/ProjectComposer'
 import ProjectDetail from '@/components/projects/ProjectDetail'
 import {useAppStore} from '@/store'
@@ -71,6 +72,7 @@ export default function ShellOverlays({
 					</button>
 				</div>
 			) : null}
+			<RunningTimerBar />
 			{offlineActionNotice ? (
 				<div className="offline-action-toast" role="alert" aria-live="assertive">
 					<div className="offline-action-toast-copy">

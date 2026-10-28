@@ -1,6 +1,7 @@
 import type {Task} from '../types.ts'
 import {placeTask} from './calendar-placement.ts'
-import {allDayDueIso, DAY_MS} from './calendar-window.ts'
+import {DAY_MS} from './calendar-window.ts'
+import {dateOnlyDueIso} from './date-helpers.ts'
 
 // Drag snaps timed instants to the nearest quarter-hour.
 export const SNAP_MS = 15 * 60 * 1000
@@ -69,12 +70,12 @@ function shiftDays(ms: number, delta: number, allDay: boolean): number {
 }
 
 // "Move to date": rewrite a task's anchor so it lands on the target day, keeping
-// time-of-day, span length, and all-day-ness. An undated task is given an
-// all-day due date on that day. Returns null when nothing would change.
-export function buildMoveToDayPatch(task: Task, dayKey: string): Partial<Task> | null {
+// time-of-day, span length, and all-day-ness. An undated task is given a
+// due date using the preferred time, or all-day when unset. Returns null when nothing changes.
+export function buildMoveToDayPatch(task: Task, dayKey: string, defaultDueTime?: string | null): Partial<Task> | null {
 	const placement = placeTask(task)
 	if (!placement) {
-		return {due_date: allDayDueIso(dayKey)}
+		return {due_date: dateOnlyDueIso(dayKey, defaultDueTime)}
 	}
 	const delta = dayKeyDelta(placement.startDayKey, dayKey)
 	if (delta === 0) {

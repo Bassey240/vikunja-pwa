@@ -30,3 +30,8 @@ deploy/*
 .env.dev-preview
 
 build-info.json
+
+# Worker local state and secrets
+cloudflare/.wrangler/
+cloudflare/.dev.vars*
+cloudflare/.env*

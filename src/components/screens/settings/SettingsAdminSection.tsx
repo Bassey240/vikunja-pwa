@@ -3,6 +3,7 @@ import type {
 	AdminConfigCapabilityReasonCode,
 	AdminMailDiagnosticsResult,
 	AdminMigration,
+	AdminOverview,
 	AdminRepairResult,
 	AdminRuntimeHealth,
 	AdminUser,
@@ -66,8 +67,11 @@ export default function SettingsAdminSection({
 	onToggle,
 	accountUser,
 	accountCanUseAdminBridge,
+	accountIsServerAdmin,
 	adminBridgeConfigured,
 	canManageUsers,
+	canListUsers,
+	adminOverview,
 	adminUsers,
 	adminUsersLoading,
 	adminUsersLoaded,
@@ -107,6 +111,7 @@ export default function SettingsAdminSection({
 	onCreateAdminUser,
 	onUpdateAdminUser,
 	onSetAdminUserEnabled,
+	onSetAdminUserRole,
 	onResetAdminUserPassword,
 	onDeleteAdminUser,
 	onSendTestmail,
@@ -125,8 +130,11 @@ export default function SettingsAdminSection({
 		email?: string | null
 	} | null | undefined
 	accountCanUseAdminBridge: boolean
+	accountIsServerAdmin: boolean
 	adminBridgeConfigured: boolean
 	canManageUsers: boolean
+	canListUsers: boolean
+	adminOverview: AdminOverview | null
 	adminUsers: AdminUser[]
 	adminUsersLoading: boolean
 	adminUsersLoaded: boolean
@@ -166,6 +174,7 @@ export default function SettingsAdminSection({
 	onCreateAdminUser: (payload: {username: string; email: string; password: string}) => Promise<boolean>
 	onUpdateAdminUser: (identifier: number | string, payload: {username: string; email: string}) => Promise<boolean>
 	onSetAdminUserEnabled: (identifier: number | string, enabled: boolean) => Promise<boolean>
+	onSetAdminUserRole: (identifier: number | string, isAdmin: boolean) => Promise<boolean>
 	onResetAdminUserPassword: (identifier: number | string, password: string) => Promise<boolean>
 	onDeleteAdminUser: (identifier: number | string) => Promise<boolean>
 	onSendTestmail: (email: string) => Promise<boolean>
@@ -217,7 +226,8 @@ export default function SettingsAdminSection({
 		adminBridgeConfigured &&
 		!adminRuntimeHealthLoading &&
 		(!adminRuntimeHealth || adminBridgeReady)
-	const showAdminUserFallback = canManageUsers && !adminBridgeReady && Boolean(accountUser)
+	// Only stand in for the real list when neither route can produce one.
+	const showAdminUserFallback = canManageUsers && !canListUsers && Boolean(accountUser)
 	const userDialogOpen = userDialogMode !== null
 	const selectedAdminUser = selectedAdminUserId
 		? adminUsers.find(user => user.id === selectedAdminUserId) || null
@@ -568,10 +578,31 @@ export default function SettingsAdminSection({
 								</div>
 							</div>
 							<div className="detail-helper-text">
-								Instance user roles are not exposed by the current Vikunja CLI bridge. This UI currently supports
-								user lifecycle operations only: create, edit identity, enable or disable, reset password, and delete.
+								{accountIsServerAdmin
+									? 'User management runs against this Vikunja server\u2019s own admin API. Renaming a user is the one action that API does not expose, so it still needs the CLI bridge.'
+									: 'User management runs through the Vikunja CLI bridge, which supports lifecycle operations only: create, edit identity, enable or disable, reset password, and delete.'}
 							</div>
 						</div>
+						{adminOverview ? (
+							<div className="detail-grid detail-grid-tight" data-admin-overview>
+								<div className="detail-item detail-field">
+									<div className="detail-label">Users</div>
+									<div className="detail-value">{adminOverview.users ?? 0}</div>
+								</div>
+								<div className="detail-item detail-field">
+									<div className="detail-label">Projects</div>
+									<div className="detail-value">{adminOverview.projects ?? 0}</div>
+								</div>
+								<div className="detail-item detail-field">
+									<div className="detail-label">Tasks</div>
+									<div className="detail-value">{adminOverview.tasks ?? 0}</div>
+								</div>
+								<div className="detail-item detail-field">
+									<div className="detail-label">Teams</div>
+									<div className="detail-value">{adminOverview.teams ?? 0}</div>
+								</div>
+							</div>
+						) : null}
 						{adminRuntimeHealthLoading ? <div className="empty-state compact">Checking bridge health…</div> : null}
 						{adminRuntimeHealth ? (
 							<div className="detail-grid detail-grid-tight">
@@ -713,10 +744,10 @@ export default function SettingsAdminSection({
 								)
 							})}
 						</div>
-						{!adminBridgeReady ? (
+						{!canListUsers ? (
 							<div className="empty-state compact">
-								Admin user management requires the Vikunja CLI bridge. Configure it via environment
-								variables on the server.
+								Admin user management needs either an instance-admin account on this Vikunja server
+								or the Vikunja CLI bridge. Configure the bridge via environment variables on the server.
 								{adminBridgeFailedChecks.length ? ` Checks failed: ${adminBridgeFailedChecks.join(', ')}.` : ''}
 							</div>
 						) : null}
@@ -735,11 +766,11 @@ export default function SettingsAdminSection({
 								</div>
 							</div>
 						) : null}
-						{adminBridgeReady && adminUsersLoading ? <div className="empty-state compact">Loading users…</div> : null}
-						{adminBridgeReady && !adminUsersLoading && adminUsers.length === 0 && adminUsersLoaded ? (
-							<div className="empty-state compact">No users were returned by the admin bridge.</div>
+						{canListUsers && adminUsersLoading ? <div className="empty-state compact">Loading users…</div> : null}
+						{canListUsers && !adminUsersLoading && adminUsers.length === 0 && adminUsersLoaded ? (
+							<div className="empty-state compact">No users were returned.</div>
 						) : null}
-						{adminBridgeReady && adminUsers.length > 0 ? (
+						{canListUsers && adminUsers.length > 0 ? (
 							<div className="settings-session-list">
 								{adminUsers.map(user => {
 									const isCurrentUser = isCurrentAdminUser(accountUser, user.id, user.username, user.email)
@@ -758,6 +789,7 @@ export default function SettingsAdminSection({
 											<div className="settings-admin-user-actions">
 												<div className={`settings-status-chip ${user.enabled ? 'is-active' : 'is-disabled'}`.trim()}>
 													{user.enabled ? 'Active' : 'Disabled'}
+												{user.isAdmin ? <div className="settings-status-chip is-active" data-admin-role-chip>Admin</div> : null}
 												</div>
 												<button
 													className="menu-button settings-admin-user-overflow"
@@ -1245,6 +1277,7 @@ export default function SettingsAdminSection({
 								</div>
 								<div className={`settings-status-chip ${selectedAdminUser.enabled ? 'is-active' : 'is-disabled'}`.trim()}>
 									{selectedAdminUser.enabled ? 'Active' : 'Disabled'}
+								{selectedAdminUser.isAdmin ? <div className="settings-status-chip is-active" data-admin-role-chip>Admin</div> : null}
 								</div>
 							</div>
 							{selectedAdminUserProtectedMessage ? (
@@ -1280,6 +1313,16 @@ export default function SettingsAdminSection({
 										>
 											{selectedAdminUser.enabled ? 'Disable' : 'Enable'}
 										</button>
+										{accountIsServerAdmin && !selectedAdminUserIsCurrent ? (
+											<button
+												className="pill-button subtle"
+												type="button"
+												data-admin-role-toggle
+												onClick={() => void onSetAdminUserRole(selectedAdminUser.id, !selectedAdminUser.isAdmin)}
+											>
+												{selectedAdminUser.isAdmin ? 'Remove admin' : 'Make admin'}
+											</button>
+										) : null}
 										<button
 											className="pill-button subtle"
 											type="button"

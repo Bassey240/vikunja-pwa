@@ -12,6 +12,7 @@ import {buildCalendarRangeFilter, prefetchRange, rangeForZoom, type CalendarRang
 import {buildMoveToDayPatch, buildReschedulePatch, type RescheduleMode} from '@/utils/calendar-reschedule'
 import {debugDragLog, markTaskDropTrace} from '@/utils/dragPerf'
 import {formatError} from '@/utils/formatting'
+import {clearLoadError, setLoadError} from './load-error'
 import {calculateTaskPosition} from '@/utils/taskPosition'
 import type {StateCreator} from 'zustand'
 import type {AppStore} from '../index'
@@ -237,8 +238,9 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 				currentProjectViewId: viewId,
 			})
 			persistOfflineTaskCollections(get())
+			clearLoadError(set, get, 'tasks:project')
 		} catch (error) {
-			set({error: formatError(error as Error)})
+			setLoadError(set, 'tasks:project', formatError(error as Error), silent)
 		} finally {
 			if (!silent) {
 				set({loadingTasks: false})
@@ -302,8 +304,9 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 				: mergeTaskListsPreservingPrimaryOrder(mergedTodayTasks, keptDoneTasks)
 			set({todayTasks})
 			persistOfflineTaskCollections(get())
+			clearLoadError(set, get, 'tasks:today')
 		} catch (error) {
-			set({error: formatError(error as Error)})
+			setLoadError(set, 'tasks:today', formatError(error as Error), silent)
 		} finally {
 			if (!silent) {
 				set({loadingToday: false})
@@ -359,8 +362,9 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 				currentInboxViewId: viewId,
 			})
 			persistOfflineTaskCollections(get())
+			clearLoadError(set, get, 'tasks:inbox')
 		} catch (error) {
-			set({error: formatError(error as Error)})
+			setLoadError(set, 'tasks:inbox', formatError(error as Error), silent)
 		} finally {
 			if (!silent) {
 				set({loadingInbox: false})
@@ -388,8 +392,9 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 			})))
 			set({upcomingTasks})
 			persistOfflineTaskCollections(get())
+			clearLoadError(set, get, 'tasks:upcoming')
 		} catch (error) {
-			set({error: formatError(error as Error)})
+			setLoadError(set, 'tasks:upcoming', formatError(error as Error), silent)
 		} finally {
 			if (!silent) {
 				set({loadingUpcoming: false})
@@ -416,8 +421,9 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 				orderBy: ['asc', 'asc'],
 			})))
 			set({calendarTasks})
+			clearLoadError(set, get, 'tasks:calendar')
 		} catch (error) {
-			set({error: formatError(error as Error)})
+			setLoadError(set, 'tasks:calendar', formatError(error as Error), silent)
 		} finally {
 			if (!silent) {
 				set({loadingCalendar: false})
@@ -455,8 +461,9 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 				orderBy: ['desc', 'desc'],
 			})))
 			set({searchTasks})
+			clearLoadError(set, get, 'tasks:search')
 		} catch (error) {
-			set({error: formatError(error as Error)})
+			setLoadError(set, 'tasks:search', formatError(error as Error), silent)
 		} finally {
 			if (!silent) {
 				set({loadingSearch: false})
@@ -503,8 +510,9 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 				currentSavedFilterViewId: viewId,
 			})
 			persistOfflineTaskCollections(get())
+			clearLoadError(set, get, 'tasks:savedFilter')
 		} catch (error) {
-			set({error: formatError(error as Error)})
+			setLoadError(set, 'tasks:savedFilter', formatError(error as Error), silent)
 		} finally {
 			if (!silent) {
 				set({loadingSavedFilterTasks: false})
@@ -550,11 +558,10 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 				projectFilterTasksLoaded: true,
 			})
 			persistOfflineTaskCollections(get())
+			clearLoadError(set, get, 'tasks:projectFilter')
 		} catch (error) {
-			set({
-				error: formatError(error as Error),
-				projectFilterTasksLoaded: false,
-			})
+			setLoadError(set, 'tasks:projectFilter', formatError(error as Error), silent)
+			set({projectFilterTasksLoaded: false})
 		} finally {
 			if (!silent) {
 				set({loadingProjectFilterTasks: false})
@@ -957,7 +964,7 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 			return false
 		}
 
-		const patch = buildMoveToDayPatch(task, dayKey)
+		const patch = buildMoveToDayPatch(task, dayKey, get().account?.user?.settings?.frontend_settings?.default_due_time)
 		if (!patch) {
 			return false
 		}
@@ -1036,32 +1043,19 @@ export const createTasksSlice: StateCreator<AppStore, [], [], TasksSlice> = (set
 			return true
 		}
 
-		const started = await get().startUndoableMutation({
-			notice: {
-				id: `task-delete:${taskId}:${Date.now()}`,
-				kind: 'task-delete',
-				title: 'Task deleted',
-				body: task.title || `#${taskId}`,
-			},
-			durationMs: UNDOABLE_MUTATION_MS,
-			commit: async () => {
-				await api(`/api/tasks/${taskId}`, {method: 'DELETE'})
-			},
-			rollback: () => {
-				set(restoreTaskDeletionSnapshot(snapshot))
-			},
-			onCommitted: async () => {
-				if (!get().pendingUndoMutation) {
-					await get().refreshCurrentCollections()
-				}
-			},
-		})
-
-		if (!started) {
+		// Vikunja 2.4 soft-deletes server-side and keeps the task for 30 days,
+		// so the delete goes out immediately — same as Vikunja's own frontend.
+		// The app must not hold its own copy of a deleted task; the snapshot
+		// exists only to undo the optimistic hide if the request fails.
+		try {
+			await api(`/api/tasks/${taskId}`, {method: 'DELETE'})
+			await get().refreshCurrentCollections()
+			return true
+		} catch (error) {
 			set(restoreTaskDeletionSnapshot(snapshot))
+			set({error: formatError(error as Error)})
+			return false
 		}
-
-		return started
 	},
 
 	async moveTask(intent) {

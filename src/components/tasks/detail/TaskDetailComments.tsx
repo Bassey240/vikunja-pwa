@@ -1,3 +1,5 @@
+import BotBadge from '@/components/common/BotBadge'
+import RichTextView from '@/components/common/RichTextView'
 import UserAvatar from '@/components/common/UserAvatar'
 import type {ReactionMap, TaskComment, TaskReaction} from '@/types'
 import {formatLongDate, getUserDisplayName} from '@/utils/formatting'
@@ -65,7 +67,10 @@ export default function TaskDetailComments({
 											<UserAvatar user={comment.author} size={27} />
 										</span>
 										<div className="detail-comment-copy">
-											<div className="detail-comment-name">{getUserDisplayName(comment.author)}</div>
+											<div className="detail-comment-name">
+											{getUserDisplayName(comment.author)}
+											<BotBadge user={comment.author} />
+										</div>
 											<div className="detail-meta">
 												{createdLabel}
 												{wasEdited ? ' · Edited' : ''}
@@ -124,7 +129,9 @@ export default function TaskDetailComments({
 								) : (
 									<>
 										<div className="detail-comment-body">
-											{comment.comment || 'No comment text'}
+											{comment.comment
+												? <RichTextView value={comment.comment} />
+												: 'No comment text'}
 										</div>
 										<div className="detail-inline-actions">
 											{groupedReactions.map(reaction => (

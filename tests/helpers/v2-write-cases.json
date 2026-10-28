@@ -1,0 +1,597 @@
+{
+  "writes": [
+    [
+      "POST",
+      "/api/session/settings/general",
+      {
+        "name": "Test",
+        "avatar_provider": "default",
+        "timezone": "Europe/Amsterdam",
+        "frontend_settings": {
+          "theme": "dark"
+        }
+      }
+    ],
+    [
+      "POST",
+      "/api/session/settings/email",
+      {
+        "password": "smoke-password",
+        "newEmail": "test@example.test"
+      }
+    ],
+    [
+      "POST",
+      "/api/session/settings/avatar",
+      {
+        "avatarProvider": "initials"
+      }
+    ],
+    [
+      "POST",
+      "/api/projects",
+      {
+        "title": "Project",
+        "parentProjectId": 2
+      }
+    ],
+    [
+      "POST",
+      "/api/projects/2",
+      {
+        "title": "Project",
+        "parent_project_id": 0,
+        "position": 50,
+        "has_background": false,
+        "maxPermission": 2
+      }
+    ],
+    [
+      "POST",
+      "/api/projects/2/duplicate",
+      {
+        "parentProjectId": 0
+      }
+    ],
+    [
+      "POST",
+      "/api/projects/2/tasks",
+      {
+        "title": "Task",
+        "description": "<p>Task</p>",
+        "parentTaskId": 201,
+        "projectViewId": 15,
+        "bucketId": 151
+      }
+    ],
+    [
+      "POST",
+      "/api/tasks/201",
+      {
+        "id": 201,
+        "title": "Real task",
+        "description": "<p>Keep this</p>",
+        "project_id": 2,
+        "done": true,
+        "priority": 3,
+        "due_date": null,
+        "start_date": null,
+        "end_date": null,
+        "repeat_after": null,
+        "repeat_from_current_date": false,
+        "repeat_mode": 1,
+        "maxPermission": 2,
+        "read_at": null,
+        "comments": [
+          {
+            "id": 1
+          }
+        ],
+        "reminders": [
+          {
+            "reminder": "2026-10-07T09:00:00Z",
+            "relative_to": "",
+            "relative_period": 0,
+            "id": 9
+          }
+        ]
+      }
+    ],
+    [
+      "POST",
+      "/api/tasks/201",
+      {
+        "id": 201,
+        "title": "Renamed",
+        "description": "<p>Edited</p>",
+        "project_id": 2,
+        "done": false,
+        "priority": 5,
+        "due_date": "2026-10-07T09:00:00Z",
+        "start_date": null,
+        "end_date": null,
+        "repeat_after": null,
+        "repeat_from_current_date": false,
+        "repeat_mode": 1,
+        "maxPermission": 2,
+        "read_at": null,
+        "comments": [
+          {
+            "id": 1
+          }
+        ],
+        "reminders": [
+          {
+            "reminder": "2026-10-07T09:00:00Z",
+            "relative_to": "",
+            "relative_period": 0,
+            "id": 9
+          }
+        ],
+        "is_favorite": true,
+        "hex_color": "abcdef",
+        "percent_done": 0.5
+      }
+    ],
+    [
+      "POST",
+      "/api/tasks/201",
+      {
+        "id": 201,
+        "title": "Real task",
+        "description": "<p>Keep this</p>",
+        "project_id": 3,
+        "done": false,
+        "priority": 3,
+        "due_date": null,
+        "start_date": null,
+        "end_date": null,
+        "repeat_after": null,
+        "repeat_from_current_date": false,
+        "repeat_mode": 1,
+        "maxPermission": 2,
+        "read_at": null,
+        "comments": [
+          {
+            "id": 1
+          }
+        ],
+        "reminders": [
+          {
+            "reminder": "2026-10-07T09:00:00Z",
+            "relative_to": "",
+            "relative_period": 0,
+            "id": 9
+          }
+        ]
+      }
+    ],
+    [
+      "POST",
+      "/api/tasks/201",
+      {
+        "id": 201,
+        "title": "Real task",
+        "description": "<p>Keep this</p>",
+        "project_id": 2,
+        "done": false,
+        "priority": 3,
+        "due_date": null,
+        "start_date": null,
+        "end_date": null,
+        "repeat_after": 3600,
+        "repeat_from_current_date": true,
+        "repeat_mode": 1,
+        "maxPermission": 2,
+        "read_at": null,
+        "comments": [
+          {
+            "id": 1
+          }
+        ],
+        "reminders": [
+          {
+            "reminder": "2026-10-07T09:00:00Z",
+            "relative_to": "",
+            "relative_period": 0,
+            "id": 9
+          }
+        ]
+      }
+    ],
+    [
+      "POST",
+      "/api/tasks/bulk",
+      {
+        "taskIds": [
+          201,
+          202
+        ],
+        "fields": [
+          "repeat_after",
+          "repeat_from_current_date",
+          "due_date"
+        ],
+        "values": {
+          "repeat_after": 3600,
+          "repeat_from_current_date": true,
+          "due_date": null
+        }
+      }
+    ],
+    [
+      "POST",
+      "/api/tasks/201/position",
+      {
+        "projectViewId": 15,
+        "position": 123
+      }
+    ],
+    [
+      "POST",
+      "/api/tasks/201/duplicate",
+      {}
+    ],
+    [
+      "POST",
+      "/api/tasks/201/read",
+      {}
+    ],
+    [
+      "PUT",
+      "/api/tasks/201/relations",
+      {
+        "otherTaskId": 202,
+        "relationKind": "related"
+      }
+    ],
+    [
+      "POST",
+      "/api/tasks/201/assignees",
+      {
+        "userId": 1
+      }
+    ],
+    [
+      "POST",
+      "/api/tasks/201/assignees/bulk",
+      {
+        "assignees": [
+          {
+            "id": 1,
+            "username": "apartner",
+            "name": "User"
+          }
+        ]
+      }
+    ],
+    [
+      "POST",
+      "/api/tasks/201/comments",
+      {
+        "comment": "<p>Comment</p>"
+      }
+    ],
+    [
+      "POST",
+      "/api/tasks/201/comments/1",
+      {
+        "comment": "<p>Edited</p>"
+      }
+    ],
+    [
+      "POST",
+      "/api/tasks/201/labels",
+      {
+        "labelId": 1
+      }
+    ],
+    [
+      "POST",
+      "/api/tasks/201/labels/bulk",
+      {
+        "labels": [
+          {
+            "id": 1,
+            "title": "Label"
+          }
+        ]
+      }
+    ],
+    [
+      "POST",
+      "/api/labels",
+      {
+        "title": "Label",
+        "hexColor": "#aabbcc"
+      }
+    ],
+    [
+      "POST",
+      "/api/labels/1",
+      {
+        "title": "Edited label",
+        "hexColor": "#abcdef"
+      }
+    ],
+    [
+      "PUT",
+      "/api/projects/2/views",
+      {
+        "id": 12,
+        "project_id": 2,
+        "title": "Board",
+        "view_kind": "kanban",
+        "filter": {
+          "filter": "done = false",
+          "filter_timezone": "Europe/Amsterdam"
+        },
+        "bucket_configuration_mode": "manual",
+        "position": 100,
+        "maxPermission": 2
+      }
+    ],
+    [
+      "PUT",
+      "/api/projects/2/views",
+      {
+        "id": 12,
+        "project_id": 2,
+        "title": "Board",
+        "view_kind": "kanban",
+        "filter": null,
+        "bucket_configuration_mode": "manual",
+        "position": 100,
+        "maxPermission": 2
+      }
+    ],
+    [
+      "POST",
+      "/api/projects/2/views/12",
+      {
+        "id": 12,
+        "project_id": 2,
+        "title": "Board",
+        "view_kind": "kanban",
+        "filter": {
+          "filter": "done = false",
+          "filter_timezone": "Europe/Amsterdam"
+        },
+        "bucket_configuration_mode": "manual",
+        "position": 100,
+        "maxPermission": 2,
+        "bucket_configuration": [
+          {
+            "title": "Open",
+            "filter": {
+              "filter": "done = false",
+              "filter_timezone": "UTC"
+            }
+          }
+        ]
+      }
+    ],
+    [
+      "POST",
+      "/api/projects/2/views/15/buckets",
+      {
+        "title": "Bucket",
+        "limit": 5
+      }
+    ],
+    [
+      "POST",
+      "/api/projects/2/views/15/buckets/151",
+      {
+        "id": 10,
+        "title": "Renamed",
+        "position": 50,
+        "limit": 4,
+        "tasks": [
+          {
+            "id": 201,
+            "title": "Real task",
+            "description": "<p>Keep this</p>",
+            "project_id": 2,
+            "done": false,
+            "priority": 3,
+            "due_date": null,
+            "start_date": null,
+            "end_date": null,
+            "repeat_after": null,
+            "repeat_from_current_date": false,
+            "repeat_mode": 1,
+            "maxPermission": 2,
+            "read_at": null,
+            "comments": [
+              {
+                "id": 1
+              }
+            ],
+            "reminders": [
+              {
+                "reminder": "2026-10-07T09:00:00Z",
+                "relative_to": "",
+                "relative_period": 0,
+                "id": 9
+              }
+            ]
+          }
+        ],
+        "maxPermission": 2
+      }
+    ],
+    [
+      "POST",
+      "/api/projects/2/views/15/buckets/151/tasks",
+      {
+        "taskId": 201
+      }
+    ],
+    [
+      "POST",
+      "/api/projects/2/users",
+      {
+        "username": "apartner",
+        "permission": 1
+      }
+    ],
+    [
+      "POST",
+      "/api/projects/2/users/apartner",
+      {
+        "permission": 2
+      }
+    ],
+    [
+      "POST",
+      "/api/projects/2/teams",
+      {
+        "teamId": 1,
+        "permission": 1
+      }
+    ],
+    [
+      "POST",
+      "/api/projects/2/teams/1",
+      {
+        "permission": 2
+      }
+    ],
+    [
+      "POST",
+      "/api/projects/2/shares",
+      {
+        "name": "Share",
+        "password": "smoke-password",
+        "permission": 1
+      }
+    ],
+    [
+      "PUT",
+      "/api/projects/2/webhooks",
+      {
+        "target_url": "https://example.test/hook",
+        "events": [
+          "task.created"
+        ]
+      }
+    ],
+    [
+      "POST",
+      "/api/projects/2/webhooks/1",
+      {
+        "target_url": "https://example.test/edited",
+        "events": [
+          "task.updated"
+        ]
+      }
+    ],
+    [
+      "POST",
+      "/api/notifications",
+      {}
+    ],
+    [
+      "POST",
+      "/api/notifications/1",
+      {
+        "read": true
+      }
+    ],
+    [
+      "PUT",
+      "/api/subscriptions/task/201",
+      {}
+    ],
+    [
+      "PUT",
+      "/api/comments/1/reactions",
+      {
+        "value": "🎉"
+      }
+    ],
+    [
+      "POST",
+      "/api/comments/1/reactions/delete",
+      {
+        "value": "🎉"
+      }
+    ],
+    [
+      "POST",
+      "/api/teams",
+      {
+        "name": "Team",
+        "description": "<p>Team</p>",
+        "isPublic": true
+      }
+    ],
+    [
+      "POST",
+      "/api/teams/1",
+      {
+        "name": "Renamed",
+        "description": "<p>Edited</p>",
+        "is_public": false
+      }
+    ],
+    [
+      "POST",
+      "/api/teams/1/members",
+      {
+        "username": "apartner"
+      }
+    ],
+    [
+      "POST",
+      "/api/teams/1/members/apartner/admin",
+      {}
+    ],
+    [
+      "POST",
+      "/api/filters",
+      {
+        "title": "Saved",
+        "filters": {
+          "filter": "done = false",
+          "s": "term",
+          "filter_timezone": "Europe/Amsterdam"
+        }
+      }
+    ],
+    [
+      "POST",
+      "/api/filters/1",
+      {
+        "title": "Saved",
+        "filters": {
+          "filter": "done = false",
+          "s": "term",
+          "filter_timezone": "Europe/Amsterdam"
+        },
+        "is_favorite": true
+      }
+    ]
+  ],
+  "deletes": [
+    "/api/projects/2",
+    "/api/tasks/201",
+    "/api/labels/1",
+    "/api/projects/2/views/12",
+    "/api/projects/2/views/15/buckets/151",
+    "/api/projects/2/users/apartner",
+    "/api/projects/2/teams/1",
+    "/api/projects/2/shares/1",
+    "/api/projects/2/webhooks/1",
+    "/api/subscriptions/task/201",
+    "/api/teams/1",
+    "/api/teams/1/members/apartner",
+    "/api/filters/1",
+    "/api/tasks/201/relations/related/202",
+    "/api/tasks/201/assignees/1",
+    "/api/tasks/201/comments/1",
+    "/api/tasks/201/attachments/1",
+    "/api/tasks/201/labels/1"
+  ]
+}

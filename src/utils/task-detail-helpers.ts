@@ -12,6 +12,7 @@ export type TaskDetailSection =
 	| 'related'
 	| 'comments'
 	| 'attachments'
+	| 'timeTracking'
 	| 'description'
 	| 'info'
 export type RepeatUnit = 'hours' | 'days' | 'weeks' | 'months'

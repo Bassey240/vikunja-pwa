@@ -1,6 +1,7 @@
 import {api} from '@/api'
 import type {AppNotification, NotificationPayload, TaskAssignee} from '@/types'
 import {formatError, normalizeTaskDateValue} from '@/utils/formatting'
+import {clearLoadError, setLoadError} from './load-error'
 import type {StateCreator} from 'zustand'
 import type {AppStore} from '../index'
 import {blockOfflineReadOnlyAction} from '../offline-readonly'
@@ -49,10 +50,9 @@ export const createNotificationsSlice: StateCreator<AppStore, [], [], Notificati
 			void mergeOfflineSnapshot({
 				notifications: get().notifications,
 			})
+			clearLoadError(set, get, 'notifications:list')
 		} catch (error) {
-			if (!silent) {
-				set({error: formatError(error as Error)})
-			}
+			setLoadError(set, 'notifications:list', formatError(error as Error), silent)
 		} finally {
 			if (shouldShowLoading) {
 				set({loadingNotifications: false})

@@ -1,4 +1,4 @@
-import {addDays} from './date-helpers.ts'
+import {addDays, withDefaultDueTime} from './date-helpers.ts'
 
 const WEEKDAY_INDEX: Record<string, number> = {
 	sun: 0,
@@ -89,7 +89,7 @@ export interface QuickAddMagicResult {
 	repeatText: string | null
 }
 
-export function parseQuickAddMagic(text: string, now: Date = new Date()): QuickAddMagicResult {
+export function parseQuickAddMagic(text: string, now: Date = new Date(), defaultDueTime?: string): QuickAddMagicResult {
 	let nextText = text.trim()
 
 	const labels = extractPrefixedItems(nextText, '*')
@@ -107,7 +107,7 @@ export function parseQuickAddMagic(text: string, now: Date = new Date()): QuickA
 	const repeat = extractRepeat(nextText)
 	nextText = repeat.nextText
 
-	const date = extractDate(nextText, now)
+	const date = extractDate(nextText, now, defaultDueTime)
 	nextText = date.nextText
 
 	return {
@@ -229,16 +229,16 @@ function extractRepeat(text: string) {
 	}
 }
 
-function extractDate(text: string, now: Date) {
+function extractDate(text: string, now: Date, defaultDueTime?: string) {
 	const normalizedText = ` ${text.toLowerCase()} `
 
 	const simpleMatches: Array<{needle: string; build: () => Date}> = [
-		{needle: ' today ', build: () => withDefaultTime(startOfDay(now))},
+		{needle: ' today ', build: () => withDefaultDueTime(startOfDay(now), defaultDueTime)},
 		{needle: ' tonight ', build: () => withTime(startOfDay(now), 21, 0)},
-		{needle: ' tomorrow ', build: () => withDefaultTime(addDays(startOfDay(now), 1))},
-		{needle: ' next week ', build: () => withDefaultTime(addDays(startOfDay(now), 7))},
-		{needle: ' next month ', build: () => withDefaultTime(startOfNextMonth(now))},
-		{needle: ' end of month ', build: () => withDefaultTime(endOfMonth(now))},
+		{needle: ' tomorrow ', build: () => withDefaultDueTime(addDays(startOfDay(now), 1), defaultDueTime)},
+		{needle: ' next week ', build: () => withDefaultDueTime(addDays(startOfDay(now), 7), defaultDueTime)},
+		{needle: ' next month ', build: () => withDefaultDueTime(startOfNextMonth(now), defaultDueTime)},
+		{needle: ' end of month ', build: () => withDefaultDueTime(endOfMonth(now), defaultDueTime)},
 	]
 	for (const entry of simpleMatches) {
 		if (normalizedText.includes(entry.needle)) {
@@ -260,8 +260,8 @@ function extractDate(text: string, now: Date) {
 		} else if (unit.startsWith('month')) {
 			date.setMonth(date.getMonth() + amount)
 		}
-		if (!unit.startsWith('hour')) {
-			withDefaultTime(date)
+		if (!unit.startsWith('hour') && defaultDueTime) {
+			return removeAndApplyDate(text, inMatch[2].trim(), withDefaultDueTime(date, defaultDueTime))
 		}
 		return removeAndApplyDate(text, inMatch[2].trim(), date)
 	}
@@ -272,7 +272,7 @@ function extractDate(text: string, now: Date) {
 		const weekday = WEEKDAY_INDEX[(weekdayMatch[3] || '').toLowerCase()]
 		if (typeof weekday === 'number') {
 			const date = nextWeekdayForQuickAdd(now, weekday, useNextWeek)
-			return removeAndApplyDate(text, weekdayMatch[0].trim(), withDefaultTime(date))
+			return removeAndApplyDate(text, weekdayMatch[0].trim(), withDefaultDueTime(date, defaultDueTime))
 		}
 	}
 
@@ -280,7 +280,7 @@ function extractDate(text: string, now: Date) {
 	if (numericMatch) {
 		const date = parseNumericDate(numericMatch, now)
 		if (date) {
-			return removeAndApplyDate(text, numericMatch[2].trim(), withDefaultTime(date))
+			return removeAndApplyDate(text, numericMatch[2].trim(), withDefaultDueTime(date, defaultDueTime))
 		}
 	}
 
@@ -299,7 +299,7 @@ function extractDate(text: string, now: Date) {
 			if (date < now) {
 				date.setFullYear(date.getFullYear() + 1)
 			}
-			return removeAndApplyDate(text, monthMatch[2].trim(), withDefaultTime(date))
+			return removeAndApplyDate(text, monthMatch[2].trim(), withDefaultDueTime(date, defaultDueTime))
 		}
 	}
 
@@ -384,12 +384,6 @@ function nextWeekdayForQuickAdd(now: Date, weekday: number, forceNextWeek: boole
 function startOfDay(date: Date) {
 	const nextDate = new Date(date)
 	nextDate.setHours(0, 0, 0, 0)
-	return nextDate
-}
-
-function withDefaultTime(date: Date) {
-	const nextDate = new Date(date)
-	nextDate.setHours(12, 0, 0, 0)
 	return nextDate
 }
 

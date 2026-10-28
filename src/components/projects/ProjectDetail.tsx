@@ -143,20 +143,17 @@ export default function ProjectDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspe
 	const canGrantAdminShares = canAdminProject(projectDetail, projectPermissionActor)
 	const availableSharePermissions = getAssignableProjectSharePermissions(projectDetail, null, projectPermissionActor)
 	const projectPermissionValue = getProjectPermission(projectDetail, projectPermissionActor) as SharePermission
-	const projectPermissionLabel = account?.linkShareAuth
-		? getSharePermissionLabel(projectPermissionValue)
-		: account?.canUseAdminBridge
-			? 'Operator admin'
-			: getSharePermissionLabel(projectPermissionValue)
+	// Operator access unlocks the gateway's admin tools, not project permissions:
+	// project calls carry this session's own Vikunja token, so the label must
+	// report the permission the server will actually honor.
+	const projectPermissionLabel = getSharePermissionLabel(projectPermissionValue)
 	const projectPermissionMessage = account?.linkShareAuth
 		? 'This session is authenticated through a shared project link. Project sharing stays locked even if the link allows editing.'
-		: account?.canUseAdminBridge
-			? 'Operator access is active for this session, so project editing and all share levels are available from the PWA.'
-			: projectPermissionValue === 2
-				? 'This session can edit the project and manage all project share levels.'
-				: projectPermissionValue === 1
-					? 'This session can edit the project and manage non-admin project shares.'
-					: 'This session can view the project, but it cannot change project settings or shares.'
+		: projectPermissionValue === 2
+			? 'This session can edit the project and manage all project share levels.'
+			: projectPermissionValue === 1
+				? 'This session can edit the project and manage non-admin project shares.'
+				: 'This session can view the project, but it cannot change project settings or shares.'
 	const sharingBlockedMessage = account?.linkShareAuth
 		? 'Shared-link sessions cannot create or manage project shares.'
 		: !canManageSharing

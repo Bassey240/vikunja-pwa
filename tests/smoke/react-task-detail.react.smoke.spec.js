@@ -1,5 +1,7 @@
 import {expect, test} from '@playwright/test'
 import {startTestStack} from '../helpers/app-under-test.mjs'
+import {AUDIO_WAV, VIDEO_MP4} from '../helpers/mock-vikunja-server.mjs'
+import {readFile} from 'node:fs/promises'
 
 let stack
 
@@ -164,16 +166,19 @@ test('task detail edits title, priority, favorite state, and labels', async ({pa
 	await expect(page.locator('[data-task-comment]')).toHaveCount(1)
 	await expect(page.getByText('Route not found.')).toHaveCount(0)
 
-	await page.locator('[data-action="edit-task-comment"][data-task-comment-id="2"]').click()
-	await page.locator('[data-detail-edit-comment="2"]').fill('Updated follow-up note for the summary.')
-	await page.locator('[data-action="save-task-comment"][data-task-comment-id="2"]').click()
+	// Read the id the server assigned rather than assuming it: fixture comments
+	// elsewhere share the same id sequence.
+	const commentId = (await stack.mockApi('tasks/102')).comments[0].id
+	await page.locator(`[data-action="edit-task-comment"][data-task-comment-id="${commentId}"]`).click()
+	await page.locator(`[data-detail-edit-comment="${commentId}"]`).fill('Updated follow-up note for the summary.')
+	await page.locator(`[data-action="save-task-comment"][data-task-comment-id="${commentId}"]`).click()
 	await expect.poll(async () => {
 		const task = await stack.mockApi('tasks/102')
 		return task.comments?.[0]?.comment || ''
 	}).toBe('Updated follow-up note for the summary.')
-	await expect(page.locator('[data-task-comment="2"]')).toContainText('Updated follow-up note for the summary.')
+	await expect(page.locator(`[data-task-comment="${commentId}"]`)).toContainText('Updated follow-up note for the summary.')
 
-	await page.locator('[data-action="delete-task-comment"][data-task-comment-id="2"]').click()
+	await page.locator(`[data-action="delete-task-comment"][data-task-comment-id="${commentId}"]`).click()
 	await expect.poll(async () => {
 		const task = await stack.mockApi('tasks/102')
 		return task.comments?.length || 0
@@ -369,4 +374,222 @@ test('switching to initials updates the current-user avatar on task surfaces', a
 	await page.locator('[data-detail-assignee-search]').fill('smoke')
 	await page.locator('[data-action="add-task-assignee"][data-task-assignee-option="1"]').click()
 	await expect(page.locator('[data-task-assignee="1"] .user-avatar-initials')).toHaveCount(1)
+})
+
+test('bot users are marked as automated accounts', async ({page}) => {
+	// Vikunja 2.4 reports bots via User.bot_owner_id; the app reflects that
+	// rather than guessing from the reserved bot- username prefix.
+	await page.goto(`${stack.appUrl}/projects`)
+	await expect(page.getByRole('heading', {name: 'Projects'})).toBeVisible()
+	await page.locator('[data-project-node-id="2"] [data-action="select-project"][data-project-id="2"]').click()
+	await expect(page.getByRole('heading', {name: 'Work'})).toBeVisible()
+
+	await page.locator('.task-row').filter({hasText: 'Smoke suite rollout'}).locator('[data-action="open-task-focus"]').click()
+	await page.locator('[data-action="open-focused-task-detail"]').click()
+	await openTaskDetailSection(page, 'comments')
+
+	const botComment = page.locator('[data-task-comment]').filter({hasText: 'Deployed by automation.'})
+	await expect(botComment.locator('[data-bot-badge]')).toHaveCount(1)
+
+	const humanComment = page.locator('[data-task-comment]').filter({hasText: 'Proxy route is ready' })
+	await expect(humanComment.locator('[data-bot-badge]')).toHaveCount(0)
+})
+
+async function openTaskAttachments(page) {
+	await page.locator('.workspace-screen.is-active [data-task-row-id="102"] [data-action="open-task-focus"]').click()
+	await page.locator('[data-action="open-focused-task-detail"]').click()
+	await openTaskDetailSection(page, 'attachments')
+}
+
+async function trackAttachmentUrls(page) {
+	await page.evaluate(() => {
+		window.attachmentUrls = {created: [], revoked: []}
+		const create = URL.createObjectURL.bind(URL)
+		const revoke = URL.revokeObjectURL.bind(URL)
+		URL.createObjectURL = blob => {
+			const url = create(blob)
+			if (/^(audio|video)\//.test(blob.type)) window.attachmentUrls.created.push(url)
+			return url
+		}
+		URL.revokeObjectURL = url => {
+			if (window.attachmentUrls.created.includes(url)) window.attachmentUrls.revoked.push(url)
+			revoke(url)
+		}
+	})
+}
+
+test('audio attachments play, pause, seek, download and stop on section close', async ({page}) => {
+	await page.setViewportSize({width: 430, height: 900})
+	await trackAttachmentUrls(page)
+	await openTaskAttachments(page)
+	await page.locator('[data-detail-attachment-input]').setInputFiles({name: 'voice-note.wav', mimeType: 'audio/wav', buffer: AUDIO_WAV})
+	const row = page.locator('[data-task-attachment]').filter({hasText: 'voice-note.wav'})
+	const audio = row.locator('audio')
+	await expect(audio).toHaveAttribute('controls', '')
+	await expect.poll(() => audio.evaluate(element => element.duration)).toBe(8)
+	await expect(audio).toHaveJSProperty('paused', true)
+	await audio.evaluate(element => element.play())
+	await expect.poll(() => audio.evaluate(element => element.currentTime)).toBeGreaterThan(0)
+	await audio.evaluate(element => element.pause())
+	await expect(audio).toHaveJSProperty('paused', true)
+	await audio.evaluate(element => { element.currentTime = 4 })
+	await expect.poll(() => audio.evaluate(element => element.currentTime)).toBeGreaterThanOrEqual(4)
+	await audio.evaluate(element => { window.lastAudio = element; return element.play() })
+	await expect(audio).toHaveJSProperty('paused', false)
+	const url = await audio.getAttribute('src')
+	const box = await audio.boundingBox()
+	expect(box.x + box.width).toBeLessThanOrEqual(430)
+	await page.locator('[data-detail-section-toggle="attachments"]').click()
+	await expect(page.locator('audio')).toHaveCount(0)
+	expect(await page.evaluate(() => window.lastAudio.paused)).toBe(true)
+	expect(await page.evaluate(() => window.lastAudio.getAttribute('src'))).toBeNull()
+	expect(await page.evaluate(() => window.attachmentUrls.revoked)).toContain(url)
+
+	await openTaskDetailSection(page, 'attachments')
+	await expect.poll(() => row.locator('audio').evaluate(element => element.duration)).toBe(8)
+	const download = page.waitForEvent('download')
+	await row.getByRole('link', {name: 'Download', exact: true}).click()
+	const file = await download
+	expect(file.suggestedFilename()).toBe('voice-note.wav')
+	expect(await readFile(await file.path())).toEqual(AUDIO_WAV)
+	await row.locator('[data-action="delete-task-attachment"]').click()
+	await expect(row).toHaveCount(0)
+})
+
+test('audio attachment loading and decoding failures keep download available', async ({page}) => {
+	await openTaskAttachments(page)
+	await page.route('**/api/tasks/102/attachments/*', route => route.fulfill({status: 503, body: 'Unavailable'}))
+	await page.locator('[data-detail-attachment-input]').setInputFiles({name: 'unavailable.wav', mimeType: 'audio/wav', buffer: AUDIO_WAV})
+	const unavailable = page.locator('[data-task-attachment]').filter({hasText: 'unavailable.wav'})
+	await expect(unavailable.getByRole('status')).toContainText('Audio unavailable')
+	await expect(unavailable.getByRole('link', {name: 'Download', exact: true})).toBeVisible()
+	await page.unroute('**/api/tasks/102/attachments/*')
+
+	await page.locator('[data-detail-attachment-input]').setInputFiles({name: 'corrupt.mp3', mimeType: 'audio/mpeg', buffer: Buffer.from('invalid audio')})
+	const corrupt = page.locator('[data-task-attachment]').filter({hasText: 'corrupt.mp3'})
+	await expect(corrupt.getByRole('status')).toContainText('Audio unavailable')
+	await expect(corrupt.getByRole('link', {name: 'Download', exact: true})).toBeVisible()
+
+	await page.locator('[data-detail-attachment-input]').setInputFiles({name: 'untyped.wav', mimeType: 'application/octet-stream', buffer: AUDIO_WAV})
+	const untyped = page.locator('[data-task-attachment]').filter({hasText: 'untyped.wav'})
+	await expect.poll(() => untyped.locator('audio').evaluate(element => element.duration)).toBe(8)
+	await page.locator('[data-detail-attachment-input]').setInputFiles({name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('Notes')})
+	const text = page.locator('[data-task-attachment]').filter({hasText: 'notes.txt'})
+	await expect(text).toBeVisible()
+	await expect(text.locator('audio')).toHaveCount(0)
+	await expect(text.getByRole('link', {name: 'Download', exact: true})).toBeVisible()
+})
+
+test('audio fetch completing after section close does not create a leaked URL', async ({page}) => {
+	await trackAttachmentUrls(page)
+	await openTaskAttachments(page)
+	let pending
+	await page.route('**/api/tasks/102/attachments/*', route => { pending = route })
+	await page.locator('[data-detail-attachment-input]').setInputFiles({name: 'delayed.wav', mimeType: 'audio/wav', buffer: AUDIO_WAV})
+	await expect(page.getByText('Loading audio…')).toBeVisible()
+	await expect.poll(() => Boolean(pending)).toBe(true)
+	await page.locator('[data-detail-section-toggle="attachments"]').click()
+	const response = page.waitForResponse(pending.request().url())
+	await pending.continue()
+	await (await response).finished()
+	// The response callback runs before this next browser evaluation.
+	expect(await page.evaluate(() => window.attachmentUrls.created)).toEqual([])
+	await page.unroute('**/api/tasks/102/attachments/*')
+	await openTaskDetailSection(page, 'attachments')
+	await expect.poll(() => page.locator('audio').evaluate(element => element.duration)).toBe(8)
+})
+
+test('video attachments preview, play, pause, seek, download and stop when closed', async ({page}) => {
+	await page.setViewportSize({width: 430, height: 900})
+	await trackAttachmentUrls(page)
+	await openTaskAttachments(page)
+	await page.locator('[data-detail-attachment-input]').setInputFiles({name: 'clip.mp4', mimeType: 'video/mp4', buffer: VIDEO_MP4})
+	const row = page.locator('[data-task-attachment]').filter({hasText: 'clip.mp4'})
+	await expect(row.locator('video, img')).toHaveCount(0)
+	expect(await page.evaluate(() => window.attachmentUrls.created)).toEqual([])
+	await row.getByRole('button', {name: 'Preview', exact: true}).click()
+	const viewer = page.locator('[data-detail-media-viewer]')
+	const video = viewer.locator('video')
+	await expect(video).toHaveAttribute('controls', '')
+	await expect(video).toHaveAttribute('playsinline', '')
+	await expect.poll(() => video.evaluate(element => element.duration)).toBe(8)
+	await expect(video).toHaveJSProperty('videoWidth', 160)
+	await expect(video).toHaveJSProperty('paused', true)
+	await video.evaluate(element => element.play())
+	await expect.poll(() => video.evaluate(element => element.currentTime)).toBeGreaterThan(0)
+	await video.evaluate(element => element.pause())
+	await expect(video).toHaveJSProperty('paused', true)
+	await video.evaluate(element => { element.currentTime = 4 })
+	await expect.poll(() => video.evaluate(element => element.currentTime)).toBeGreaterThanOrEqual(4)
+	const box = await video.boundingBox()
+	expect(box.x + box.width).toBeLessThanOrEqual(430)
+	const download = page.waitForEvent('download')
+	await viewer.getByRole('link', {name: 'Download', exact: true}).click()
+	const file = await download
+	expect(file.suggestedFilename()).toBe('clip.mp4')
+	expect(await readFile(await file.path())).toEqual(VIDEO_MP4)
+	await video.evaluate(element => { window.lastVideo = element; return element.play() })
+	const url = await video.getAttribute('src')
+	await viewer.getByRole('button', {name: 'Close', exact: true}).click()
+	await expect(viewer).toHaveCount(0)
+	expect(await page.evaluate(() => window.lastVideo.paused)).toBe(true)
+	expect(await page.evaluate(() => window.lastVideo.getAttribute('src'))).toBeNull()
+	expect(await page.evaluate(() => window.attachmentUrls.revoked)).toContain(url)
+
+	await row.getByRole('button', {name: 'clip.mp4', exact: true}).click()
+	await expect.poll(() => video.evaluate(element => element.duration)).toBe(8)
+	await video.evaluate(element => { window.lastVideo = element; return element.play() })
+	// Closing the task itself must also stop playback and dispose of the source.
+	await page.locator('[data-action="close-task-detail"]').evaluate(element => element.click())
+	await expect(viewer).toHaveCount(0)
+	expect(await page.evaluate(() => window.lastVideo.paused)).toBe(true)
+	expect(await page.evaluate(() => window.lastVideo.getAttribute('src'))).toBeNull()
+})
+
+test('video preview recognizes extensions and retains downloads on loading or decoding failure', async ({page}) => {
+	await openTaskAttachments(page)
+	await page.locator('[data-detail-attachment-input]').setInputFiles({name: 'untyped.MP4', mimeType: 'application/octet-stream', buffer: VIDEO_MP4})
+	const viewer = page.locator('[data-detail-media-viewer]')
+	await page.locator('[data-task-attachment]').filter({hasText: 'untyped.MP4'}).getByRole('button', {name: 'Preview', exact: true}).click()
+	await expect.poll(() => viewer.locator('video').evaluate(element => element.duration)).toBe(8)
+	await viewer.getByRole('button', {name: 'Close', exact: true}).click()
+
+	// MIME-only identification also offers Preview; an undecodable file keeps Download.
+	await page.locator('[data-detail-attachment-input]').setInputFiles({name: 'unsupported.bin', mimeType: 'video/webm', buffer: Buffer.from('invalid video')})
+	await page.locator('[data-task-attachment]').filter({hasText: 'unsupported.bin'}).getByRole('button', {name: 'Preview', exact: true}).click()
+	await expect(viewer.getByRole('status')).toContainText('Video unavailable')
+	await expect(viewer.getByRole('link', {name: 'Download', exact: true})).toBeVisible()
+	await viewer.getByRole('button', {name: 'Close', exact: true}).click()
+
+	await page.route('**/api/tasks/102/attachments/*', route => route.fulfill({status: 503, body: 'Unavailable'}))
+	await page.locator('[data-task-attachment]').filter({hasText: 'untyped.MP4'}).getByRole('button', {name: 'Preview', exact: true}).click()
+	await expect(viewer.getByRole('status')).toContainText('Video unavailable')
+	await expect(viewer.getByRole('link', {name: 'Download', exact: true})).toBeVisible()
+	await viewer.getByRole('button', {name: 'Close', exact: true}).click()
+	await page.unroute('**/api/tasks/102/attachments/*')
+
+	await page.locator('[data-detail-attachment-input]').setInputFiles({name: 'receipt.png', mimeType: 'image/png', buffer: Buffer.from('mock-png-content')})
+	await page.locator('[data-task-attachment]').filter({hasText: 'receipt.png'}).getByRole('button', {name: 'Preview', exact: true}).click()
+	await expect(viewer.locator('img')).toHaveAttribute('alt', 'receipt.png')
+	await expect(viewer.locator('video')).toHaveCount(0)
+	await expect(viewer.getByRole('link', {name: 'Download', exact: true})).toBeVisible()
+})
+
+test('video fetch completing after preview closes does not create a leaked URL', async ({page}) => {
+	await trackAttachmentUrls(page)
+	await openTaskAttachments(page)
+	await page.locator('[data-detail-attachment-input]').setInputFiles({name: 'delayed.mp4', mimeType: 'video/mp4', buffer: VIDEO_MP4})
+	let pending
+	await page.route('**/api/tasks/102/attachments/*', route => { pending = route })
+	await page.locator('[data-task-attachment]').getByRole('button', {name: 'Preview', exact: true}).click()
+	await expect(page.getByText('Loading video…')).toBeVisible()
+	await expect.poll(() => Boolean(pending)).toBe(true)
+	await page.locator('[data-detail-media-viewer]').getByRole('button', {name: 'Close', exact: true}).click()
+	const response = page.waitForResponse(pending.request().url())
+	await pending.continue()
+	await (await response).finished()
+	expect(await page.evaluate(() => window.attachmentUrls.created)).toEqual([])
+	await page.unroute('**/api/tasks/102/attachments/*')
+	await page.locator('[data-task-attachment]').getByRole('button', {name: 'Preview', exact: true}).click()
+	await expect.poll(() => page.locator('video').evaluate(element => element.duration)).toBe(8)
 })

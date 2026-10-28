@@ -1,5 +1,6 @@
 import type {FormEvent, RefObject} from 'react'
 import AttachmentDownloadLink from '@/components/common/AttachmentDownloadLink'
+import AttachmentMediaPlayer from '@/components/common/AttachmentMediaPlayer'
 import AuthedImage from '@/components/common/AuthedImage'
 import type {TaskAttachment} from '@/types'
 import {
@@ -7,6 +8,7 @@ import {
 	formatAttachmentSize,
 	formatLongDate,
 	getUserDisplayName,
+	isVideoAttachment,
 } from '@/utils/formatting'
 import type {TaskDetailSection} from '@/utils/task-detail-helpers'
 import CollapsibleSection from './CollapsibleSection'
@@ -56,6 +58,9 @@ export default function TaskDetailAttachments({
 				<div className="detail-attachment-list">
 					{taskAttachments.length > 0 ? taskAttachments.map(attachment => {
 						const previewable = canPreviewAttachment(attachment)
+						const video = isVideoAttachment(attachment)
+						const audio = attachment.file.mime.toLowerCase().startsWith('audio/')
+							|| /\.(mp3|m4a|aac|wav|ogg|oga|opus|flac|aiff?)$/i.test(attachment.file.name)
 						return (
 							<div key={attachment.id} className="detail-attachment-row" data-task-attachment={attachment.id}>
 								{previewable ? (
@@ -64,14 +69,15 @@ export default function TaskDetailAttachments({
 										type="button"
 										data-action="open-task-attachment-preview"
 										data-task-attachment-id={attachment.id}
+										aria-label={video ? `Preview ${attachment.file.name || 'video'}` : undefined}
 										onClick={() => onOpenAttachmentPreview(attachment)}
 									>
-										<AuthedImage
+										{video ? <span aria-hidden="true">▶</span> : <AuthedImage
 											src={`/api/tasks/${taskId}/attachments/${attachment.id}`}
 											alt={attachment.file.name || 'Attachment preview'}
 											loading="lazy"
 											decoding="async"
-										/>
+										/>}
 									</button>
 								) : null}
 								<div className="detail-attachment-copy">
@@ -125,6 +131,7 @@ export default function TaskDetailAttachments({
 										Delete
 									</button>
 								</div>
+								{audio && !video ? <AttachmentMediaPlayer kind="audio" path={`/api/tasks/${taskId}/attachments/${attachment.id}`} filename={attachment.file.name || 'attachment'} /> : null}
 							</div>
 						)
 					}) : <div className="detail-helper-text">No attachments yet.</div>}

@@ -22,6 +22,9 @@ export default function InlineRootTaskComposer({
 		getProjectAncestors,
 		handleSubmit,
 		inputRef,
+		multilineRef,
+		multipleTasks,
+		setMultipleTasks,
 		parentTask,
 		setComposerProjectId,
 		setTitle,
@@ -56,11 +59,15 @@ export default function InlineRootTaskComposer({
 		<form className="subtask-composer root-task-inline-composer" data-form="root-task-inline" onSubmit={handleSubmit}>
 			<div className="subtask-context">Add task</div>
 			{parentTask ? <div className="inline-composer-helper">Parent task: {parentTask.title}</div> : null}
+			<label className="inline-composer-helper">
+				<input type="checkbox" checked={multipleTasks} disabled={rootSubmitting || title.includes('\n')} onChange={event => setMultipleTasks(event.currentTarget.checked)} /> Multiple tasks
+			</label>
 			<div className="root-inline-composer-grid">
 				<select
 					className="project-picker"
 					data-composer-project
 					value={composerProjectId || ''}
+					disabled={rootSubmitting}
 					onChange={event => setComposerProjectId(Number(event.currentTarget.value))}
 				>
 					{sortedProjects.map(project => (
@@ -69,20 +76,23 @@ export default function InlineRootTaskComposer({
 							</option>
 						))}
 				</select>
-				<HighlightedTaskInput
+				{multipleTasks ? (
+					<textarea ref={multilineRef} className="subtask-input" data-root-input rows={6} aria-label="Tasks — one per line (up to 100)" placeholder="One task per line (up to 100)" value={title} disabled={rootSubmitting} onChange={event => setTitle(event.currentTarget.value)} />
+				) : <HighlightedTaskInput
 					ref={inputRef}
 					className="subtask-input"
 					data-root-input
 					type="text"
 					placeholder="Task name"
 					value={title}
+					disabled={rootSubmitting}
 					onChange={event => setTitle(event.currentTarget.value)}
 					onKeyDown={event => {
 						if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
 							event.currentTarget.form?.requestSubmit()
 						}
 					}}
-				/>
+				/>}
 				<div className="inline-composer-actions">
 					<button className="composer-submit" type="submit" disabled={rootSubmitting || !composerProjectId} onMouseDown={event => event.preventDefault()}>
 						{rootSubmitting ? 'Saving…' : 'Add'}

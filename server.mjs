@@ -6,6 +6,7 @@ import path from 'node:path'
 import {fileURLToPath} from 'node:url'
 import {createAdminBridge} from './server/admin-bridge.mjs'
 import {createAdminConfig} from './server/admin-config.mjs'
+import {createAdminHttpApi, probeServerAdmin, resolveAdminUserId} from './server/admin-http.mjs'
 import {resolveBuildId} from './server/build-info.mjs'
 import {loadConfig, normalizeBaseUrl} from './server/config.mjs'
 import {parseCookies, serializeCookie, clearCookie} from './server/cookies.mjs'
@@ -13,13 +14,19 @@ import {readJsonBody, readRawBody, sendBuffer, sendJson} from './server/http.mjs
 import {createRateLimiter} from './server/rate-limit.mjs'
 import {createSessionStore} from './server/session-store.mjs'
 import {serveStatic} from './server/static.mjs'
+import {streamVikunjaEvents} from './server/vikunja-events.mjs'
+import {buildTimeEntryPayload} from './server/vikunja-v2-body.mjs'
 import {
 	authenticateLinkShare,
 	createApiTokenAccount,
-	createOidcAccount,
 	createLinkShareAccount,
+	createOidcAccount,
 	createPasswordAccount,
 	createVikunjaClient,
+	loadVikunjaInstance,
+	instanceFeaturesFromInfo,
+	resolveVersionedUrl,
+	stripSchemaField,
 } from './server/vikunja-client.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -82,6 +89,7 @@ const sessionMutationRateLimiter = createRateLimiter({
 	max: sessionMutationRateLimitMax,
 })
 const legacyConfigured = Boolean(vikunjaBaseUrl && vikunjaApiToken)
+let legacyAccountPromise
 // build-info.json is the deploy-time stamp for environments without git
 // (the docker image); dev falls through to git.
 const buildId = resolveBuildId({
@@ -204,6 +212,39 @@ async function handleApi(req, res, url) {
 
 	assertTrustedOrigin(req)
 
+	if (url.pathname === '/api/events' && req.method === 'GET') {
+		const sessionId = getAppSessionId(req)
+		const account = sessionStore.get(sessionId)?.account
+		if (!account) {
+			sendJson(res, 401, {error: 'Sign in to receive live updates.'})
+			return
+		}
+		const origin = getRequestOrigin(req)
+		if (origin ? !isSameOriginRequest(req, origin) : req.headers['sec-fetch-site'] !== 'same-origin') {
+			sendJson(res, 403, {error: 'Live updates require a same-origin request.'})
+			return
+		}
+		if (account.authMode !== 'password' || account.linkShareAuth ||
+			!account.instanceFeatures?.apiV2Available || typeof WebSocket === 'undefined') {
+			res.writeHead(204)
+			res.end()
+			return
+		}
+		const upstreamUrl = resolveVersionedUrl(account.baseUrl, 'ws', 'v2')
+		upstreamUrl.protocol = upstreamUrl.protocol === 'https:' ? 'wss:' : 'ws:'
+		refreshAppSessionCookie(res, sessionId)
+		const client = createAccountClient(account, sessionId, res)
+		await streamVikunjaEvents({
+			res,
+			url: upstreamUrl,
+			getAccessToken: () => client.getFreshAccessToken(),
+			timersEnabled: account.instanceFeatures.enabledProFeatures?.includes('time_tracking') === true,
+			isSessionValid: () => Boolean(sessionStore.get(sessionId)?.account),
+			onAuthFailure: () => invalidateAppSession(res, sessionId),
+		})
+		return
+	}
+
 	if (url.pathname === '/api/config' && req.method === 'GET') {
 		sendJson(
 			res,
@@ -246,7 +287,7 @@ async function handleApi(req, res, url) {
 	}
 
 	if (url.pathname === '/api/session' && req.method === 'GET') {
-		const context = await getVikunjaContext(req, res)
+		const context = await getVikunjaContext(req, res, {refreshInstance: true})
 		if (!context) {
 			sendJson(
 				res,
@@ -283,7 +324,8 @@ async function handleApi(req, res, url) {
 			return
 		}
 
-		sendJson(res, 200, await fetchUpstreamAuthInfo(baseUrl))
+		const {apiVersion: _apiVersion, ...authInfo} = await fetchUpstreamAuthInfo(baseUrl)
+		sendJson(res, 200, authInfo)
 		return
 	}
 
@@ -510,7 +552,7 @@ async function handleApi(req, res, url) {
 			return
 		}
 
-		const registerRes = await fetch(new URL('register', `${baseUrl}/`), {
+		const registerRes = await fetch(resolveVersionedUrl(baseUrl, 'register', authInfo.apiVersion), {
 			method: 'POST',
 			headers: {
 				Accept: 'application/json',
@@ -526,7 +568,7 @@ async function handleApi(req, res, url) {
 		if (!registerRes.ok) {
 			const payload = await registerRes.json().catch(() => ({}))
 			sendJson(res, registerRes.status, {
-				error: payload.message || payload.error || 'Registration failed.',
+				error: payload.detail || payload.message || payload.error || payload.title || 'Registration failed.',
 			})
 			return
 		}
@@ -584,7 +626,8 @@ async function handleApi(req, res, url) {
 			return
 		}
 
-		await fetch(new URL('user/password/token', `${baseUrl}/`), {
+		const {apiVersion} = await loadVikunjaInstance(baseUrl)
+		await fetch(resolveVersionedUrl(baseUrl, 'user/password/token', apiVersion), {
 			method: 'POST',
 			headers: {
 				Accept: 'application/json',
@@ -616,7 +659,8 @@ async function handleApi(req, res, url) {
 			return
 		}
 
-		const resetRes = await fetch(new URL('user/password/reset', `${baseUrl}/`), {
+		const {apiVersion} = await loadVikunjaInstance(baseUrl)
+		const resetRes = await fetch(resolveVersionedUrl(baseUrl, 'user/password/reset', apiVersion), {
 			method: 'POST',
 			headers: {
 				Accept: 'application/json',
@@ -631,7 +675,7 @@ async function handleApi(req, res, url) {
 		if (!resetRes.ok) {
 			const payload = await resetRes.json().catch(() => ({}))
 			sendJson(res, resetRes.status, {
-				error: payload.message || payload.error || 'Password reset failed.',
+				error: payload.detail || payload.message || payload.error || payload.title || 'Password reset failed.',
 			})
 			return
 		}
@@ -652,6 +696,7 @@ async function handleApi(req, res, url) {
 			try {
 				const client = createVikunjaClient({
 					baseUrl: session.account.baseUrl,
+					apiVersion: session.account.instanceFeatures?.apiV2Available ? 'v2' : 'v1',
 					authMode: session.account.authMode,
 					accessToken: session.account.accessToken,
 					refreshCookie: session.account.refreshCookie,
@@ -667,7 +712,7 @@ async function handleApi(req, res, url) {
 						}
 					},
 				})
-				await client.request('user/logout', {method: 'POST'})
+				await client.request('user/logout', {v2Route: 'logout', method: 'POST'})
 			} catch {
 				// Clear local state even if the upstream session is already gone.
 			}
@@ -929,6 +974,7 @@ async function handleApi(req, res, url) {
 		const body = await readJsonBody(req)
 
 		await context.client.request('user/settings/general', {
+			v2Method: 'PATCH',
 			method: 'POST',
 			body,
 		})
@@ -941,7 +987,7 @@ async function handleApi(req, res, url) {
 
 	if (url.pathname === '/api/session/settings/avatar' && req.method === 'GET') {
 		const context = await requireVikunjaContext(req, res)
-		const avatarSettings = await context.client.request('user/settings/avatar')
+		const avatarSettings = await context.client.request('user/settings/avatar', {v2Route: 'user/settings/avatar/provider'})
 		sendJson(res, 200, {
 			avatar_provider: avatarSettings?.avatar_provider || null,
 		})
@@ -962,6 +1008,8 @@ async function handleApi(req, res, url) {
 		}
 
 		await context.client.request('user/settings/avatar', {
+			v2Method: 'PATCH',
+			v2Route: 'user/settings/avatar/provider',
 			method: 'POST',
 			body: {
 				avatar_provider: avatarProvider,
@@ -969,7 +1017,7 @@ async function handleApi(req, res, url) {
 		})
 
 		const [avatarSettings, user] = await Promise.all([
-			context.client.request('user/settings/avatar'),
+			context.client.request('user/settings/avatar', {v2Route: 'user/settings/avatar/provider'}),
 			context.client.request('user'),
 		])
 		updateSessionUser(context, user)
@@ -995,6 +1043,7 @@ async function handleApi(req, res, url) {
 
 		const rawBody = await readRawBody(req, {maxBytes: AVATAR_UPLOAD_MAX_BYTES})
 		await context.client.request('user/settings/avatar/upload', {
+			v2Route: 'user/settings/avatar',
 			method: 'PUT',
 			rawBody,
 			headers: {
@@ -1004,7 +1053,7 @@ async function handleApi(req, res, url) {
 		})
 
 		const [avatarSettings, user] = await Promise.all([
-			context.client.request('user/settings/avatar'),
+			context.client.request('user/settings/avatar', {v2Route: 'user/settings/avatar/provider'}),
 			context.client.request('user'),
 		])
 		updateSessionUser(context, user)
@@ -1017,12 +1066,23 @@ async function handleApi(req, res, url) {
 	}
 
 	if (url.pathname === '/api/admin/runtime/health' && req.method === 'GET') {
-		const context = await requireAdminSession(req, res, {allowBridgeUnavailable: true})
+		const context = await requireUserAdminSession(req, res)
 		const health = await adminBridge.getRuntimeHealth()
 		sendJson(res, 200, {
 			...health,
 			admin: summarizeAccount(context.account, context.source),
 		})
+		return
+	}
+
+	if (url.pathname === '/api/admin/overview' && req.method === 'GET') {
+		const context = await requireUserAdminSession(req, res)
+		if (!context.adminHttp) {
+			const error = new Error('Instance statistics require a Vikunja instance admin account.')
+			error.statusCode = 403
+			throw error
+		}
+		sendJson(res, 200, await context.adminHttp.getOverview())
 		return
 	}
 
@@ -1034,20 +1094,29 @@ async function handleApi(req, res, url) {
 	}
 
 	if (url.pathname === '/api/admin/users' && req.method === 'GET') {
-		await requireAdminSession(req, res)
-		const users = await adminBridge.listUsers()
-		sendJson(res, 200, {items: users})
+		const context = await requireUserAdminSession(req, res)
+		const users = useAdminHttp(context, 'listUsers')
+			? await context.adminHttp.listUsers()
+			: await adminBridge.listUsers()
+		sendJson(res, 200, {items: users, source: adminUserSource(context, 'listUsers')})
 		return
 	}
 
 	if (url.pathname === '/api/admin/users' && req.method === 'POST') {
-		await requireAdminSession(req, res)
+		const context = await requireUserAdminSession(req, res)
 		const body = await readJsonBody(req)
-		const user = await adminBridge.createUser({
-			username: body.username,
-			email: body.email,
-			password: body.password,
-		})
+		const user = useAdminHttp(context, 'createUser')
+			? await context.adminHttp.createUser({
+				username: body.username,
+				email: body.email,
+				password: body.password,
+				name: body.name,
+			})
+			: await adminBridge.createUser({
+				username: body.username,
+				email: body.email,
+				password: body.password,
+			})
 		sendJson(res, 201, {ok: true, user})
 		return
 	}
@@ -1055,8 +1124,11 @@ async function handleApi(req, res, url) {
 	const adminUserMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)$/)
 	const adminUserStatusMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/status$/)
 	const adminUserPasswordMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/password$/)
+	const adminUserRoleMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/admin$/)
 
 	if (adminUserMatch && req.method === 'PATCH') {
+		// Renaming a user has no route in either API version, so this stays a
+		// CLI-bridge action even for instance admins.
 		await requireAdminSession(req, res)
 		const body = await readJsonBody(req)
 		const identifier = decodeURIComponent(adminUserMatch[1])
@@ -1070,30 +1142,66 @@ async function handleApi(req, res, url) {
 	}
 
 	if (adminUserStatusMatch && req.method === 'PATCH') {
-		const context = await requireAdminSession(req, res)
+		const context = await requireUserAdminSession(req, res)
 		const body = await readJsonBody(req)
 		const enabled = body.enabled !== false
 		const identifier = decodeURIComponent(adminUserStatusMatch[1])
 		assertAdminUserMutationAllowed(context.account, identifier, enabled ? 'enable' : 'disable')
-		const user = await adminBridge.setUserEnabled(identifier, enabled)
+		const user = useAdminHttp(context, 'setUserEnabled')
+			? await context.adminHttp.setUserEnabled(
+				await resolveAdminUserId(context.adminHttp, identifier),
+				enabled,
+			)
+			: await adminBridge.setUserEnabled(identifier, enabled)
+		sendJson(res, 200, {ok: true, user})
+		return
+	}
+
+	if (adminUserRoleMatch && req.method === 'PATCH') {
+		const context = await requireUserAdminSession(req, res)
+		if (!context.adminHttp) {
+			const error = new Error('Changing instance-admin rights requires a Vikunja instance admin account.')
+			error.statusCode = 403
+			throw error
+		}
+
+		const body = await readJsonBody(req)
+		const isAdmin = body.isAdmin === true || body.is_admin === true
+		const identifier = decodeURIComponent(adminUserRoleMatch[1])
+		assertAdminUserMutationAllowed(context.account, identifier, isAdmin ? 'promote' : 'demote')
+		const user = await context.adminHttp.setUserAdmin(
+			await resolveAdminUserId(context.adminHttp, identifier),
+			isAdmin,
+		)
 		sendJson(res, 200, {ok: true, user})
 		return
 	}
 
 	if (adminUserPasswordMatch && req.method === 'POST') {
-		await requireAdminSession(req, res)
+		const context = await requireUserAdminSession(req, res)
 		const body = await readJsonBody(req)
 		const identifier = decodeURIComponent(adminUserPasswordMatch[1])
-		await adminBridge.resetUserPassword(identifier, body.password)
+		if (useAdminHttp(context, 'setUserPassword')) {
+			await context.adminHttp.setUserPassword(
+				await resolveAdminUserId(context.adminHttp, identifier),
+				body.password,
+			)
+		} else {
+			await adminBridge.resetUserPassword(identifier, body.password)
+		}
 		sendJson(res, 200, {ok: true})
 		return
 	}
 
 	if (adminUserMatch && req.method === 'DELETE') {
-		const context = await requireAdminSession(req, res)
+		const context = await requireUserAdminSession(req, res)
 		const identifier = decodeURIComponent(adminUserMatch[1])
 		assertAdminUserMutationAllowed(context.account, identifier, 'delete')
-		await adminBridge.deleteUser(identifier)
+		if (useAdminHttp(context, 'deleteUser')) {
+			await context.adminHttp.deleteUser(await resolveAdminUserId(context.adminHttp, identifier))
+		} else {
+			await adminBridge.deleteUser(identifier)
+		}
 		sendJson(res, 200, {ok: true})
 		return
 	}
@@ -1273,11 +1381,22 @@ async function handleApi(req, res, url) {
 		}
 
 		await vikunja.request('user/settings/email', {
+			v2Method: 'PUT',
 			method: 'POST',
 			body: {
 				password,
 				new_email: newEmail,
 			},
+		})
+		sendJson(res, 200, {ok: true})
+		return
+	}
+
+	if ((url.pathname === '/api/session/settings/email/resend' && req.method === 'POST') ||
+		(url.pathname === '/api/session/settings/email' && req.method === 'DELETE')) {
+		if (!enforceRateLimit(req, res, sessionMutationRateLimiter, 'session-mutation')) return
+		await vikunja.request(req.method === 'POST' ? 'user/settings/email/resend' : 'user/settings/email', {
+			method: req.method,
 		})
 		sendJson(res, 200, {ok: true})
 		return
@@ -1423,13 +1542,14 @@ async function handleApi(req, res, url) {
 	}
 
 	if (url.pathname === '/api/session/caldav-tokens' && req.method === 'GET') {
-		const tokens = await vikunja.request('user/settings/token/caldav')
+		const tokens = await vikunja.fetchAllPages('user/settings/token/caldav')
 		sendJson(res, 200, {tokens: Array.isArray(tokens) ? tokens : []})
 		return
 	}
 
 	if (url.pathname === '/api/session/caldav-tokens' && req.method === 'PUT') {
 		const token = await vikunja.request('user/settings/token/caldav', {
+			v2Method: 'POST',
 			method: 'PUT',
 		})
 		sendJson(res, 200, token)
@@ -1462,6 +1582,7 @@ async function handleApi(req, res, url) {
 			upstreamToken.expires_at = body.expires_at
 		}
 		const token = await vikunja.request('tokens', {
+			v2Method: 'POST',
 			method: 'PUT',
 			body: upstreamToken,
 		})
@@ -1485,6 +1606,11 @@ async function handleApi(req, res, url) {
 		return
 	}
 
+	if (url.pathname === '/api/mcp/info' && req.method === 'GET') {
+		sendJson(res, 200, await vikunja.request('mcp/info'))
+		return
+	}
+
 	if (url.pathname === '/api/session/webhooks' && req.method === 'GET') {
 		const webhooks = await vikunja.fetchAllPages('user/settings/webhooks')
 		sendJson(res, 200, {webhooks: Array.isArray(webhooks) ? webhooks : []})
@@ -1498,6 +1624,7 @@ async function handleApi(req, res, url) {
 
 		const body = await readJsonBody(req)
 		const webhook = await vikunja.request('user/settings/webhooks', {
+			v2Method: 'POST',
 			method: 'PUT',
 			body: normalizeWebhookBody(body),
 		})
@@ -1526,6 +1653,7 @@ async function handleApi(req, res, url) {
 		const webhookId = Number(userWebhookMatch[1])
 		const body = await readJsonBody(req)
 		const webhook = await vikunja.request(`user/settings/webhooks/${webhookId}`, {
+			v2Method: 'PUT',
 			method: 'POST',
 			body: {events: normalizeWebhookEventsBody(body?.events)},
 		})
@@ -1575,7 +1703,12 @@ async function handleApi(req, res, url) {
 
 		if (action === 'status' && req.method === 'GET') {
 			const status = await vikunja.request(`migration/${service}/status`)
-			sendJson(res, 200, normalizeMigrationStatusPayload(service, status))
+			sendJson(res, 200, {
+				...normalizeMigrationStatusPayload(service, status),
+				started_at: status?.started_at,
+				finished_at: status?.finished_at,
+				error_kind: status?.error_kind,
+			})
 			return
 		}
 
@@ -1588,6 +1721,7 @@ async function handleApi(req, res, url) {
 
 			const rawBody = await readRawBody(req, {maxBytes: MIGRATION_UPLOAD_MAX_BYTES})
 			const result = await vikunja.request(`migration/${service}/${action}`, {
+				v2Method: 'POST',
 				method: 'PUT',
 				rawBody,
 				headers: {
@@ -1612,6 +1746,7 @@ async function handleApi(req, res, url) {
 
 				const rawBody = await readRawBody(req, {maxBytes: MIGRATION_UPLOAD_MAX_BYTES})
 				const result = await vikunja.request(`migration/${service}/migrate`, {
+					v2Method: 'POST',
 					method: 'PUT',
 					rawBody,
 					headers: {
@@ -1633,6 +1768,7 @@ async function handleApi(req, res, url) {
 				let result
 				try {
 					result = await vikunja.request(`migration/${service}/migrate`, {
+						v2Method: 'POST',
 						method: 'PUT',
 						rawBody,
 						headers: {
@@ -1657,6 +1793,14 @@ async function handleApi(req, res, url) {
 			}
 
 			const body = await readJsonBody(req)
+			if (service === 'planka') {
+				const result = await vikunja.request('migration/planka/migrate', {
+					method: 'POST',
+					body: {url: body.url, token: body.token, username: body.username, password: body.password},
+				})
+				sendJson(res, 200, normalizeMigrationStatusPayload(service, result))
+				return
+			}
 			const code = `${body.code || ''}`.trim()
 			if (!code) {
 				sendJson(res, 400, {error: 'code is required.'})
@@ -1690,7 +1834,9 @@ async function handleApi(req, res, url) {
 		const username = decodeURIComponent(avatarMatch[1])
 		const requestedSize = Number(url.searchParams.get('size') || 64)
 		const size = Number.isFinite(requestedSize) && requestedSize > 0 ? Math.round(requestedSize) : 64
-		const avatarRouteCandidates = [
+		const avatarRouteCandidates = context.account.instanceFeatures?.apiV2Available ? [
+			`avatar/${encodeURIComponent(username)}`,
+		] : [
 			`avatar/${encodeURIComponent(username)}`,
 			`${encodeURIComponent(username)}/avatar`,
 		]
@@ -1735,6 +1881,7 @@ async function handleApi(req, res, url) {
 
 		if (req.method === 'PUT') {
 			await vikunja.request(`subscriptions/${entity}/${entityId}`, {
+				v2Method: 'POST',
 				method: 'PUT',
 			})
 			sendJson(res, 200, {ok: true, subscribed: true})
@@ -1763,6 +1910,7 @@ async function handleApi(req, res, url) {
 		if (req.method === 'PUT') {
 			const body = await readJsonBody(req)
 			await vikunja.request(`${kind}/${id}/reactions`, {
+				v2Method: 'POST',
 				method: 'PUT',
 				body: {
 					value: `${body.value || ''}`,
@@ -1839,6 +1987,7 @@ async function handleApi(req, res, url) {
 	if (teamsCollectionMatch && req.method === 'POST') {
 		const body = await readJsonBody(req)
 		const team = await vikunja.request('teams', {
+			v2Method: 'POST',
 			method: 'PUT',
 			body: {
 				name: `${body.name || ''}`.trim(),
@@ -1861,6 +2010,7 @@ async function handleApi(req, res, url) {
 		const teamId = Number(teamMatch[1])
 		const body = await readJsonBody(req)
 		const team = await vikunja.request(`teams/${teamId}`, {
+			v2Method: 'PATCH',
 			method: 'POST',
 			body: {
 				name: `${body.name || ''}`.trim(),
@@ -1885,6 +2035,7 @@ async function handleApi(req, res, url) {
 		const teamId = Number(teamMembersMatch[1])
 		const body = await readJsonBody(req)
 		const member = await vikunja.request(`teams/${teamId}/members`, {
+			v2Method: 'POST',
 			method: 'PUT',
 			body: {
 				username: `${body.username || ''}`.trim(),
@@ -1944,6 +2095,7 @@ async function handleApi(req, res, url) {
 
 		try {
 			const filter = await vikunja.request('filters', {
+				v2Method: 'POST',
 				method: 'PUT',
 				body: buildSavedFilterPayload(body),
 			})
@@ -1991,6 +2143,7 @@ async function handleApi(req, res, url) {
 
 		try {
 			const filter = await vikunja.request(`filters/${filterId}`, {
+				v2Method: 'PATCH',
 				method: 'POST',
 				body: buildSavedFilterPayload(body, filterId),
 			})
@@ -2057,6 +2210,7 @@ async function handleApi(req, res, url) {
 		}
 
 		const project = await vikunja.request('projects', {
+			v2Method: 'POST',
 			method: 'PUT',
 			body: {
 				title,
@@ -2083,6 +2237,7 @@ async function handleApi(req, res, url) {
 		}
 
 		const label = await vikunja.request('labels', {
+			v2Method: 'POST',
 			method: 'PUT',
 			body: {
 				title,
@@ -2105,6 +2260,7 @@ async function handleApi(req, res, url) {
 		}
 
 		const label = await vikunja.request(`labels/${labelId}`, {
+			v2Method: 'PATCH',
 			method: 'POST',
 			body: {
 				title,
@@ -2148,6 +2304,7 @@ async function handleApi(req, res, url) {
 			return
 		}
 		const view = await vikunja.request(`projects/${projectId}/views`, {
+			v2Method: 'POST',
 			method: 'PUT',
 			body: {
 				title,
@@ -2170,6 +2327,7 @@ async function handleApi(req, res, url) {
 		const viewId = Number(projectViewMatch[2])
 		const body = await readJsonBody(req)
 		const view = await vikunja.request(`projects/${projectId}/views/${viewId}`, {
+			v2Method: 'PATCH',
 			method: 'POST',
 			body,
 		})
@@ -2272,6 +2430,7 @@ async function handleApi(req, res, url) {
 			return
 		}
 		const result = await vikunja.request(`projects/${projectId}/backgrounds/unsplash`, {
+			v2Method: 'PUT',
 			method: 'POST',
 			body: image,
 		})
@@ -2290,7 +2449,7 @@ async function handleApi(req, res, url) {
 			method: 'GET',
 			params: {s: search, p: page},
 		})
-		sendJson(res, 200, {results: Array.isArray(results) ? results : []})
+		sendJson(res, 200, {results: Array.isArray(results) ? results : results?.items || []})
 		return
 	}
 
@@ -2319,7 +2478,7 @@ async function handleApi(req, res, url) {
 	if (projectUsersMatch && req.method === 'GET') {
 		const projectId = Number(projectUsersMatch[1])
 		const search = `${url.searchParams.get('s') || ''}`.trim()
-		const users = await vikunja.fetchAllPages(`projects/${projectId}/projectusers`, search ? {s: search} : {})
+		const users = await vikunja.fetchAllPages(`projects/${projectId}/projectusers`, search ? {s: search} : {}, {v2Route: `projects/${projectId}/users/search`})
 		sendJson(res, 200, {users})
 		return
 	}
@@ -2336,6 +2495,7 @@ async function handleApi(req, res, url) {
 		const projectId = Number(projectSharedUsersMatch[1])
 		const body = await readJsonBody(req)
 		const user = await vikunja.request(`projects/${projectId}/users`, {
+			v2Method: 'POST',
 			method: 'PUT',
 			body: {
 				username: `${body.username || ''}`.trim(),
@@ -2351,6 +2511,7 @@ async function handleApi(req, res, url) {
 		const username = decodeURIComponent(projectSharedUserMatch[2])
 		const body = await readJsonBody(req)
 		const user = await vikunja.request(`projects/${projectId}/users/${encodeURIComponent(username)}`, {
+			v2Method: 'PUT',
 			method: 'POST',
 			body: {
 				username,
@@ -2384,6 +2545,7 @@ async function handleApi(req, res, url) {
 		const body = await readJsonBody(req)
 		const teamId = Number(body.team_id || body.teamId || 0)
 		const team = await vikunja.request(`projects/${projectId}/teams`, {
+			v2Method: 'POST',
 			method: 'PUT',
 			body: {
 				team_id: teamId,
@@ -2399,6 +2561,7 @@ async function handleApi(req, res, url) {
 		const teamId = Number(projectSharedTeamMatch[2])
 		const body = await readJsonBody(req)
 		const team = await vikunja.request(`projects/${projectId}/teams/${teamId}`, {
+			v2Method: 'PUT',
 			method: 'POST',
 			body: {
 				team_id: teamId,
@@ -2430,6 +2593,7 @@ async function handleApi(req, res, url) {
 		const projectId = Number(projectLinkSharesMatch[1])
 		const body = await readJsonBody(req)
 		const share = await vikunja.request(`projects/${projectId}/shares`, {
+			v2Method: 'POST',
 			method: 'PUT',
 			body: {
 				name: `${body.name || ''}`.trim(),
@@ -2474,6 +2638,7 @@ async function handleApi(req, res, url) {
 		const projectId = Number(projectWebhooksMatch[1])
 		const body = await readJsonBody(req)
 		const webhook = await vikunja.request(`projects/${projectId}/webhooks`, {
+			v2Method: 'POST',
 			method: 'PUT',
 			body: normalizeWebhookBody(body),
 		})
@@ -2490,6 +2655,7 @@ async function handleApi(req, res, url) {
 		const hookId = Number(projectWebhookMatch[2])
 		const body = await readJsonBody(req)
 		const webhook = await vikunja.request(`projects/${projectId}/webhooks/${hookId}`, {
+			v2Method: 'PUT',
 			method: 'POST',
 			body: {events: normalizeWebhookEventsBody(body?.events)},
 		})
@@ -2530,6 +2696,7 @@ async function handleApi(req, res, url) {
 		const notificationId = Number(notificationMatch[1])
 		const body = await readJsonBody(req)
 		const notification = await vikunja.request(`notifications/${notificationId}`, {
+			v2Method: 'PUT',
 			method: 'POST',
 			body: {
 				read: body?.read !== false,
@@ -2552,7 +2719,7 @@ async function handleApi(req, res, url) {
 			expand: query.expand?.length ? query.expand : ['subtasks', 'comment_count'],
 			sort_by: query.sort_by?.length ? query.sort_by : ['position', 'id'],
 			order_by: query.order_by?.length ? query.order_by : ['asc', 'asc'],
-		})
+		}, {v2Route: `projects/${projectId}/views/${viewId}/buckets/tasks`})
 		sendJson(res, 200, {
 			buckets: Array.isArray(buckets)
 				? buckets.map(bucket => ({
@@ -2575,6 +2742,7 @@ async function handleApi(req, res, url) {
 		}
 
 		const bucket = await vikunja.request(`projects/${projectId}/views/${viewId}/buckets`, {
+			v2Method: 'POST',
 			method: 'PUT',
 			body: {
 				title,
@@ -2591,6 +2759,7 @@ async function handleApi(req, res, url) {
 		const bucketId = Number(projectViewBucketMatch[3])
 		const body = await readJsonBody(req)
 		const bucket = await vikunja.request(`projects/${projectId}/views/${viewId}/buckets/${bucketId}`, {
+			v2Method: 'PUT',
 			method: 'POST',
 			body,
 		})
@@ -2622,6 +2791,7 @@ async function handleApi(req, res, url) {
 		}
 
 		const taskBucket = await vikunja.request(`projects/${projectId}/views/${viewId}/buckets/${bucketId}/tasks`, {
+			v2Method: 'PUT',
 			method: 'POST',
 			body: {
 				task_id: taskId,
@@ -2662,6 +2832,20 @@ async function handleApi(req, res, url) {
 		}
 
 		sendJson(res, 200, normalizeTaskGraph(viewTasks))
+		return
+	}
+
+	const bulkCreateTasksMatch = url.pathname.match(/^\/api\/projects\/(\d+)\/tasks\/bulk$/)
+	if (bulkCreateTasksMatch && req.method === 'POST') {
+		const body = await readJsonBody(req)
+		if (!Array.isArray(body.tasks) || body.tasks.length < 1 || body.tasks.length > 100) {
+			sendJson(res, 400, {error: 'Provide between 1 and 100 tasks.'})
+			return
+		}
+		const result = await vikunja.request(`projects/${bulkCreateTasksMatch[1]}/tasks/bulk`, {
+			method: 'POST', body: {tasks: body.tasks},
+		})
+		sendJson(res, 201, result)
 		return
 	}
 
@@ -2710,12 +2894,14 @@ async function handleApi(req, res, url) {
 			done: body.done === true,
 		}
 		const task = await vikunja.request(`projects/${projectId}/tasks`, {
+			v2Method: 'POST',
 			method: 'PUT',
 			body: taskPayload,
 		})
 
 		if (parentTaskId) {
 			await vikunja.request(`tasks/${task.id}/relations`, {
+				v2Method: 'POST',
 				method: 'PUT',
 				body: {
 					task_id: task.id,
@@ -2727,6 +2913,7 @@ async function handleApi(req, res, url) {
 
 		if (projectViewId && bucketId) {
 			await vikunja.request(`projects/${projectId}/views/${projectViewId}/buckets/${bucketId}/tasks`, {
+				v2Method: 'PUT',
 				method: 'POST',
 				body: {
 					task_id: task.id,
@@ -2746,6 +2933,7 @@ async function handleApi(req, res, url) {
 		const projectId = Number(projectDuplicateMatch[1])
 		const body = await readJsonBody(req)
 		const result = await vikunja.request(`projects/${projectId}/duplicate`, {
+			v2Method: 'POST',
 			method: 'PUT',
 			body: {
 				project_id: projectId,
@@ -2776,9 +2964,10 @@ async function handleApi(req, res, url) {
 		}
 
 		const project = await vikunja.request(`projects/${projectId}`, {
+			v2Method: 'PATCH',
 			method: 'POST',
 			body: {
-				...body,
+				...Object.fromEntries(['description', 'hex_color', 'identifier', 'is_archived', 'is_favorite', 'parent_project_id', 'position'].filter(key => key in body).map(key => [key, body[key]])),
 				id: projectId,
 				title,
 			},
@@ -2793,6 +2982,98 @@ async function handleApi(req, res, url) {
 			method: 'DELETE',
 		})
 		sendJson(res, 200, {ok: true})
+		return
+	}
+
+	const timeEntryMatch = url.pathname.match(/^\/api\/time-entries\/(\d+)$/)
+	const taskTimeEntriesMatch = url.pathname.match(/^\/api\/tasks\/(\d+)\/time-entries$/)
+	const projectTimeEntriesMatch = url.pathname.match(/^\/api\/projects\/(-?\d+)\/time-entries$/)
+
+	if (url.pathname === '/api/time-entries' && req.method === 'GET') {
+		requireTimeTrackingApi(context)
+		const filter = `${url.searchParams.get('filter') || ''}`.trim()
+		const search = `${url.searchParams.get('s') || ''}`.trim()
+		const timeEntries = await vikunja.fetchAllPagesV2('time-entries', {
+			...(filter ? {
+				filter,
+				filter_timezone: `${url.searchParams.get('filter_timezone') || ''}`.trim(),
+			} : {}),
+			...(search ? {q: search} : {}),
+		})
+		sendJson(res, 200, {timeEntries})
+		return
+	}
+
+	if (url.pathname === '/api/time-entries' && req.method === 'POST') {
+		requireTimeTrackingApi(context)
+		const body = await readJsonBody(req)
+		const timeEntry = await vikunja.request('time-entries', {
+			apiVersion: 'v2',
+			method: 'POST',
+			body: buildTimeEntryPayload(body),
+		})
+		sendJson(res, 201, {timeEntry: stripSchemaField(timeEntry)})
+		return
+	}
+
+	if (url.pathname === '/api/time-entries/timer/stop' && req.method === 'POST') {
+		requireTimeTrackingApi(context)
+		const timeEntry = await vikunja.request('time-entries/timer/stop', {
+			apiVersion: 'v2',
+			method: 'POST',
+		})
+		sendJson(res, 200, {timeEntry: stripSchemaField(timeEntry)})
+		return
+	}
+
+	if (timeEntryMatch && req.method === 'GET') {
+		requireTimeTrackingApi(context)
+		const timeEntry = await vikunja.request(`time-entries/${Number(timeEntryMatch[1])}`, {
+			apiVersion: 'v2',
+		})
+		sendJson(res, 200, {timeEntry: stripSchemaField(timeEntry)})
+		return
+	}
+
+	if (timeEntryMatch && req.method === 'PUT') {
+		requireTimeTrackingApi(context)
+		const timeEntryId = Number(timeEntryMatch[1])
+		const body = await readJsonBody(req)
+		// PUT replaces the whole entry upstream, and PATCH accepts only the
+		// json-patch media types, so the unchanged fields are read back first.
+		const existing = await vikunja.request(`time-entries/${timeEntryId}`, {
+			apiVersion: 'v2',
+		})
+		const timeEntry = await vikunja.request(`time-entries/${timeEntryId}`, {
+			apiVersion: 'v2',
+			method: 'PUT',
+			body: buildTimeEntryPayload(body, stripSchemaField(existing)),
+		})
+		sendJson(res, 200, {timeEntry: stripSchemaField(timeEntry)})
+		return
+	}
+
+	if (timeEntryMatch && req.method === 'DELETE') {
+		requireTimeTrackingApi(context)
+		await vikunja.request(`time-entries/${Number(timeEntryMatch[1])}`, {
+			apiVersion: 'v2',
+			method: 'DELETE',
+		})
+		sendJson(res, 200, {ok: true})
+		return
+	}
+
+	if (taskTimeEntriesMatch && req.method === 'GET') {
+		requireTimeTrackingApi(context)
+		const timeEntries = await vikunja.fetchAllPagesV2(`tasks/${Number(taskTimeEntriesMatch[1])}/time-entries`)
+		sendJson(res, 200, {timeEntries})
+		return
+	}
+
+	if (projectTimeEntriesMatch && req.method === 'GET') {
+		requireTimeTrackingApi(context)
+		const timeEntries = await vikunja.fetchAllPagesV2(`projects/${Number(projectTimeEntriesMatch[1])}/time-entries`)
+		sendJson(res, 200, {timeEntries})
 		return
 	}
 
@@ -2827,6 +3108,7 @@ async function handleApi(req, res, url) {
 		}
 
 		const result = await vikunja.request('tasks/bulk', {
+			v2Method: 'PUT',
 			method: 'POST',
 			body: {
 				task_ids: taskIds,
@@ -2850,6 +3132,7 @@ async function handleApi(req, res, url) {
 		const taskId = Number(taskAssigneesBulkMatch[1])
 		const body = await readJsonBody(req)
 		const result = await vikunja.request(`tasks/${taskId}/assignees/bulk`, {
+			v2Method: 'PUT',
 			method: 'POST',
 			body: {
 				assignees: body.assignees || [],
@@ -2870,6 +3153,7 @@ async function handleApi(req, res, url) {
 		}
 
 		const result = await vikunja.request(`tasks/${taskId}/assignees`, {
+			v2Method: 'POST',
 			method: 'PUT',
 			body: {
 				user_id: userId,
@@ -2906,6 +3190,7 @@ async function handleApi(req, res, url) {
 		}
 
 		const createdComment = await vikunja.request(`tasks/${taskId}/comments`, {
+			v2Method: 'POST',
 			method: 'PUT',
 			body: {comment},
 		})
@@ -2932,6 +3217,7 @@ async function handleApi(req, res, url) {
 		}
 
 		const updatedComment = await vikunja.request(`tasks/${taskId}/comments/${commentId}`, {
+			v2Method: 'PATCH',
 			method: 'POST',
 			body: {comment},
 		})
@@ -2966,6 +3252,7 @@ async function handleApi(req, res, url) {
 
 		const rawBody = await readRawBody(req, {maxBytes: TASK_ATTACHMENT_MAX_BYTES})
 		const result = await vikunja.request(`tasks/${taskId}/attachments`, {
+			v2Method: 'POST',
 			method: 'PUT',
 			rawBody,
 			headers: {
@@ -3025,6 +3312,7 @@ async function handleApi(req, res, url) {
 		}
 
 		const result = await vikunja.request(`tasks/${taskId}/relations`, {
+			v2Method: 'POST',
 			method: 'PUT',
 			body: {
 				task_id: taskId,
@@ -3070,6 +3358,7 @@ async function handleApi(req, res, url) {
 		})
 
 		const taskPosition = await vikunja.request(`tasks/${taskId}/position`, {
+			v2Method: 'PUT',
 			method: 'POST',
 			body: {
 				task_id: taskId,
@@ -3089,6 +3378,7 @@ async function handleApi(req, res, url) {
 	if (taskDuplicateMatch && req.method === 'POST') {
 		const taskId = Number(taskDuplicateMatch[1])
 		const result = await vikunja.request(`tasks/${taskId}/duplicate`, {
+			v2Method: 'POST',
 			method: 'PUT',
 			body: {
 				task_id: taskId,
@@ -3116,6 +3406,7 @@ async function handleApi(req, res, url) {
 				labelId = Number(existingLabel.id)
 			} else {
 				const createdLabel = await vikunja.request('labels', {
+					v2Method: 'POST',
 					method: 'PUT',
 					body: {
 						title,
@@ -3127,6 +3418,7 @@ async function handleApi(req, res, url) {
 		}
 
 		const result = await vikunja.request(`tasks/${taskId}/labels`, {
+			v2Method: 'POST',
 			method: 'PUT',
 			body: {
 				label_id: labelId,
@@ -3140,6 +3432,7 @@ async function handleApi(req, res, url) {
 		const taskId = Number(taskLabelsBulkMatch[1])
 		const body = await readJsonBody(req)
 		const result = await vikunja.request(`tasks/${taskId}/labels/bulk`, {
+			v2Method: 'PUT',
 			method: 'POST',
 			body: {
 				labels: body.labels || [],
@@ -3162,6 +3455,7 @@ async function handleApi(req, res, url) {
 	if (taskReadMatch && req.method === 'POST') {
 		const taskId = Number(taskReadMatch[1])
 		await vikunja.request(`tasks/${taskId}/read`, {
+			v2Method: 'PUT',
 			method: 'POST',
 		})
 		sendJson(res, 200, {ok: true})
@@ -3182,6 +3476,7 @@ async function handleApi(req, res, url) {
 		const taskId = Number(taskMatch[1])
 		const body = await readJsonBody(req)
 		const task = await vikunja.request(`tasks/${taskId}`, {
+			v2Method: 'PATCH',
 			method: 'POST',
 			body,
 		})
@@ -3325,10 +3620,11 @@ function coordinateAccountRefresh(sessionId, refreshOperation) {
 
 async function fetchUpstreamAuthInfo(baseUrl) {
 	try {
-		const payload = await fetchUpstreamInfo(baseUrl)
+		const {info: payload, apiVersion} = await loadVikunjaInstance(baseUrl)
 		const localAuth = typeof payload?.auth?.local === 'object' && payload.auth.local ? payload.auth.local : null
 		return {
 			baseUrl,
+			apiVersion,
 			localEnabled: typeof localAuth?.enabled === 'boolean' ? localAuth.enabled : null,
 			registrationEnabled:
 				typeof localAuth?.registration_enabled === 'boolean' ? localAuth.registration_enabled : null,
@@ -3341,26 +3637,7 @@ async function fetchUpstreamAuthInfo(baseUrl) {
 }
 
 async function fetchUpstreamInfo(baseUrl) {
-	let infoResponse
-	try {
-		infoResponse = await fetch(new URL('info', `${baseUrl}/`), {
-			headers: {
-				Accept: 'application/json',
-			},
-		})
-	} catch {
-		const error = new Error('Unable to load info from the Vikunja server.')
-		error.statusCode = 502
-		throw error
-	}
-
-	if (!infoResponse.ok) {
-		const error = new Error('Unable to load info from the Vikunja server.')
-		error.statusCode = infoResponse.status || 502
-		throw error
-	}
-
-	return await infoResponse.json().catch(() => ({}))
+	return (await loadVikunjaInstance(baseUrl)).info
 }
 
 function decorateInfoPayload(payload) {
@@ -3437,7 +3714,7 @@ function normalizeWebhookBody(body) {
 	return {
 		target_url: `${body?.target_url || body?.targetUrl || ''}`.trim(),
 		events: normalizeWebhookEventsBody(body?.events),
-		secret: `${body?.secret || ''}`.trim() || null,
+		secret: `${body?.secret || ''}`.trim(),
 	}
 }
 
@@ -3459,6 +3736,7 @@ function normalizeMigrationService(value) {
 		case 'todoist':
 		case 'trello':
 		case 'microsoft-todo':
+		case 'planka':
 		case 'ticktick':
 		case 'wekan':
 		case 'csv':
@@ -3483,12 +3761,15 @@ function normalizeMigrationStatusPayload(service, payload) {
 	const normalizedService = normalizeMigrationService(service)
 	const rawStatus = `${payload?.status || ''}`.trim().toLowerCase()
 	const message =
-		typeof payload?.message === 'string'
-			? `${payload.message}`.trim() || null
-			: typeof payload?.error === 'string'
-				? `${payload.error}`.trim() || null
-				: null
+		typeof payload?.error_message === 'string' && payload.error_message
+			? payload.error_message
+			: typeof payload?.message === 'string'
+				? `${payload.message}`.trim() || null
+				: typeof payload?.error === 'string'
+					? `${payload.error}`.trim() || null
+					: null
 
+	if (payload?.error_kind) return {service: normalizedService, status: 'error', message: message || 'Import failed. Check the Vikunja server logs.'}
 	if (rawStatus === 'idle' || rawStatus === 'running' || rawStatus === 'done' || rawStatus === 'error') {
 		return {
 			service: normalizedService,
@@ -3510,14 +3791,16 @@ function normalizeMigrationStatusPayload(service, payload) {
 			message,
 		}
 	}
-	if (payload?.started_at && payload?.finished_at) {
+	const started = payload?.started_at && !`${payload.started_at}`.startsWith('0001-')
+	const finished = payload?.finished_at && !`${payload.finished_at}`.startsWith('0001-')
+	if (started && finished) {
 		return {
 			service: normalizedService,
 			status: 'done',
 			message,
 		}
 	}
-	if (payload?.started_at && !payload?.finished_at) {
+	if (started && !finished) {
 		return {
 			service: normalizedService,
 			status: 'running',
@@ -3547,12 +3830,17 @@ function formatErrorMessage(error, fallback) {
 	return fallback
 }
 
-async function getVikunjaContext(req, res = null) {
+async function getVikunjaContext(req, res = null, {refreshInstance = false} = {}) {
 	const cookies = parseCookies(req.headers.cookie || '')
 	const ignoreLegacy = cookies[ignoreLegacyCookieName] === '1'
 	const appSessionId = getAppSessionId(req)
 	const session = sessionStore.get(appSessionId)
 	if (session?.account) {
+		if (refreshInstance) {
+			const {info, apiVersion} = await loadVikunjaInstance(session.account.baseUrl)
+			session.account = {...session.account, instanceFeatures: instanceFeaturesFromInfo(info, apiVersion)}
+			sessionStore.update(appSessionId, {account: session.account})
+		}
 		refreshAppSessionCookie(res, appSessionId)
 		return await hydrateOperatorAccountContext({
 			source: 'account',
@@ -3564,18 +3852,20 @@ async function getVikunjaContext(req, res = null) {
 
 	// Legacy API-token mode is retained as a development-only fallback.
 	if (legacyConfigured && !ignoreLegacy) {
-		const account = {
-			authMode: 'apiToken',
-			baseUrl: vikunjaBaseUrl,
-			apiToken: vikunjaApiToken,
-			user: null,
+		if (!legacyAccountPromise || refreshInstance) {
+			legacyAccountPromise = loadVikunjaInstance(vikunjaBaseUrl).then(({info, apiVersion}) => ({
+				authMode: 'apiToken', baseUrl: vikunjaBaseUrl, apiToken: vikunjaApiToken, user: null,
+				instanceFeatures: instanceFeaturesFromInfo(info, apiVersion),
+			})).catch(error => { legacyAccountPromise = null; throw error })
 		}
+		const account = await legacyAccountPromise
 		return {
 			source: 'legacy',
 			sessionId: null,
 			account,
 			client: createVikunjaClient({
 				baseUrl: account.baseUrl,
+				apiVersion: account.instanceFeatures?.apiV2Available ? 'v2' : 'v1',
 				authMode: account.authMode,
 				apiToken: account.apiToken,
 			}),
@@ -3638,6 +3928,48 @@ async function requireAdminSession(req, res = null, {allowBridgeUnavailable = fa
 	}
 
 	return context
+}
+
+/* Two different kinds of operator exist since Vikunja 2.4. The CLI bridge
+ * reaches the Vikunja host itself (dumps, migrations, config files) and is
+ * gated on an allow-listed email. Vikunja's own /admin/* API manages users
+ * only and needs nothing but instance-admin rights on the signed-in account.
+ * User management accepts either; host-touching work still needs the bridge. */
+async function requireUserAdminSession(req, res = null) {
+	const context = await hydrateServerAdminFlag(await requireInteractiveSession(req, res))
+	const isServerAdmin = context.account.isServerAdmin === true
+	if (!isServerAdmin && !adminBridge.isOperatorAccount(context.account)) {
+		const error = new Error('This action requires a Vikunja instance admin or an authorized operator account.')
+		error.statusCode = 403
+		throw error
+	}
+
+	return {
+		...context,
+		isServerAdmin,
+		adminHttp: isServerAdmin
+			? createAdminHttpApi({
+				client: context.client,
+				apiV2Available: context.account.instanceFeatures?.apiV2Available === true,
+				serverVersion: context.account.instanceFeatures?.serverVersion || '',
+			})
+			: null,
+	}
+}
+
+/* Sessions created before the flag existed carry no value. Probe once and
+ * persist, so the extra request is per session rather than per request. */
+async function hydrateServerAdminFlag(context) {
+	if (typeof context.account?.isServerAdmin === 'boolean') {
+		return context
+	}
+
+	const account = {...context.account, isServerAdmin: await probeServerAdmin(context.client)}
+	if (context.sessionId) {
+		sessionStore.update(context.sessionId, {account})
+	}
+
+	return {...context, account}
 }
 
 async function hydrateOperatorAccountContext(context) {
@@ -3708,6 +4040,18 @@ async function hydrateOperatorAccountIdentity(account, sessionId = '') {
 	return hydratedAccount
 }
 
+/* Vikunja's own admin API is preferred wherever it covers the operation, so
+ * user management works without shell access to the host. The CLI bridge stays
+ * the fallback for instances that predate 2.4 or for operators who are not
+ * instance admins. */
+function useAdminHttp(context, operation) {
+	return Boolean(context.adminHttp?.supports(operation))
+}
+
+function adminUserSource(context, operation) {
+	return useAdminHttp(context, operation) ? 'api' : 'bridge'
+}
+
 function assertAdminUserMutationAllowed(account, identifier, action) {
 	const normalizedIdentifier = `${identifier || ''}`.trim().toLowerCase()
 	const currentUserId = String(Number(account?.user?.id || 0))
@@ -3725,11 +4069,18 @@ function assertAdminUserMutationAllowed(account, identifier, action) {
 		error.statusCode = 400
 		throw error
 	}
+
+	if (targetsCurrentUser && action === 'demote') {
+		const error = new Error('You cannot remove instance-admin rights from the account you are currently signed in with.')
+		error.statusCode = 400
+		throw error
+	}
 }
 
 function createAccountClient(account, sessionId, res = null) {
 	return createVikunjaClient({
 		baseUrl: account.baseUrl,
+		apiVersion: account.instanceFeatures?.apiV2Available ? 'v2' : 'v1',
 		authMode: account.authMode,
 		apiToken: account.apiToken || '',
 		accessToken: account.accessToken || '',
@@ -3795,6 +4146,14 @@ function summarizeAccount(account, source) {
 			source === 'account' &&
 			account.authMode === 'password' &&
 			adminBridge.isOperatorAccount(account),
+		isServerAdmin:
+			source === 'account' &&
+			account.authMode === 'password' &&
+			account.isServerAdmin === true,
+		canManageUsers:
+			source === 'account' &&
+			account.authMode === 'password' &&
+			(account.isServerAdmin === true || adminBridge.isOperatorAccount(account)),
 		instanceFeatures: account.instanceFeatures
 			? {
 				linkSharingEnabled:
@@ -3810,6 +4169,11 @@ function summarizeAccount(account, source) {
 					typeof account.instanceFeatures.emailRemindersEnabled === 'boolean'
 						? account.instanceFeatures.emailRemindersEnabled
 						: null,
+				enabledProFeatures: Array.isArray(account.instanceFeatures.enabledProFeatures)
+					? account.instanceFeatures.enabledProFeatures.map(entry => `${entry}`)
+					: [],
+				apiV2Available: account.instanceFeatures.apiV2Available === true,
+				serverVersion: account.instanceFeatures.serverVersion || '',
 			}
 			: null,
 		user: account.user
@@ -3818,6 +4182,7 @@ function summarizeAccount(account, source) {
 				name: account.user.name || '',
 				username: account.user.username || '',
 				email: account.user.email || '',
+				pending_email: account.user.pending_email || '',
 			}
 			: null,
 		sessionsSupported: source === 'account' && account.authMode === 'password',
@@ -4032,7 +4397,7 @@ function setSecurityHeaders(res) {
 	res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
 	res.setHeader(
 		'Content-Security-Policy',
-		"default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:",
+		"default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:",
 	)
 
 	if (httpsEnabled) {
@@ -4191,12 +4556,8 @@ async function checkUpstreamHealth() {
 	const timeout = setTimeout(() => controller.abort(), healthcheckUpstreamTimeoutMs)
 
 	try {
-		const response = await fetch(new URL('info', `${baseUrl}/`), {
-			headers: {
-				Accept: 'application/json',
-			},
-			signal: controller.signal,
-		})
+		await loadVikunjaInstance(baseUrl, {signal: controller.signal})
+		const response = {ok: true, status: 200}
 
 		return {
 			ok: response.ok,
@@ -4210,7 +4571,7 @@ async function checkUpstreamHealth() {
 			ok: false,
 			configured: true,
 			baseUrl,
-			statusCode: null,
+			statusCode: error.statusCode || null,
 			responseTimeMs: Date.now() - startedAt,
 			error: error.name === 'AbortError' ? 'Upstream health check timed out.' : (error.message || 'Upstream health check failed.'),
 		}
@@ -4439,6 +4800,18 @@ function normalizeTaskCollectionArray(value) {
 	}
 
 	return []
+}
+
+/* Time tracking exists only on /api/v2: Vikunja's frozen v1 has no route for
+ * it. The licence gate is upstream's own 404 and is deliberately not mirrored. */
+function requireTimeTrackingApi(context) {
+	if (context?.account?.instanceFeatures?.apiV2Available === true) {
+		return
+	}
+
+	const error = new Error('Time tracking requires the Vikunja v2 API, which this instance does not serve.')
+	error.statusCode = 501
+	throw error
 }
 
 function normalizeOptionalDate(value) {

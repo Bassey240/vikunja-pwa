@@ -1,0 +1,1123 @@
+{
+  "version": "v2.7.0",
+  "source": "Vikunja 2.7.0 /api/v2/openapi.json",
+  "operations": [
+    {
+      "method": "GET",
+      "path": "/admin/invite-links",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/admin/invite-links",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/admin/invite-links/{id}",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/admin/overview",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/admin/projects",
+      "public": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/admin/projects/{id}/owner",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "GET",
+      "path": "/admin/teams",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/admin/users",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/admin/users",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/admin/users/{id}",
+      "public": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/admin/users/{id}/admin",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "PATCH",
+      "path": "/admin/users/{id}/password",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "POST",
+      "path": "/admin/users/{id}/password-reset-email",
+      "public": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/admin/users/{id}/status",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "GET",
+      "path": "/avatar/{username}",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/filters",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/filters/{filter}",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/filters/{filter}",
+      "public": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/filters/{filter}",
+      "public": false,
+      "contentType": "application/json-patch+json"
+    },
+    {
+      "method": "PUT",
+      "path": "/filters/{filter}",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "GET",
+      "path": "/health",
+      "public": true
+    },
+    {
+      "method": "GET",
+      "path": "/info",
+      "public": true
+    },
+    {
+      "method": "POST",
+      "path": "/invite-links/check",
+      "public": true,
+      "contentType": "application/json"
+    },
+    {
+      "method": "GET",
+      "path": "/labels",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/labels",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/labels/{id}",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/labels/{id}",
+      "public": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/labels/{id}",
+      "public": false,
+      "contentType": "application/json-patch+json"
+    },
+    {
+      "method": "PUT",
+      "path": "/labels/{id}",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "POST",
+      "path": "/login",
+      "public": true,
+      "contentType": "application/json"
+    },
+    {
+      "method": "POST",
+      "path": "/logout",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/mcp/info",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/migration/csv/detect",
+      "public": false,
+      "contentType": "multipart/form-data"
+    },
+    {
+      "method": "POST",
+      "path": "/migration/csv/migrate",
+      "public": false,
+      "contentType": "multipart/form-data"
+    },
+    {
+      "method": "POST",
+      "path": "/migration/csv/preview",
+      "public": false,
+      "contentType": "multipart/form-data"
+    },
+    {
+      "method": "GET",
+      "path": "/migration/csv/status",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/migration/planka/migrate",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "GET",
+      "path": "/migration/planka/status",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/migration/ticktick/migrate",
+      "public": false,
+      "contentType": "multipart/form-data"
+    },
+    {
+      "method": "GET",
+      "path": "/migration/ticktick/status",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/migration/todoist/auth",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/migration/todoist/migrate",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "GET",
+      "path": "/migration/todoist/status",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/migration/vikunja-file/migrate",
+      "public": false,
+      "contentType": "multipart/form-data"
+    },
+    {
+      "method": "GET",
+      "path": "/migration/vikunja-file/status",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/migration/wekan/migrate",
+      "public": false,
+      "contentType": "multipart/form-data"
+    },
+    {
+      "method": "GET",
+      "path": "/migration/wekan/status",
+      "public": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/notifications",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/notifications",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/notifications",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/notifications.atom",
+      "public": false
+    },
+    {
+      "method": "PUT",
+      "path": "/notifications/{notificationid}",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/authorize",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/token",
+      "public": true,
+      "contentType": "application/x-www-form-urlencoded"
+    },
+    {
+      "method": "GET",
+      "path": "/projects",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/projects",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/projects/{id}",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/projects/{id}",
+      "public": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/projects/{id}",
+      "public": false,
+      "contentType": "application/json-patch+json"
+    },
+    {
+      "method": "PUT",
+      "path": "/projects/{id}",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "GET",
+      "path": "/projects/{project_id}/time-entries",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/projects/{projectid}/duplicate",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/projects/{project}/background",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/projects/{project}/background",
+      "public": false
+    },
+    {
+      "method": "PUT",
+      "path": "/projects/{project}/backgrounds/upload",
+      "public": false,
+      "contentType": "multipart/form-data"
+    },
+    {
+      "method": "GET",
+      "path": "/projects/{project}/shares",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/projects/{project}/shares",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/projects/{project}/shares/{share}",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/projects/{project}/shares/{share}",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/projects/{project}/tasks",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/projects/{project}/tasks",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "POST",
+      "path": "/projects/{project}/tasks/bulk",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "GET",
+      "path": "/projects/{project}/tasks/by-index/{index}",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/projects/{project}/teams",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/projects/{project}/teams",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/projects/{project}/teams/{team}",
+      "public": false
+    },
+    {
+      "method": "PUT",
+      "path": "/projects/{project}/teams/{team}",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "GET",
+      "path": "/projects/{project}/users",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/projects/{project}/users",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "GET",
+      "path": "/projects/{project}/users/search",
+      "public": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/projects/{project}/users/{user}",
+      "public": false
+    },
+    {
+      "method": "PUT",
+      "path": "/projects/{project}/users/{user}",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "GET",
+      "path": "/projects/{project}/views",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/projects/{project}/views",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/projects/{project}/views/{view}",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/projects/{project}/views/{view}",
+      "public": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/projects/{project}/views/{view}",
+      "public": false,
+      "contentType": "application/json-patch+json"
+    },
+    {
+      "method": "PUT",
+      "path": "/projects/{project}/views/{view}",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "GET",
+      "path": "/projects/{project}/views/{view}/buckets",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/projects/{project}/views/{view}/buckets",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "GET",
+      "path": "/projects/{project}/views/{view}/buckets/tasks",
+      "public": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/projects/{project}/views/{view}/buckets/{bucket}",
+      "public": false
+    },
+    {
+      "method": "PUT",
+      "path": "/projects/{project}/views/{view}/buckets/{bucket}",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "PUT",
+      "path": "/projects/{project}/views/{view}/buckets/{bucket}/tasks",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "GET",
+      "path": "/projects/{project}/views/{view}/tasks",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/projects/{project}/webhooks",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/projects/{project}/webhooks",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/projects/{project}/webhooks/{webhook}",
+      "public": false
+    },
+    {
+      "method": "PUT",
+      "path": "/projects/{project}/webhooks/{webhook}",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "POST",
+      "path": "/register",
+      "public": true,
+      "contentType": "application/json"
+    },
+    {
+      "method": "GET",
+      "path": "/routes",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/shares/{share}/auth",
+      "public": true,
+      "contentType": "application/json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/subscriptions/{entity}/{entityID}",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/subscriptions/{entity}/{entityID}",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/tasks",
+      "public": false
+    },
+    {
+      "method": "PUT",
+      "path": "/tasks/bulk",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/{task_id}/time-entries",
+      "public": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/tasks/{task}",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/{task}",
+      "public": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/tasks/{task}",
+      "public": false,
+      "contentType": "application/json-patch+json"
+    },
+    {
+      "method": "PUT",
+      "path": "/tasks/{task}",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/{task}/assignees",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/tasks/{task}/assignees",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "PUT",
+      "path": "/tasks/{task}/assignees/bulk",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/tasks/{task}/assignees/{user}",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/{task}/attachments",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/tasks/{task}/attachments",
+      "public": false,
+      "contentType": "multipart/form-data"
+    },
+    {
+      "method": "DELETE",
+      "path": "/tasks/{task}/attachments/{attachment}",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/{task}/attachments/{attachment}",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/{task}/comments",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/tasks/{task}/comments",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/tasks/{task}/comments/{commentid}",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/{task}/comments/{commentid}",
+      "public": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/tasks/{task}/comments/{commentid}",
+      "public": false,
+      "contentType": "application/json-patch+json"
+    },
+    {
+      "method": "PUT",
+      "path": "/tasks/{task}/comments/{commentid}",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "POST",
+      "path": "/tasks/{task}/duplicate",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/{task}/labels",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/tasks/{task}/labels",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "PUT",
+      "path": "/tasks/{task}/labels/bulk",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/tasks/{task}/labels/{label}",
+      "public": false
+    },
+    {
+      "method": "PUT",
+      "path": "/tasks/{task}/position",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "PUT",
+      "path": "/tasks/{task}/read",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/tasks/{task}/relations",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/tasks/{task}/relations/{relationKind}/{otherTask}",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/teams",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/teams",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/teams/{id}",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/teams/{id}",
+      "public": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/teams/{id}",
+      "public": false,
+      "contentType": "application/json-patch+json"
+    },
+    {
+      "method": "PUT",
+      "path": "/teams/{id}",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "POST",
+      "path": "/teams/{team}/members",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/teams/{team}/members/{user}",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/teams/{team}/members/{user}/admin",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/time-entries",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/time-entries",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "POST",
+      "path": "/time-entries/timer/stop",
+      "public": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/time-entries/{id}",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/time-entries/{id}",
+      "public": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/time-entries/{id}",
+      "public": false,
+      "contentType": "application/json-patch+json"
+    },
+    {
+      "method": "PUT",
+      "path": "/time-entries/{id}",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "GET",
+      "path": "/token/test",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/token/test",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/tokens",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/tokens",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/tokens/{id}",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/user",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/user/bots",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/user/bots",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/user/bots/{bot}",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/user/bots/{bot}",
+      "public": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/user/bots/{bot}",
+      "public": false,
+      "contentType": "application/json-patch+json"
+    },
+    {
+      "method": "PUT",
+      "path": "/user/bots/{bot}",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "POST",
+      "path": "/user/confirm",
+      "public": true,
+      "contentType": "application/json"
+    },
+    {
+      "method": "POST",
+      "path": "/user/deletion/cancel",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "POST",
+      "path": "/user/deletion/confirm",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "POST",
+      "path": "/user/deletion/request",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "GET",
+      "path": "/user/export",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/user/export/download",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "POST",
+      "path": "/user/export/request",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "POST",
+      "path": "/user/password",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "POST",
+      "path": "/user/password/reset",
+      "public": true,
+      "contentType": "application/json"
+    },
+    {
+      "method": "POST",
+      "path": "/user/password/token",
+      "public": true,
+      "contentType": "application/json"
+    },
+    {
+      "method": "GET",
+      "path": "/user/sessions",
+      "public": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/user/sessions/{session}",
+      "public": false
+    },
+    {
+      "method": "PUT",
+      "path": "/user/settings/avatar",
+      "public": false,
+      "contentType": "multipart/form-data"
+    },
+    {
+      "method": "GET",
+      "path": "/user/settings/avatar/provider",
+      "public": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/user/settings/avatar/provider",
+      "public": false,
+      "contentType": "application/json-patch+json"
+    },
+    {
+      "method": "PUT",
+      "path": "/user/settings/avatar/provider",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/user/settings/email",
+      "public": false
+    },
+    {
+      "method": "PUT",
+      "path": "/user/settings/email",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "POST",
+      "path": "/user/settings/email/resend",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/user/settings/general",
+      "public": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/user/settings/general",
+      "public": false,
+      "contentType": "application/json-patch+json"
+    },
+    {
+      "method": "PUT",
+      "path": "/user/settings/general",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "GET",
+      "path": "/user/settings/token/caldav",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/user/settings/token/caldav",
+      "public": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/user/settings/token/caldav/{id}",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/user/settings/totp",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/user/settings/totp/disable",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "POST",
+      "path": "/user/settings/totp/enable",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "POST",
+      "path": "/user/settings/totp/enroll",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/user/settings/totp/qrcode",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/user/settings/webhooks",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/user/settings/webhooks",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "GET",
+      "path": "/user/settings/webhooks/events",
+      "public": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/user/settings/webhooks/{webhook}",
+      "public": false
+    },
+    {
+      "method": "PUT",
+      "path": "/user/settings/webhooks/{webhook}",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "GET",
+      "path": "/user/timezones",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/user/token",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/user/token/refresh",
+      "public": true
+    },
+    {
+      "method": "GET",
+      "path": "/users",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/webhooks/events",
+      "public": false
+    },
+    {
+      "method": "GET",
+      "path": "/{entitykind}/{entityid}/reactions",
+      "public": false
+    },
+    {
+      "method": "POST",
+      "path": "/{entitykind}/{entityid}/reactions",
+      "public": false,
+      "contentType": "application/json"
+    },
+    {
+      "method": "POST",
+      "path": "/{entitykind}/{entityid}/reactions/delete",
+      "public": false,
+      "contentType": "application/json"
+    }
+  ]
+}

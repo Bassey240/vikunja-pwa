@@ -1,3 +1,4 @@
+import BotBadge from '@/components/common/BotBadge'
 import UserAvatar from '@/components/common/UserAvatar'
 import type {FormEvent} from 'react'
 import type {Label, TaskAssignee} from '@/types'
@@ -103,6 +104,7 @@ export default function TaskDetailOrganization({
 											<UserAvatar user={assignee} size={30} />
 										</span>
 										<span className="detail-assignee-pill-name">{getUserDisplayName(assignee)}</span>
+										<BotBadge user={assignee} />
 									</div>
 									<button
 										className="menu-button detail-assignee-remove"

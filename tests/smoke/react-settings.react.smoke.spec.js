@@ -200,6 +200,22 @@ test('avatar settings switch providers and upload a custom avatar', async ({page
 	await expect(page.getByText('Avatar provider updated.')).toBeVisible()
 	await expect(accountSection.locator('.settings-avatar-row .user-avatar-initials')).toHaveCount(1)
 
+	// Vikunja 2.4 rejects non-decodable images (SVG) with a 400; the client
+	// stops them before upload and explains why.
+	await accountSection.locator('[data-avatar-upload-input]').setInputFiles({
+		name: 'avatar.svg',
+		mimeType: 'image/svg+xml',
+		buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'),
+	})
+	// Hidden-but-mounted screens keep their own copy of the status text, so
+	// match only the rendered one.
+	await expect(
+		page.getByText('That image format is not supported. Use a PNG, JPEG, GIF, or WebP file.')
+			.and(page.locator(':visible'))
+			.first(),
+	).toBeVisible()
+	await expect(page.getByText('Avatar uploaded.')).toHaveCount(0)
+
 	await accountSection.locator('[data-avatar-upload-input]').setInputFiles({
 		name: 'avatar.png',
 		mimeType: 'image/png',
@@ -208,6 +224,107 @@ test('avatar settings switch providers and upload a custom avatar', async ({page
 	await expect(page.getByText('Avatar uploaded.')).toBeVisible()
 	await expect(accountSection.locator('[data-avatar-provider-option="upload"]')).toHaveAttribute('aria-pressed', 'true')
 	await expect(accountSection.locator('.settings-avatar-row img.user-avatar')).toHaveCount(1)
+})
+
+test('pending email controls persist, resend, cancel and refresh after confirmation', async ({page}) => {
+	await page.setViewportSize({width: 390, height: 844})
+	let resendRequests = 0
+	page.on('request', request => {
+		if (request.url().endsWith('/api/session/settings/email/resend')) resendRequests += 1
+	})
+	await loginWithPassword(page)
+	await openSettings(page)
+	let section = await expandSettingsSection(page, 'account')
+	const requestChange = async () => {
+		await section.locator('[data-email-field="password"]').fill('smoke-password')
+		await section.locator('[data-email-field="newEmail"]').fill('pending@example.test')
+		await section.getByRole('button', {name: 'Update email', exact: true}).click()
+		await expect(section.locator('[data-pending-email]')).toContainText('pending@example.test')
+	}
+	await requestChange()
+	await expect(section.locator('[data-current-email]')).toHaveText('smoke@example.test')
+	await page.reload()
+	section = await expandSettingsSection(page, 'account')
+	await expect(section.locator('[data-pending-email]')).toContainText('pending@example.test')
+	await section.getByRole('button', {name: 'Resend confirmation'}).click()
+	await expect(section.locator('[data-change-email-notice]')).toContainText('Confirmation email resent.')
+	await page.route('**/api/user', route => route.fulfill({status: 503, json: {error: 'Account refresh unavailable.'}}))
+	await section.getByRole('button', {name: 'Resend confirmation'}).click()
+	await expect(page.locator('.status-card.danger:visible')).toHaveText('Account refresh unavailable.')
+	await expect(section.locator('[data-pending-email]')).toContainText('pending@example.test')
+	await expect(section.getByRole('button', {name: 'Resend confirmation'})).toBeEnabled()
+	expect(resendRequests).toBe(2)
+	await page.unroute('**/api/user')
+	await section.getByRole('button', {name: 'Refresh status'}).click()
+	await expect(page.getByText('Account refresh unavailable.', {exact: true})).toHaveCount(0)
+	expect(resendRequests).toBe(2)
+
+	await page.route('**/api/session/settings/email', route => route.request().method() === 'DELETE'
+		? route.fulfill({status: 503, json: {error: 'Email service unavailable.'}}) : route.continue())
+	await section.getByRole('button', {name: 'Cancel change'}).click()
+	await expect(page.locator('.status-card.danger:visible')).toHaveText('Email service unavailable.')
+	await expect(section.locator('[data-pending-email]')).toContainText('pending@example.test')
+	await expect(section.getByRole('button', {name: 'Cancel change'})).toBeEnabled()
+	await page.unroute('**/api/session/settings/email')
+	await section.getByRole('button', {name: 'Cancel change'}).click()
+	await expect(section.locator('[data-pending-email]')).toHaveCount(0)
+	await expect(section.locator('[data-current-email]')).toHaveText('smoke@example.test')
+
+	await requestChange()
+	stack.mock.confirmPendingEmail()
+	await section.getByRole('button', {name: 'Resend confirmation'}).click()
+	await expect(page.locator('.status-card.danger:visible')).toHaveText('No email change is pending.')
+	await expect(section.getByRole('button', {name: 'Resend confirmation'})).toBeEnabled()
+	await section.getByRole('button', {name: 'Refresh status'}).click()
+	await expect(section.locator('[data-current-email]')).toHaveText('pending@example.test')
+	await expect(section.locator('[data-pending-email]')).toHaveCount(0)
+})
+
+test('email change completes immediately with mail disabled', async ({browser}) => {
+	const immediateStack = await startTestStack({legacyConfigured: false, mockVikunjaOptions: {mailerEnabled: false}})
+	const page = await browser.newPage()
+	try {
+		await page.setViewportSize({width: 900, height: 900})
+		await page.goto(immediateStack.appUrl)
+		await loginWithPassword(page, immediateStack)
+		await openSettings(page)
+		const section = await expandSettingsSection(page, 'account')
+		await section.locator('[data-email-field="password"]').fill('smoke-password')
+		await section.locator('[data-email-field="newEmail"]').fill('immediate@example.test')
+		await section.getByRole('button', {name: 'Update email', exact: true}).click()
+		await expect(section.locator('[data-current-email]')).toHaveText('immediate@example.test')
+		await expect(section.locator('[data-change-email-notice]')).toHaveText('Email address updated.')
+		await expect(section.locator('[data-pending-email]')).toHaveCount(0)
+	} finally {
+		await page.close()
+		await immediateStack.stop()
+	}
+})
+
+test('older v1 servers keep the email form without pending controls', async ({browser}) => {
+	const legacyStack = await startTestStack({legacyConfigured: false, mockVikunjaOptions: {apiV2Enabled: false}})
+	const page = await browser.newPage()
+	const writes = []
+	page.on('request', request => {
+		if (request.url().includes('/api/session/settings/email')) writes.push(request.method())
+	})
+	try {
+		await page.setViewportSize({width: 900, height: 900})
+		await page.goto(legacyStack.appUrl)
+		await loginWithPassword(page, legacyStack)
+		await openSettings(page)
+		const section = await expandSettingsSection(page, 'account')
+		await section.locator('[data-email-field="password"]').fill('smoke-password')
+		await section.locator('[data-email-field="newEmail"]').fill('legacy@example.test')
+		await section.getByRole('button', {name: 'Update email', exact: true}).click()
+		await expect(section.locator('[data-change-email-notice]')).toContainText('Email update requested.')
+		await expect(section.locator('[data-pending-email]')).toHaveCount(0)
+		expect(legacyStack.mock.getState().pendingEmailChange.newEmail).toBe('legacy@example.test')
+		expect(writes).toEqual(['POST'])
+	} finally {
+		await page.close()
+		await legacyStack.stop()
+	}
 })
 
 test('account settings cover email change, export, and deletion flows', async ({page}) => {
@@ -290,6 +407,7 @@ test('migration settings support file uploads and oauth callback completion', as
 	await openSettings(page)
 
 	const migrationSection = await expandSettingsSection(page, 'migration')
+	await expect(migrationSection.locator('[data-migration-service="planka"]')).toHaveCount(0)
 	await expect(migrationSection.getByText(/If that callback still points at the original Vikunja frontend/i)).toBeVisible()
 	await expect(migrationSection.getByText(new RegExp(`${stack.appUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/migrate/todoist`))).toBeVisible()
 	await expect(migrationSection.locator('[data-migration-service="todoist"]')).toContainText('Ready to import from Todoist.')
@@ -313,6 +431,129 @@ test('migration settings support file uploads and oauth callback completion', as
 	const reopenedMigrationSection = page.locator('.settings-section[data-settings-section="migration"]')
 	await expect(reopenedMigrationSection.locator('.settings-section-title')).toHaveAttribute('aria-expanded', 'true')
 	await expect(reopenedMigrationSection.locator('[data-migration-service="todoist"]')).toContainText('Import started. Vikunja is processing it.')
+	await page.clock.install()
+	stack.mock.setMigrationStatus('ticktick', {status: 'done', message: 'Import complete.'})
+	await page.clock.runFor(3100)
+	const ticktick = reopenedMigrationSection.locator('[data-migration-service="ticktick"]')
+	await expect(ticktick.locator('.migration-status-chip')).toHaveText('Done')
+	await expect(ticktick.locator('time')).toHaveCount(0)
+})
+
+for (const nativeStatus of [false, true]) {
+	test(`migration progress refreshes automatically through ${nativeStatus ? 'raw native status' : 'the gateway'}`, async ({page}) => {
+		const target = await startTestStack({legacyConfigured: false, mockVikunjaOptions: {availableMigrators: ['planka']}})
+		try {
+			const started = '2026-10-08T08:00:00Z'
+			const finished = '2026-10-08T08:01:00Z'
+			const running = {started_at: started, finished_at: '0001-01-01T00:00:00Z', error_kind: '', error_message: ''}
+			target.mock.setMigrationStatus('planka', running)
+			let reads = 0
+			let failNext = false
+			await page.route('**/api/migration/planka/status', async route => {
+				reads++
+				if (failNext) {
+					failNext = false
+					return route.fulfill({status: 503, json: {error: 'Status temporarily unavailable.'}})
+				}
+				if (nativeStatus) return route.fulfill({json: target.mock.getState().migrationStatus.planka})
+				await route.continue()
+			})
+			await page.setViewportSize({width: 430, height: 900})
+			await page.goto(target.appUrl)
+			await loginWithPassword(page, target)
+			await openSettings(page)
+			await page.clock.install()
+			const section = await expandSettingsSection(page, 'migration')
+			const card = section.locator('[data-migration-service="planka"]')
+			const chip = card.locator('.migration-status-chip')
+			await expect(chip).toHaveText('Running')
+			await expect(card.locator('time')).toHaveCount(1)
+			await expect(card.locator('time').first()).toHaveAttribute('datetime', started)
+			await expect(card).toContainText('Updates automatically while this section is open.')
+			failNext = true
+			await page.clock.runFor(3100)
+			await expect(card).toContainText('Status temporarily unavailable.')
+			await expect(chip).toHaveText('Running')
+			await page.clock.runFor(3100)
+			await expect(card.getByText('Status temporarily unavailable.')).toHaveCount(0)
+			await section.locator('[data-settings-section-toggle="migration"]').first().click()
+			const closedReads = reads
+			await page.clock.runFor(9000)
+			expect(reads).toBe(closedReads)
+			await section.locator('[data-settings-section-toggle="migration"]').first().click()
+			await expect.poll(() => reads).toBe(closedReads + 1)
+			target.mock.setMigrationStatus('planka', {...running, finished_at: finished})
+			await page.clock.runFor(3100)
+			await expect(chip).toHaveText('Done')
+			await expect(card).toContainText('Import completed.')
+			await expect(card.locator('time')).toHaveCount(2)
+			await expect(card.locator('time').last()).toHaveAttribute('datetime', finished)
+			const doneReads = reads
+			await page.clock.runFor(9000)
+			expect(reads).toBe(doneReads)
+			target.mock.setMigrationStatus('planka', running)
+			await card.getByRole('button', {name: 'Refresh status'}).click()
+			await expect(chip).toHaveText('Running')
+			target.mock.setMigrationStatus('planka', {...running, finished_at: finished, error_kind: 'credentials'})
+			await page.clock.runFor(3100)
+			await expect(chip).toHaveText('Error')
+			await expect(card).toContainText('Import failed because the source credentials were rejected.')
+			const errorReads = reads
+			await page.clock.runFor(9000)
+			expect(reads).toBe(errorReads)
+			const box = await card.boundingBox()
+			expect(box.x + box.width).toBeLessThanOrEqual(430)
+		} finally {
+			await target.stop()
+		}
+	})
+}
+
+test('Planka import accepts both credential options and displays running, done and error status', async ({page}) => {
+	const plankaStack = await startTestStack({legacyConfigured: false, mockVikunjaOptions: {availableMigrators: ['planka']}})
+	try {
+		await page.setViewportSize({width: 430, height: 900})
+		await page.goto(plankaStack.appUrl)
+		await loginWithPassword(page, plankaStack)
+		await openSettings(page)
+		const section = await expandSettingsSection(page, 'migration')
+		const card = section.locator('[data-migration-service="planka"]')
+		const chip = card.locator('.migration-status-chip')
+		await expect(chip).toHaveText('Idle')
+		await card.getByLabel('Planka server URL').fill('https://planka.example.test')
+		await card.getByLabel('Planka API key').fill('invalid-key')
+		await card.getByRole('button', {name: 'Import from Planka'}).click()
+		await expect(card).toContainText('Planka refused the credentials.')
+		await expect(card.getByLabel('Planka API key')).toHaveValue('invalid-key')
+		await card.getByLabel('Planka API key').fill('fixture-key')
+		const request = page.waitForRequest('**/api/migration/planka/migrate')
+		await card.getByRole('button', {name: 'Import from Planka'}).click()
+		expect((await request).postDataJSON()).toEqual({url: 'https://planka.example.test', token: 'fixture-key'})
+		await expect(chip).toHaveText('Running')
+		await expect(card.getByLabel('Planka API key')).toHaveValue('')
+		await expect(card.getByRole('button', {name: 'Import from Planka'})).toBeDisabled()
+		// Native receives the upstream status unchanged; exercise that same store path.
+		await page.route('**/api/migration/planka/status', route => route.fulfill({json: plankaStack.mock.getState().migrationStatus.planka}))
+		plankaStack.mock.setMigrationStatus('planka', {started_at: '2026-10-08T08:00:00Z', finished_at: '2026-10-08T08:01:00Z', error_kind: '', error_message: ''})
+		await card.getByRole('button', {name: 'Refresh status'}).click()
+		await expect(chip).toHaveText('Done')
+		await card.getByLabel('Sign in with').selectOption('password')
+		await card.getByLabel('Planka username or email').fill('fixture-user')
+		await card.getByLabel('Planka password', {exact: true}).fill(' password with spaces ')
+		const passwordRequest = page.waitForRequest('**/api/migration/planka/migrate')
+		await card.getByRole('button', {name: 'Import from Planka'}).click()
+		expect((await passwordRequest).postDataJSON()).toEqual({url: 'https://planka.example.test', username: 'fixture-user', password: ' password with spaces '})
+		await expect(chip).toHaveText('Running')
+		await expect(card.getByLabel('Planka password', {exact: true})).toHaveValue('')
+		plankaStack.mock.setMigrationStatus('planka', {started_at: '2026-10-08T08:00:00Z', finished_at: '2026-10-08T08:01:00Z', error_kind: 'detail', error_message: 'A board could not be imported.'})
+		await card.getByRole('button', {name: 'Refresh status'}).click()
+		await expect(chip).toHaveText('Error')
+		await expect(card).toContainText('A board could not be imported.')
+		const box = await card.boundingBox()
+		expect(box.x + box.width).toBeLessThanOrEqual(430)
+	} finally {
+		await plankaStack.stop()
+	}
 })
 
 test('migration settings keep disabled importers visible and link operators to provider settings', async ({page}) => {
@@ -501,12 +742,100 @@ test('security settings cover totp, caldav tokens, and api tokens', async ({page
 	await expect(reloadedApiSection.getByText('No API tokens yet.')).toBeVisible()
 })
 
+test('MCP setup creates scoped tokens, copies client instructions and reuses revocation', async ({page}) => {
+	const mcpInfo = {
+		endpoint: 'https://mcp.example.test/api/v2/mcp',
+		routes: {
+			mcp: {access: {path: '/api/v2/mcp', method: 'ANY'}},
+			tasks: {
+				read_one: {path: '/api/v2/tasks/{task}', method: 'GET'},
+				read_all: {path: '/api/v2/tasks', method: 'GET'},
+				update: {path: '/api/v2/tasks/{task}', method: 'PUT'},
+			},
+		},
+		presets: {read_only: {'*': ['read_one', 'read_all']}, typed: {tasks: ['read_one', 'read_all', 'update']}, full: {'*': '*'}},
+	}
+	const target = await startTestStack({legacyConfigured: false, mockVikunjaOptions: {mcpInfo}})
+	try {
+		await page.setViewportSize({width: 390, height: 844})
+		await page.evaluate(() => {
+			Object.defineProperty(navigator, 'clipboard', {value: {writeText: async value => {window.mcpCopied = value}}})
+		})
+		await loginWithPassword(page, target)
+		await openSettings(page)
+		const security = page.locator('[data-settings-section="security"]')
+		const mcp = await expandSettingsSection(page, 'mcp')
+		await expect(mcp.getByText('AI connections (MCP)', {exact: true})).toBeVisible()
+		await expect(security).not.toHaveClass(/is-open/)
+		await expect(security.locator('[data-settings-subsection="mcp"]')).toHaveCount(0)
+		await expect(mcp.locator('[data-security-output="mcp-endpoint"]')).toHaveValue(mcpInfo.endpoint)
+		await mcp.locator('[data-copy-field="mcp-endpoint"]').click()
+		await expect.poll(() => page.evaluate(() => window.mcpCopied)).toBe(mcpInfo.endpoint)
+		await mcp.locator('[data-action="open-mcp-token-dialog"]').click()
+		const form = page.locator('[data-form="create-api-token-sheet"]')
+		await expect(form.locator('[data-mcp-preset]')).toHaveValue('read_only')
+		await form.locator('[data-api-token-field="title"]').fill('MCP read only')
+		await form.locator('[data-api-token-field="expiry"]').fill('30/04/2027')
+		await form.locator('[data-api-token-field="expiry"]').press('Tab')
+		await form.getByRole('button', {name: 'Create MCP token'}).click()
+		await expect(mcp.locator('[data-security-output="new-mcp-token"]')).toHaveValue('api-token-1')
+		expect(target.mock.getState().apiTokens[0].permissions).toEqual({tasks: ['read_one', 'read_all'], mcp: ['access']})
+		await expect(mcp.locator('[data-security-output="mcp-command"]')).toHaveValue('Authorization: Bearer api-token-1')
+		await mcp.locator('[data-mcp-client]').selectOption('claudeCode')
+		await expect(mcp.locator('[data-security-output="mcp-command"]')).toHaveValue(`claude mcp add --transport http --header 'Authorization: Bearer api-token-1' vikunja '${mcpInfo.endpoint}'`)
+		await mcp.locator('[data-mcp-client]').selectOption('codex')
+		const codex = `export VIKUNJA_MCP_TOKEN='api-token-1'\ncodex mcp add vikunja --url '${mcpInfo.endpoint}' --bearer-token-env-var VIKUNJA_MCP_TOKEN`
+		await expect(mcp.locator('[data-security-output="mcp-command"]')).toHaveValue(codex)
+		await mcp.locator('[data-copy-field="mcp-command"]').click()
+		await expect.poll(() => page.evaluate(() => window.mcpCopied)).toBe(codex)
+		await mcp.locator('[data-action="clear-mcp-token"]').click()
+		await expect(mcp.locator('[data-security-output="mcp-command"]')).toHaveCount(0)
+		await mcp.locator('[data-action="open-mcp-token-dialog"]').click()
+		await form.locator('[data-api-token-field="title"]').fill('MCP write')
+		await form.locator('[data-mcp-preset]').selectOption('typed')
+		await form.locator('[data-api-token-field="expiry"]').fill('30/04/2027')
+		await form.locator('[data-api-token-field="expiry"]').press('Tab')
+		await form.getByRole('button', {name: 'Create MCP token'}).click()
+		await expect(mcp.locator('[data-security-output="new-mcp-token"]')).toHaveValue('api-token-2')
+		expect(target.mock.getState().apiTokens[1].permissions).toEqual({tasks: ['read_one', 'read_all', 'update'], mcp: ['access']})
+		await mcp.locator('[data-action="manage-mcp-tokens"]').click()
+		const tokens = security.locator('[data-settings-subsection="apiTokens"]')
+		await expect(tokens.getByText('MCP write', {exact: true})).toBeVisible()
+		await tokens.locator('[data-action="clear-api-token"]').click()
+		await tokens.locator('[data-action="delete-api-token"][data-token-id="2"]').click()
+		await expect(tokens.getByText('MCP write', {exact: true})).toHaveCount(0)
+		await page.reload()
+		const reloadedMcp = await expandSettingsSection(page, 'mcp')
+		await expect(reloadedMcp.locator('[data-security-output="mcp-endpoint"]')).toHaveValue(mcpInfo.endpoint)
+		await expect(reloadedMcp.locator('[data-security-output="new-mcp-token"]')).toHaveCount(0)
+	} finally {
+		await target.stop()
+	}
+})
+
+test('MCP is hidden on a v1 server without probing its MCP endpoint', async ({page}) => {
+	const target = await startTestStack({legacyConfigured: false, mockVikunjaOptions: {apiV2Enabled: false, serverVersion: 'v2.3.0'}})
+	const mcpRequests = []
+	page.on('request', request => {if (request.url().includes('/mcp/')) mcpRequests.push(request.url())})
+	try {
+		await loginWithPassword(page, target)
+		await openSettings(page)
+		const security = await expandSettingsSection(page, 'security')
+		await expandSecuritySubsection(security, 'apiTokens')
+		await expect(security.locator('[data-action="open-api-token-dialog"]')).toBeVisible()
+		await expect(page.locator('[data-settings-section="mcp"]')).toHaveCount(0)
+		expect(mcpRequests).toEqual([])
+	} finally {
+		await target.stop()
+	}
+})
+
 test('app data settings surface version, motd, and auth provider state', async ({page}) => {
 	await loginWithPassword(page)
 	await openSettings(page)
 
 	const appDataSection = await expandSettingsSection(page, 'appData')
-	await expect(appDataSection.getByText('Vikunja version: test')).toBeVisible()
+	await expect(appDataSection.getByText('Vikunja version: v2.7.0')).toBeVisible()
 	await expect(appDataSection.getByText('MOTD: Smoke suite MOTD')).toBeVisible()
 	await expect(appDataSection.getByText('Background providers: unsplash')).toBeVisible()
 	await expect(appDataSection.getByText('Auth methods: Local enabled · OIDC disabled')).toBeVisible()
@@ -766,11 +1095,46 @@ test('user administration shows operator access status and bridge capability lim
 		await expect(operatorStatus.locator('.detail-meta')).toHaveText('smoke@example.test · smoke-user')
 		await expect(
 			section.getByText(
-				'Instance user roles are not exposed by the current Vikunja CLI bridge. This UI currently supports user lifecycle operations only: create, edit identity, enable or disable, reset password, and delete.',
+				'User management runs through the Vikunja CLI bridge, which supports lifecycle operations only: create, edit identity, enable or disable, reset password, and delete.',
 			),
 		).toBeVisible()
+		// Role changes need the HTTP admin API, so a bridge-only operator has no toggle.
+		await expect(section.locator('[data-admin-role-toggle]')).toHaveCount(0)
 	} finally {
 		await bridgeStack.stop()
+	}
+})
+
+test('an instance admin manages users and roles without the CLI bridge', async ({page}) => {
+	const adminStack = await startTestStack({
+		legacyConfigured: false,
+		mockVikunjaOptions: {
+			serverAdminUsernames: ['smoke-user'],
+		},
+	})
+
+	try {
+		await page.goto(adminStack.appUrl)
+		await expect(page.getByRole('heading', {name: 'Connect to your Vikunja server'})).toBeVisible()
+		await loginWithPassword(page, adminStack)
+		await openSettings(page)
+
+		const section = await expandSettingsSection(page, 'userAdministration')
+		await expect(
+			section.getByText(
+				'User management runs against this Vikunja server’s own admin API. Renaming a user is the one action that API does not expose, so it still needs the CLI bridge.',
+			),
+		).toBeVisible()
+
+		const overview = section.locator('[data-admin-overview]')
+		await expect(overview).toBeVisible()
+		await expect(overview.locator('.detail-value').first()).toHaveText('3')
+
+		// The list arrives over HTTP: this stack has no CLI bridge at all.
+		await expect(section.getByText('smoke-user').first()).toBeVisible()
+		await expect(section.locator('[data-admin-role-chip]').first()).toBeVisible()
+	} finally {
+		await adminStack.stop()
 	}
 })
 

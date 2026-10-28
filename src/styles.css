@@ -2749,6 +2749,46 @@ select {
 	min-inline-size: 0;
 }
 
+.running-timer-bar {
+	position: fixed;
+	inset-inline: var(--shell-gutter);
+	inset-block-end: 5.5rem;
+	z-index: 250;
+	display: flex;
+	align-items: center;
+	gap: 0.6rem;
+	padding: 0.8rem 0.95rem;
+	border-radius: var(--radius-md);
+	border: 1.5px solid color-mix(in srgb, var(--accent) 40%, var(--line-ui));
+	background: color-mix(in srgb, var(--surface-card) 88%, var(--accent) 12%);
+	box-shadow: var(--shadow);
+}
+
+/* Both bars pin to the same spot, so the timer steps above an open conflict bar. */
+.sync-conflict-bar + .running-timer-bar {
+	inset-block-end: 9.2rem;
+}
+
+.running-timer-bar-copy {
+	flex: 1;
+	min-inline-size: 0;
+	display: grid;
+	gap: 0.1rem;
+}
+
+.running-timer-bar-clock {
+	font-size: 0.95rem;
+	font-variant-numeric: tabular-nums;
+}
+
+.running-timer-bar-title {
+	font-size: 0.8rem;
+	color: var(--text-muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
 /* Center FAB — redesigned. 44px rounded square in the accent, not a circle.
  * Subtle inner top highlight gives it weight; no outer drop-shadow (the
  * bar itself is flat now). */
@@ -4119,6 +4159,175 @@ select {
 	font-size: 0.95rem;
 }
 
+/* Vikunja 2.4 bot users (User.bot_owner_id) are marked so an automated
+   author or assignee reads differently from a person. */
+.bot-badge {
+	margin-inline-start: 0.35rem;
+	padding: 0.05rem 0.32rem;
+	border-radius: var(--radius-control);
+	border: 1px solid var(--line-ui);
+	background: var(--surface-2);
+	color: var(--text-dim);
+	font-size: 0.68rem;
+	font-weight: 600;
+	letter-spacing: 0.03em;
+	text-transform: uppercase;
+	vertical-align: middle;
+}
+
+/* Read mode for rich-text fields (descriptions, comments). Vikunja stores
+   these as HTML; RichTextView rebuilds them as React elements. */
+.detail-description-read {
+	inline-size: 100%;
+	min-inline-size: 0;
+	padding: 0.58rem var(--control-padding-inline);
+	border-radius: var(--radius-control);
+	border: 1.5px solid transparent;
+	background: transparent;
+	color: var(--text);
+	font: inherit;
+	text-align: start;
+	cursor: text;
+	min-block-size: 2.6rem;
+}
+
+@media (hover: hover) and (pointer: fine) {
+	.detail-description-read:hover {
+		border-color: var(--line-ui);
+		background: var(--surface-field);
+	}
+}
+
+.detail-description-empty {
+	color: var(--text-faint);
+}
+
+.rich-text {
+	display: flow-root;
+	font-size: 0.95rem;
+	line-height: 1.5;
+	overflow-wrap: anywhere;
+}
+
+.rich-text > :first-child {
+	margin-block-start: 0;
+}
+
+.rich-text > :last-child {
+	margin-block-end: 0;
+}
+
+.rich-text p,
+.rich-text ul,
+.rich-text ol,
+.rich-text blockquote,
+.rich-text pre {
+	margin-block: 0.45rem;
+}
+
+.rich-text ul,
+.rich-text ol {
+	padding-inline-start: 1.35rem;
+}
+
+.rich-text h1,
+.rich-text h2,
+.rich-text h3,
+.rich-text h4,
+.rich-text h5,
+.rich-text h6 {
+	margin-block: 0.6rem 0.3rem;
+	font-size: 1.02rem;
+	font-weight: 600;
+}
+
+.rich-text a {
+	color: var(--accent);
+}
+
+.rich-text a.rich-text-task-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.35em;
+	max-inline-size: 100%;
+	padding: 0.05em 0.5em;
+	border: 1px solid var(--line-ui);
+	border-radius: 999px;
+	background: var(--surface-2);
+	color: var(--text);
+	text-decoration: none;
+	vertical-align: middle;
+}
+
+.rich-text-task-id {
+	color: var(--text-dim);
+	font-size: 0.85em;
+	white-space: nowrap;
+}
+
+.rich-text-task-title {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.rich-text-task-link.is-done .rich-text-task-title {
+	color: var(--text-dim);
+	text-decoration: line-through;
+}
+
+.rich-text code {
+	padding: 0.05rem 0.3rem;
+	border-radius: var(--radius-control);
+	background: var(--surface-2);
+	font-family: var(--font-mono, monospace);
+	font-size: 0.88em;
+}
+
+.rich-text pre {
+	padding: 0.55rem 0.7rem;
+	border-radius: var(--radius-control);
+	background: var(--surface-2);
+	overflow-x: auto;
+}
+
+.rich-text pre code {
+	padding: 0;
+	background: none;
+}
+
+.rich-text blockquote {
+	padding-inline-start: 0.7rem;
+	border-inline-start: 2px solid var(--line-ui);
+	color: var(--text-dim);
+}
+
+.rich-text table {
+	inline-size: 100%;
+	border-collapse: collapse;
+}
+
+.rich-text th,
+.rich-text td {
+	padding: 0.3rem 0.45rem;
+	border: 1px solid var(--line-ui);
+	text-align: start;
+}
+
+/* Checklist items keep their state but are not editable in read mode. */
+.rich-text .rich-text-check {
+	list-style: none;
+	margin-inline-start: -1.35rem;
+	display: flex;
+	align-items: baseline;
+	gap: 0.4rem;
+}
+
+.rich-text .rich-text-check[data-checked='true'] {
+	color: var(--text-dim);
+	text-decoration: line-through;
+}
+
 .detail-input {
 	min-block-size: var(--control-height);
 }
@@ -4289,6 +4498,7 @@ select {
 .detail-assignees-card,
 .detail-comments-card,
 .detail-attachments-card,
+.detail-time-card,
 .detail-recurring-card,
 .detail-reminders-card {
 	display: grid;
@@ -4387,6 +4597,7 @@ select {
 
 .detail-comments-card,
 .detail-attachments-card,
+.detail-time-card,
 .detail-comment-list,
 .detail-comment-form,
 .detail-comment-editor,
@@ -4552,6 +4763,18 @@ select {
 	min-inline-size: 0;
 }
 
+.detail-attachment-media {
+	grid-column: 1 / -1;
+	min-inline-size: 0;
+	inline-size: 100%;
+}
+
+.detail-attachment-media audio,
+.detail-attachment-media video {
+	display: block;
+	inline-size: 100%;
+}
+
 .detail-attachment-name {
 	min-inline-size: 0;
 	font-size: 0.88rem;
@@ -4584,6 +4807,66 @@ select {
 	min-block-size: 1.72rem;
 	padding: 0.14rem 0.38rem;
 	font-size: 0.72rem;
+}
+
+.detail-time-list,
+.detail-time-form {
+	display: grid;
+	gap: 0.32rem;
+}
+
+.detail-time-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 0.44rem;
+	align-items: center;
+	padding: 0.42rem 0.48rem;
+	border-radius: var(--radius-control);
+	background: var(--surface-field);
+	border: 1.5px solid var(--line-ui);
+}
+
+.detail-time-copy {
+	display: grid;
+	gap: 0.1rem;
+	min-inline-size: 0;
+}
+
+.detail-time-duration {
+	font-size: 0.88rem;
+	line-height: 1.18;
+	color: var(--text);
+	/* The clock ticks in place, so its digits must not reflow the row. */
+	font-variant-numeric: tabular-nums;
+}
+
+.detail-time-duration.is-running {
+	color: var(--accent);
+}
+
+.detail-time-comment {
+	font-size: 0.82rem;
+	line-height: 1.2;
+	color: var(--text-muted);
+	word-break: break-word;
+}
+
+.detail-time-actions {
+	display: inline-flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 0.24rem;
+}
+
+.detail-time-actions .detail-comment-action {
+	min-block-size: 1.72rem;
+	padding: 0.14rem 0.38rem;
+	font-size: 0.72rem;
+}
+
+.detail-time-row .detail-time-form {
+	grid-column: 1 / -1;
 }
 
 .detail-media-viewer {
@@ -4645,6 +4928,11 @@ select {
 	max-block-size: min(70vh, 42rem);
 	border-radius: var(--radius-control);
 	image-orientation: from-image;
+}
+
+.detail-media-viewer-body video {
+	max-block-size: min(70vh, 42rem);
+	border-radius: var(--radius-control);
 }
 
 .detail-comment-body {

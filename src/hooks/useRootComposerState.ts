@@ -24,7 +24,17 @@ export function useRootComposerState() {
 	const submitRootTask = useAppStore(state => state.submitRootTask)
 	const consumeComposerInitialTitle = useAppStore(state => state.consumeComposerInitialTitle)
 	const [title, setTitle] = useState('')
+	const [multipleTasks, setMultipleTasks] = useState(false)
 	const inputRef = useRef<HTMLInputElement | null>(null)
+	const multilineRef = useRef<HTMLTextAreaElement | null>(null)
+
+	useEffect(() => {
+		if (!rootComposerOpen) setMultipleTasks(false)
+	}, [rootComposerOpen])
+
+	useEffect(() => {
+		if (multipleTasks) multilineRef.current?.focus()
+	}, [multipleTasks])
 
 	useEffect(() => {
 		if (!rootComposerOpen) {
@@ -70,10 +80,12 @@ export function useRootComposerState() {
 
 	async function handleSubmit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault()
-		const success = await submitRootTask(title)
-		if (success) {
-			setTitle('')
-			inputRef.current?.focus()
+		const lines = title.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+		const createdCount = await submitRootTask(title)
+		if (createdCount) {
+			setTitle(lines.slice(createdCount).join('\n'))
+			if (multipleTasks) multilineRef.current?.focus()
+			else inputRef.current?.focus()
 		}
 	}
 
@@ -86,6 +98,9 @@ export function useRootComposerState() {
 		getProjectAncestors,
 		handleSubmit,
 		inputRef,
+		multilineRef,
+		multipleTasks,
+		setMultipleTasks,
 		parentTask,
 		setComposerProjectId,
 		setTitle,

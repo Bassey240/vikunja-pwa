@@ -118,6 +118,7 @@ function normalizeBaseUrl(value) {
 	if (!/^https?:\/\//.test(normalized)) {
 		normalized = `http://${normalized}`
 	}
+	normalized = normalized.replace(/\/api\/v[12]$/, '')
 	if (!normalized.endsWith('/api/v1')) {
 		normalized = `${normalized}/api/v1`
 	}

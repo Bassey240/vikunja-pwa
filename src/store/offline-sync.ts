@@ -2,6 +2,12 @@ import {api, type ApiError} from '@/api'
 import type {TaskRelationKind} from '@/types'
 import {isRecord} from '@/utils/type-guards'
 import {
+	REPLAY_MAX_RETRIES,
+	REPLAY_RETRY_DELAY_MS,
+	isRetriableReplayStatus,
+	shouldSurfaceReplayConflict,
+} from './offline-replay-policy'
+import {
 	getAllMutations,
 	markFailed,
 	markSucceeded,
@@ -23,7 +29,7 @@ export interface SyncResult {
 	conflicts: ConflictEntry[]
 }
 
-const MAX_RETRIES = 3
+const MAX_RETRIES = REPLAY_MAX_RETRIES
 
 interface TaskMoveReplayPayload {
 	_moveIntent?: boolean
@@ -60,24 +66,39 @@ export async function replayOfflineQueue(): Promise<SyncResult> {
 
 		await markSyncing(entry.id)
 
-		try {
+		const runEntry = async () => {
 			if (entry.type === 'task-move' && isTaskMoveReplayPayload(entry.body)) {
 				await replayTaskMove(entry)
-			} else {
-				const response = await api<Record<string, unknown>, Record<string, unknown> | null>(
-					entry.endpoint,
-					{
-						method: entry.method,
-						body: isRecord(entry.body) ? entry.body : null,
-					},
-				)
+				return
+			}
 
-				if (entry.type.endsWith('-create') && entry.metadata.entityId && entry.metadata.entityId < 0) {
-					const realId = extractIdFromResponse(response, entry.metadata.entityType)
-					if (realId) {
-						await remapTempId(entry.metadata.entityId, realId)
-					}
+			const response = await api<Record<string, unknown>, Record<string, unknown> | null>(
+				entry.endpoint,
+				{
+					method: entry.method,
+					body: isRecord(entry.body) ? entry.body : null,
+				},
+			)
+
+			if (entry.type.endsWith('-create') && entry.metadata.entityId && entry.metadata.entityId < 0) {
+				const realId = extractIdFromResponse(response, entry.metadata.entityType)
+				if (realId) {
+					await remapTempId(entry.metadata.entityId, realId)
 				}
+			}
+		}
+
+		try {
+			try {
+				await runEntry()
+			} catch (error) {
+				// 2.4's atomic position upserts can 409 transiently — one in-place
+				// retry usually lands after the competing write settles.
+				if (!isRetriableReplayStatus((error as ApiError).statusCode ?? null)) {
+					throw error
+				}
+				await delay(REPLAY_RETRY_DELAY_MS)
+				await runEntry()
 			}
 
 			await markSucceeded(entry.id)
@@ -89,7 +110,9 @@ export async function replayOfflineQueue(): Promise<SyncResult> {
 
 			await markFailed(entry.id, message)
 
-			if (statusCode && statusCode >= 400 && statusCode < 500) {
+			// A still-conflicting 409 stays queued for the next replay pass and
+			// only surfaces once its retries are exhausted.
+			if (shouldSurfaceReplayConflict(statusCode, entry.retries + 1, MAX_RETRIES)) {
 				result.conflicts.push({
 					mutationId: entry.id,
 					description: entry.metadata.description,
@@ -103,6 +126,10 @@ export async function replayOfflineQueue(): Promise<SyncResult> {
 	}
 
 	return result
+}
+
+function delay(ms: number) {
+	return new Promise(resolve => setTimeout(resolve, ms))
 }
 
 function extractIdFromResponse(

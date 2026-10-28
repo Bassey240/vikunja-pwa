@@ -8,6 +8,7 @@ export default function CompactDatePicker({
 	value,
 	onChange,
 	mode = 'date',
+	defaultTime = '12:00',
 	allowEmpty = false,
 	placeholder,
 	showLabel = true,
@@ -17,6 +18,7 @@ export default function CompactDatePicker({
 	value: string
 	onChange: (value: string) => void
 	mode?: 'date' | 'datetime'
+	defaultTime?: string
 	allowEmpty?: boolean
 	placeholder?: string
 	showLabel?: boolean
@@ -31,20 +33,20 @@ export default function CompactDatePicker({
 	const editedSinceFocusRef = useRef(false)
 	const [open, setOpen] = useState(false)
 	const normalizedValue = normalizeValue(value, mode)
-	const fallbackValue = mode === 'date' ? toDateValue(new Date()) : `${toDateValue(new Date())}T12:00`
+	const fallbackValue = mode === 'date' ? toDateValue(new Date()) : `${toDateValue(new Date())}T${defaultTime}`
 	const effectiveValue = normalizedValue || (allowEmpty ? '' : fallbackValue)
 	const [draft, setDraft] = useState(() => formatDisplayValue(effectiveValue, mode))
-	const [timeValue, setTimeValue] = useState(() => extractTimeValue(effectiveValue, mode))
+	const [timeValue, setTimeValue] = useState(() => extractTimeValue(effectiveValue, mode, defaultTime))
 	const [visibleMonth, setVisibleMonth] = useState(() => startOfMonth(parseDisplayBaseDate(effectiveValue, mode) || new Date()))
 
 	useEffect(() => {
 		const nextValue = normalizeValue(value, mode) || (allowEmpty ? '' : fallbackValue)
 		setDraft(formatDisplayValue(nextValue, mode))
-		setTimeValue(extractTimeValue(nextValue, mode))
+		setTimeValue(extractTimeValue(nextValue, mode, defaultTime))
 		setVisibleMonth(startOfMonth(parseDisplayBaseDate(nextValue, mode) || new Date()))
 		focusRestoreValueRef.current = formatDisplayValue(nextValue, mode)
 		editedSinceFocusRef.current = false
-	}, [allowEmpty, fallbackValue, mode, value])
+	}, [allowEmpty, defaultTime, fallbackValue, mode, value])
 
 	useEffect(() => {
 		if (!open) {
@@ -89,14 +91,14 @@ export default function CompactDatePicker({
 			document.removeEventListener('pointerdown', handlePointerDown, true)
 			document.removeEventListener('pointerup', handlePointerUp, true)
 		}
-	}, [open, draft, effectiveValue, mode, timeValue])
+	}, [open, draft, effectiveValue, mode, timeValue, defaultTime])
 
 	const calendarDays = useMemo(() => buildCalendarDays(visibleMonth), [visibleMonth])
 
 	function commitDraft() {
 		if (!editedSinceFocusRef.current && !`${draft}`.trim()) {
 			setDraft(focusRestoreValueRef.current)
-			setTimeValue(extractTimeValue(normalizeValue(value, mode) || (allowEmpty ? '' : fallbackValue), mode))
+			setTimeValue(extractTimeValue(normalizeValue(value, mode) || (allowEmpty ? '' : fallbackValue), mode, defaultTime))
 			return
 		}
 
@@ -106,17 +108,17 @@ export default function CompactDatePicker({
 			return
 		}
 
-		const parsed = parseDisplayValue(draft, mode, timeValue)
+		const parsed = parseDisplayValue(draft, mode, timeValue || defaultTime)
 		if (parsed) {
 			onChange(parsed)
 			setDraft(formatDisplayValue(parsed, mode))
-			setTimeValue(extractTimeValue(parsed, mode))
+			setTimeValue(extractTimeValue(parsed, mode, defaultTime))
 			setVisibleMonth(startOfMonth(parseDisplayBaseDate(parsed, mode) || new Date()))
 			return
 		}
 
 		setDraft(formatDisplayValue(effectiveValue, mode))
-		setTimeValue(extractTimeValue(effectiveValue, mode))
+		setTimeValue(extractTimeValue(effectiveValue, mode, defaultTime))
 	}
 
 	return (
@@ -317,7 +319,7 @@ export default function CompactDatePicker({
 									type="button"
 									onClick={() => {
 										const nextValue = mode === 'datetime'
-											? `${day.value}T${timeValue || '12:00'}`
+											? `${day.value}T${timeValue || defaultTime}`
 											: day.value
 										onChange(nextValue)
 										setDraft(formatDisplayValue(nextValue, mode))
@@ -337,7 +339,7 @@ export default function CompactDatePicker({
 								type="time"
 								value={timeValue}
 								onChange={event => {
-									const nextTimeValue = event.currentTarget.value || '12:00'
+									const nextTimeValue = event.currentTarget.value || defaultTime
 									setTimeValue(nextTimeValue)
 									const dateValue = extractDateValue(effectiveValue || fallbackValue, mode) || toDateValue(new Date())
 									const nextValue = `${dateValue}T${nextTimeValue}`
@@ -645,13 +647,13 @@ function extractDateValue(value: string, mode: 'date' | 'datetime') {
 	return normalizeDateValue(value)
 }
 
-function extractTimeValue(value: string, mode: 'date' | 'datetime') {
+function extractTimeValue(value: string, mode: 'date' | 'datetime', defaultTime: string) {
 	if (mode !== 'datetime') {
 		return ''
 	}
 
 	const normalized = normalizeDateTimeValue(value)
-	return normalized ? normalized.split('T')[1] || '12:00' : '12:00'
+	return normalized ? normalized.split('T')[1] || defaultTime : defaultTime
 }
 
 function parseDisplayBaseDate(value: string, mode: 'date' | 'datetime') {

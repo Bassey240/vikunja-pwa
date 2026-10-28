@@ -10,6 +10,15 @@ touch-friendly interface with real project and task trees, a calendar, and
 offline editing. It runs its own small backend in front of Vikunja, which holds
 your login server-side, so your Vikunja token never reaches the browser.
 
+## Release 0.7.15
+
+This release adds automatic API v2 support with compatibility for older servers,
+multiple-task creation, audio/video attachments, task-link previews, default due
+times, pending email changes, Planka imports and MCP connection settings.
+Supported servers also offer licensed time tracking, live updates and API-backed
+user administration. See the [release notes](docs/release-notes-0.7.md) for
+requirements and verification limits.
+
 ## Features
 
 ### Views
@@ -31,6 +40,9 @@ your login server-side, so your Vikunja token never reaches the browser.
 - Search across every project, from any screen.
 - Project backgrounds: upload your own, pick from Unsplash, or remove.
 - Drag to reorder or re-parent both tasks and projects.
+- Create multiple tasks at once, preview task links, and play audio/video attachments.
+- Set a default due time and filter tasks due tomorrow.
+- Track time with timers and manual entries when your server enables licensed time tracking.
 
 ### Offline
 
@@ -57,15 +69,16 @@ your login server-side, so your Vikunja token never reaches the browser.
 ### Integrations
 
 - Webhooks for a user or a project, with event selection and an optional secret.
-- Migration imports from Todoist, Trello, Microsoft To Do, TickTick, WeKan, CSV and Vikunja exports, with a guided analyse, map and preview flow for CSV.
-- Background refresh, so changes made elsewhere appear without a manual reload.
+- Migration imports from Todoist, Trello, Microsoft To Do, TickTick, WeKan, Planka, CSV and Vikunja exports, according to server support, with a guided analyse, map and preview flow for CSV.
+- MCP connection settings on supported Vikunja 2.7 servers.
+- Live notification and timer updates for supported sessions, plus background polling.
 
 ### Administration (optional)
 
 - Create, edit, enable, disable, reset the password for, and delete users.
 - SMTP settings with delivery diagnostics.
 - Configure migration providers, including the redirect URLs they need.
-- Requires an operator allowlist and a bridge to your own Vikunja container. Without it, the rest of the app works normally.
+- Supported servers allow instance administrators to manage users through Vikunja's admin API. Host configuration, user renaming and the legacy administration path require an operator allowlist and CLI bridge. Without the bridge, the rest of the app works normally.
 
 Release history lives in [CHANGELOG.md](CHANGELOG.md).
 
@@ -109,7 +122,7 @@ All screenshots are from the `0.5` flat-design release.
 
 ## Prerequisites
 
-- Node.js >= 20.0.0
+- Node.js >= 20.19.0 (Node 22 or newer for live updates)
 - npm
 - Optional: Docker / Docker Compose for the included container deployment example
 - A reachable Vikunja instance
@@ -374,8 +387,8 @@ kept outside this public repo.
 - API token mode is also available. The token is submitted to the backend and kept out of browser storage.
 - Account sessions are stored server-side in an encrypted local file, so ordinary backend restarts keep interactive sessions.
 - To keep remembered Vikunja sessions valid across upstream restarts, the Vikunja deployment needs a fixed `service.JWTSecret` / `VIKUNJA_SERVICE_JWTSECRET`.
-- Admin user lifecycle actions and bridge-only administration operations run through a backend-only Vikunja CLI bridge; the browser never gets Docker or CLI access.
-- Administration exposes operator-gated lifecycle operations plus SMTP and migration-provider config. Instance-level user roles and global permissions are not exposed by the Vikunja CLI bridge.
+- User administration uses Vikunja's admin API for instance-admin accounts on supported servers, with the optional CLI bridge providing the legacy path and host-side operations. The browser never gets Docker or CLI access.
+- SMTP and migration-provider configuration remain operator-gated bridge operations. Supported instance admins can grant or remove instance-admin status through Vikunja's API.
 - Deployment-level SMTP/admin config is only written to an explicit host config path. The running Vikunja container filesystem is never treated as the source of truth.
 - Shared project links authenticate into a dedicated public/shared shell instead of the normal signed-in app shell.
 - The app can also run directly over HTTPS with local certs for secure mobile PWA testing, including iPhone installed-app notification checks.
@@ -454,8 +467,8 @@ Not supported:
 - Vikunja supports labels on tasks, but not project labels through the API routes used here.
 - Offline covers cached reopen and queued task/project edits. Attachments, sharing changes, admin config, and security-admin actions need a live connection.
 - Notification setup and test alerts work on supported desktop browsers and installed HTTPS iPhone web apps, and notification preferences are stored per category. Event-driven push delivery is not built yet.
-- Administration is limited to user lifecycle: create, edit identity, enable/disable, reset password, and delete. The CLI bridge does not expose instance-user role editing.
-- Administration also requires an operator email allowlist set in the deployment environment. Without it, the rest of the app still works.
+- Instance user administration requires a supported server and instance-admin account, or the optional operator-authorized CLI bridge. Host configuration and user renaming still require the bridge.
+- Time tracking requires the server's licensed feature and API v2. Without it, the controls remain hidden.
 - Todoist, Trello, and Microsoft To Do imports only return to this app if the redirect URL is updated in both Vikunja and the provider's developer app. Otherwise the import finishes in the stock Vikunja frontend.
 
 ## Testing

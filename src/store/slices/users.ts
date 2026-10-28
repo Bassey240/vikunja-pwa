@@ -2,6 +2,7 @@ import {api, type ApiError, uploadApi} from '@/api'
 import type {
 	AdminMailDiagnosticsResult,
 	AdminMigration,
+	AdminOverview,
 	AdminRepairResult,
 	AdminRuntimeHealth,
 	AdminUser,
@@ -14,6 +15,7 @@ import type {
 	UserFrontendSettings,
 } from '@/types'
 import {serializeNotificationPreferences} from '@/utils/notificationPreferences'
+import {describeAvatarUploadFailure, getUnsupportedAvatarFileMessage} from '@/utils/avatar-upload'
 import {formatError} from '@/utils/formatting'
 import type {StateCreator} from 'zustand'
 import type {AppStore} from '../index'
@@ -61,6 +63,8 @@ export interface UsersSlice {
 	adminUsersLoading: boolean
 	adminUsersLoadBackoff: LoadBackoffState
 	adminUserSubmitting: boolean
+	adminOverview: AdminOverview | null
+	adminOverviewLoading: boolean
 	adminRuntimeHealth: AdminRuntimeHealth | null
 	adminRuntimeHealthLoading: boolean
 	adminMigrations: AdminMigration[]
@@ -110,6 +114,8 @@ export interface UsersSlice {
 	createAdminUser: (payload: {username: string; email: string; password: string}) => Promise<boolean>
 	updateAdminUser: (identifier: number | string, payload: {username: string; email: string}) => Promise<boolean>
 	setAdminUserEnabled: (identifier: number | string, enabled: boolean) => Promise<boolean>
+	setAdminUserRole: (identifier: number | string, isAdmin: boolean) => Promise<boolean>
+	loadAdminOverview: () => Promise<void>
 	resetAdminUserPassword: (identifier: number | string, password: string) => Promise<boolean>
 	deleteAdminUser: (identifier: number | string) => Promise<boolean>
 	saveCollaborationSettings: (payload: CollaborationSettingsPatch) => Promise<boolean>
@@ -126,6 +132,8 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 	adminUsersLoading: false,
 	adminUsersLoadBackoff: initialLoadBackoff,
 	adminUserSubmitting: false,
+	adminOverview: null,
+	adminOverviewLoading: false,
 	adminRuntimeHealth: null,
 	adminRuntimeHealthLoading: false,
 	adminMigrations: [],
@@ -788,6 +796,47 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 		}
 	},
 
+	async setAdminUserRole(identifier, isAdmin) {
+		if (!canManageUsers(get())) {
+			return false
+		}
+
+		set({adminUserSubmitting: true, error: null, settingsNotice: null})
+
+		try {
+			await api<AdminUserPayload, {isAdmin: boolean}>(`/api/admin/users/${encodeURIComponent(String(identifier))}/admin`, {
+				method: 'PATCH',
+				body: {isAdmin},
+			})
+			await get().loadAdminUsers({force: true})
+			set({settingsNotice: isAdmin ? 'User promoted to instance admin.' : 'Instance-admin rights removed.'})
+			return true
+		} catch (error) {
+			set({error: formatError(error as Error)})
+			return false
+		} finally {
+			set({adminUserSubmitting: false})
+		}
+	},
+
+	async loadAdminOverview() {
+		// Instance statistics come from Vikunja's own admin API, which only
+		// instance admins can reach; bridge-only operators simply see no card.
+		if (!get().account?.isServerAdmin || get().adminOverviewLoading) {
+			return
+		}
+
+		set({adminOverviewLoading: true})
+
+		try {
+			set({adminOverview: await api<AdminOverview>('/api/admin/overview')})
+		} catch {
+			set({adminOverview: null})
+		} finally {
+			set({adminOverviewLoading: false})
+		}
+	},
+
 	async resetAdminUserPassword(identifier, password) {
 		if (!canManageUsers(get())) {
 			return false
@@ -1008,6 +1057,12 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 			return false
 		}
 
+		const unsupportedMessage = getUnsupportedAvatarFileMessage(file)
+		if (unsupportedMessage) {
+			set({error: unsupportedMessage})
+			return false
+		}
+
 		const formData = new FormData()
 		formData.append('avatar', file)
 
@@ -1027,7 +1082,10 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 			})
 			return true
 		} catch (error) {
-			set({error: formatError(error as Error)})
+			set({error: describeAvatarUploadFailure({
+				statusCode: (error as ApiError).statusCode ?? null,
+				message: formatError(error as Error),
+			})})
 			return false
 		} finally {
 			set({avatarUploadSubmitting: false})
@@ -1041,6 +1099,8 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 			adminUsersLoading: false,
 			adminUsersLoadBackoff: initialLoadBackoff,
 			adminUserSubmitting: false,
+			adminOverview: null,
+			adminOverviewLoading: false,
 			adminRuntimeHealth: null,
 			adminRuntimeHealthLoading: false,
 			adminMigrations: [],
@@ -1079,8 +1139,8 @@ export const createUsersSlice: StateCreator<AppStore, [], [], UsersSlice> = (set
 function canManageUsers(state: AppStore) {
 	return Boolean(
 		state.connected &&
-		state.account?.canUseAdminBridge &&
-		state.account?.authMode === 'password',
+		state.account?.authMode === 'password' &&
+		(state.account?.canManageUsers ?? state.account?.canUseAdminBridge),
 	)
 }
 

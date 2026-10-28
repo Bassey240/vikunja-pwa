@@ -12,6 +12,7 @@ import {createSharingSlice, type SharingSlice} from './slices/sharing'
 import {createSubscriptionsSlice, type SubscriptionsSlice} from './slices/subscriptions'
 import {createTasksSlice, type TasksSlice} from './slices/tasks'
 import {createTeamsSlice, type TeamsSlice} from './slices/teams'
+import {createTimeTrackingSlice, type TimeTrackingSlice} from './slices/time-tracking'
 import {createUiSlice, type UiSlice} from './slices/ui'
 import {createUsersSlice, type UsersSlice} from './slices/users'
 import {createViewsSlice, type ViewsSlice} from './slices/views'
@@ -35,6 +36,7 @@ export type AppStore =
 	& TasksSlice
 	& CalendarSlice
 	& UsersSlice
+	& TimeTrackingSlice
 
 export const useAppStore = create<AppStore>()((...args) => ({
 	...createUiSlice(...args),
@@ -54,4 +56,5 @@ export const useAppStore = create<AppStore>()((...args) => ({
 	...createProjectsSlice(...args),
 	...createTasksSlice(...args),
 	...createCalendarSlice(...args),
+	...createTimeTrackingSlice(...args),
 }))

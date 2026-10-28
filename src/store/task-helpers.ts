@@ -14,6 +14,7 @@ import type {
 } from '@/types'
 import {cloneRelatedTasksMap} from '@/utils/taskRelations'
 import {calculateTaskPosition} from '@/utils/taskPosition'
+import {withDefaultDueTime} from '@/utils/date-helpers'
 import type {AppStore} from './index'
 import {persistOfflineBrowseSnapshot} from './offline-browse-cache'
 import {compareByPositionThenId} from './project-helpers'
@@ -186,7 +187,8 @@ export function buildTaskProjectMovePayload(task: Task, projectId: number) {
 		percent_done: Number(task.percent_done || 0),
 		reminders: Array.isArray(task.reminders) ? task.reminders : [],
 		repeat_after: task.repeat_after ?? null,
-		repeat_from_current_date: Boolean(task.repeat_from_current_date),
+		repeat_mode: task.repeat_mode ?? 0,
+		repeat_from_current_date: Boolean(task.repeat_from_current_date ?? (task.repeat_mode === 2)),
 		project_id: projectId,
 	}
 }
@@ -1373,10 +1375,8 @@ export function shouldDefaultComposeToToday(state: AppStore, parentTaskId: numbe
 	return !parentTaskId && state.screen === 'today'
 }
 
-export function getTodayDueDateIso() {
-	const now = new Date()
-	now.setHours(12, 0, 0, 0)
-	return now.toISOString()
+export function getTodayDueDateIso(defaultDueTime?: string) {
+	return withDefaultDueTime(new Date(), defaultDueTime).toISOString()
 }
 
 export function getTaskPositionSnapshot(taskList: Task[]) {

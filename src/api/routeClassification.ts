@@ -33,9 +33,9 @@ export function classifyRoute(path: string): RouteCategory {
 	return 'proxy'
 }
 
-export function mapToVikunjaPath(path: string): string {
+export function mapToVikunjaPath(path: string, apiVersion: 'v1' | 'v2' = 'v1'): string {
 	if (!path.startsWith('/api/')) {
 		return path
 	}
-	return `/api/v1/${path.slice('/api/'.length)}`
+	return `/api/${apiVersion}/${path.slice('/api/'.length)}`
 }

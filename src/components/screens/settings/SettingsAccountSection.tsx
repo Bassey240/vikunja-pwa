@@ -1,6 +1,7 @@
 import {type ChangeEvent, type FormEvent, useState} from 'react'
 import UserAvatar from '@/components/common/UserAvatar'
 import type {Account, AccountForm, AvatarProvider, Session} from '@/types'
+import {AVATAR_UPLOAD_ACCEPT} from '@/utils/avatar-upload'
 import {formatSessionTimestamp, normalizeVikunjaDateValue} from '@/utils/formatting'
 import type {SettingsSectionId} from '@/utils/settings-helpers'
 import SettingsSection from './SettingsSection'
@@ -59,6 +60,9 @@ export default function SettingsAccountSection({
 	onPasswordChange,
 	onSetChangeEmailField,
 	onChangeEmail,
+	onResendEmailConfirmation,
+	onCancelEmailChange,
+	onRefreshEmailStatus,
 	onRequestExport,
 	onDownloadExport,
 	onSetAccountDeletionField,
@@ -122,6 +126,9 @@ export default function SettingsAccountSection({
 	onPasswordChange: (event: FormEvent<HTMLFormElement>) => void
 	onSetChangeEmailField: (field: 'password' | 'newEmail', value: string) => void
 	onChangeEmail: () => void
+	onResendEmailConfirmation: () => void
+	onCancelEmailChange: () => void
+	onRefreshEmailStatus: () => void
 	onRequestExport: (password: string) => void
 	onDownloadExport: (password: string) => void
 	onSetAccountDeletionField: (field: 'password' | 'confirmText', value: string) => void
@@ -246,7 +253,7 @@ export default function SettingsAccountSection({
 								className="detail-attachment-input"
 								data-avatar-upload-input
 								type="file"
-								accept="image/*"
+								accept={AVATAR_UPLOAD_ACCEPT}
 								onChange={handleAvatarUploadChange}
 							/>
 							<button
@@ -474,7 +481,20 @@ export default function SettingsAccountSection({
 				{canChangePassword ? (
 					<div className="detail-core-card settings-subsection">
 						<div className="panel-label">Change email address</div>
-						<div className="empty-state compact">Vikunja will send a confirmation email to the new address.</div>
+						<div className="detail-label">Current email</div>
+						<div data-current-email>{account?.user?.email}</div>
+						{account?.user?.pending_email ? (
+							<div className="settings-subsection" data-pending-email>
+								<div className="detail-label">Pending email</div>
+								<div>{account.user.pending_email}</div>
+								<div className="empty-state compact">Your current address stays active until you confirm the new address.</div>
+								<div className="settings-action-row">
+									<button className="pill-button subtle" type="button" disabled={changeEmailSubmitting} onClick={onResendEmailConfirmation}>Resend confirmation</button>
+									<button className="pill-button subtle" type="button" disabled={changeEmailSubmitting} onClick={onCancelEmailChange}>Cancel change</button>
+									<button className="pill-button subtle" type="button" disabled={changeEmailSubmitting} onClick={onRefreshEmailStatus}>Refresh status</button>
+								</div>
+							</div>
+						) : null}
 						{changeEmailNotice ? (
 							<div className="status-card success" data-change-email-notice>
 								{changeEmailNotice}

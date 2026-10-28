@@ -85,6 +85,8 @@ export default function SettingsScreen() {
 	const newApiToken = useAppStore(state => state.newApiToken)
 	const availableRoutes = useAppStore(state => state.availableRoutes)
 	const availableRoutesLoaded = useAppStore(state => state.availableRoutesLoaded)
+	const mcpInfo = useAppStore(state => state.mcpInfo)
+	const mcpInfoLoading = useAppStore(state => state.mcpInfoLoading)
 	const collaborationSettingsSubmitting = useAppStore(state => state.collaborationSettingsSubmitting)
 	const userWebhooks = useAppStore(state => state.userWebhooks)
 	const userWebhooksLoaded = useAppStore(state => state.userWebhooksLoaded)
@@ -94,6 +96,7 @@ export default function SettingsScreen() {
 	const webhookSubmitting = useAppStore(state => state.webhookSubmitting)
 	const migrationStatus = useAppStore(state => state.migrationStatus)
 	const migrationMessages = useAppStore(state => state.migrationMessages)
+	const migrationDetails = useAppStore(state => state.migrationDetails)
 	const migrationLoadingServices = useAppStore(state => state.migrationLoadingServices)
 	const migrationSubmittingServices = useAppStore(state => state.migrationSubmittingServices)
 	const adminUsers = useAppStore(state => state.adminUsers)
@@ -142,8 +145,12 @@ export default function SettingsScreen() {
 	const loadAccountSessions = useAppStore(state => state.loadAccountSessions)
 	const loadTimezoneOptions = useAppStore(state => state.loadTimezoneOptions)
 	const updateTimezone = useAppStore(state => state.updateTimezone)
+	const updateDefaultDueTime = useAppStore(state => state.updateDefaultDueTime)
 	const changePassword = useAppStore(state => state.changePassword)
 	const changeEmail = useAppStore(state => state.changeEmail)
+	const resendEmailConfirmation = useAppStore(state => state.resendEmailConfirmation)
+	const cancelEmailChange = useAppStore(state => state.cancelEmailChange)
+	const refreshEmailStatus = useAppStore(state => state.refreshEmailStatus)
 	const checkDataExportStatus = useAppStore(state => state.checkDataExportStatus)
 	const requestDataExport = useAppStore(state => state.requestDataExport)
 	const downloadDataExport = useAppStore(state => state.downloadDataExport)
@@ -177,6 +184,9 @@ export default function SettingsScreen() {
 	const createAdminUser = useAppStore(state => state.createAdminUser)
 	const updateAdminUser = useAppStore(state => state.updateAdminUser)
 	const setAdminUserEnabled = useAppStore(state => state.setAdminUserEnabled)
+	const setAdminUserRole = useAppStore(state => state.setAdminUserRole)
+	const loadAdminOverview = useAppStore(state => state.loadAdminOverview)
+	const adminOverview = useAppStore(state => state.adminOverview)
 	const resetAdminUserPassword = useAppStore(state => state.resetAdminUserPassword)
 	const deleteAdminUser = useAppStore(state => state.deleteAdminUser)
 	const saveCollaborationSettings = useAppStore(state => state.saveCollaborationSettings)
@@ -188,6 +198,7 @@ export default function SettingsScreen() {
 	const loadMigrationStatus = useAppStore(state => state.loadMigrationStatus)
 	const getMigrationAuthUrl = useAppStore(state => state.getMigrationAuthUrl)
 	const uploadFileMigration = useAppStore(state => state.uploadFileMigration)
+	const importPlanka = useAppStore(state => state.importPlanka)
 	const notificationPreferencesSubmitting = useAppStore(state => state.notificationPreferencesSubmitting)
 	const avatarProvider = useAppStore(state => state.avatarProvider)
 	const avatarProviderLoaded = useAppStore(state => state.avatarProviderLoaded)
@@ -208,6 +219,7 @@ export default function SettingsScreen() {
 	const deleteCaldavToken = useAppStore(state => state.deleteCaldavToken)
 	const loadApiTokens = useAppStore(state => state.loadApiTokens)
 	const loadAvailableRoutes = useAppStore(state => state.loadAvailableRoutes)
+	const loadMcpInfo = useAppStore(state => state.loadMcpInfo)
 	const createApiToken = useAppStore(state => state.createApiToken)
 	const clearNewApiToken = useAppStore(state => state.clearNewApiToken)
 	const deleteApiToken = useAppStore(state => state.deleteApiToken)
@@ -224,6 +236,7 @@ export default function SettingsScreen() {
 		offline: false,
 		notifications: false,
 		security: false,
+		mcp: false,
 		webhooks: false,
 		migration: false,
 		collaboration: false,
@@ -234,7 +247,10 @@ export default function SettingsScreen() {
 		reminders: false,
 	})
 
-	const canManageUsers = Boolean(account?.authMode === 'password' && account?.canUseAdminBridge)
+	const canManageUsers = Boolean(
+		account?.authMode === 'password' && (account?.canManageUsers ?? account?.canUseAdminBridge),
+	)
+	const isServerAdmin = Boolean(account?.isServerAdmin)
 	const adminBridgeConfigured = Boolean(serverConfig?.features?.adminBridgeMode)
 	const adminBridgeReady = Boolean(
 		adminRuntimeHealth?.dockerReachable &&
@@ -248,6 +264,10 @@ export default function SettingsScreen() {
 			!adminRuntimeHealth.vikunjaCliReachable ? 'CLI' : null,
 		].filter((value): value is string => Boolean(value))
 		: []
+
+	useEffect(() => {
+		if (connected && openSections.account) void refreshEmailStatus()
+	}, [connected, openSections.account, refreshEmailStatus])
 
 	useEffect(() => {
 		if (connected && account?.sessionsSupported && !accountSessionsLoaded && !accountSessionsLoading) {
@@ -291,13 +311,25 @@ export default function SettingsScreen() {
 		openSections.userAdministration,
 	])
 
+	// An instance admin reaches the user list over Vikunja's own API, so the
+	// CLI bridge only has to be ready when it is the only route available.
+	const canListUsers = canManageUsers && (isServerAdmin || adminBridgeReady)
+
 	useEffect(() => {
-		if (!canManageUsers || !adminBridgeReady || adminUsersLoaded || adminUsersLoading) {
+		if (!canListUsers || adminUsersLoaded || adminUsersLoading) {
 			return
 		}
 
 		void loadAdminUsers()
-	}, [adminBridgeReady, adminUsersLoaded, adminUsersLoading, canManageUsers, loadAdminUsers])
+	}, [adminUsersLoaded, adminUsersLoading, canListUsers, loadAdminUsers])
+
+	useEffect(() => {
+		if (!isServerAdmin || !openSections.userAdministration) {
+			return
+		}
+
+		void loadAdminOverview()
+	}, [isServerAdmin, loadAdminOverview, openSections.userAdministration])
 
 	useEffect(() => {
 		const params = new URLSearchParams(location.search)
@@ -305,7 +337,7 @@ export default function SettingsScreen() {
 		if (!requestedSection) {
 			return
 		}
-		if (!['offline', 'migration', 'webhooks', 'security', 'account', 'preferences', 'notifications', 'collaboration', 'teams', 'appData', 'userAdministration', 'app-lock', 'reminders'].includes(requestedSection)) {
+		if (!['offline', 'migration', 'webhooks', 'security', 'mcp', 'account', 'preferences', 'notifications', 'collaboration', 'teams', 'appData', 'userAdministration', 'app-lock', 'reminders'].includes(requestedSection)) {
 			return
 		}
 
@@ -350,6 +382,7 @@ export default function SettingsScreen() {
 			offline: false,
 			notifications: false,
 			security: false,
+			mcp: false,
 			webhooks: false,
 			migration: false,
 			collaboration: false,
@@ -491,6 +524,9 @@ export default function SettingsScreen() {
 							onChangeEmail={() => {
 								void changeEmail()
 							}}
+							onResendEmailConfirmation={() => { void resendEmailConfirmation() }}
+							onCancelEmailChange={() => { void cancelEmailChange() }}
+							onRefreshEmailStatus={() => { void refreshEmailStatus() }}
 							onRequestExport={password => {
 								void requestDataExport(password)
 							}}
@@ -519,6 +555,9 @@ export default function SettingsScreen() {
 								open={openSections.preferences}
 								onToggle={toggleSection}
 								accountAuthMode={account?.authMode}
+								defaultDueTime={account.user?.settings?.frontend_settings?.default_due_time || ''}
+								settingsSubmitting={settingsSubmitting}
+								onSaveDefaultDueTime={time => { void updateDefaultDueTime(time) }}
 								theme={theme}
 								onSetTheme={setTheme}
 								defaultDesktopViewKind={defaultDesktopViewKind}
@@ -591,9 +630,11 @@ export default function SettingsScreen() {
 								onSubmit={saveNotificationPreferences}
 							/>
 						) : null}
-						{account && getPlatform().capabilities.showPwaOnlySections ? (
+						{account ? (
 							<SettingsSecuritySection
 								open={openSections.security}
+								mcpOpen={openSections.mcp}
+								showGatewaySecurity={getPlatform().capabilities.showPwaOnlySections}
 								onToggle={toggleSection}
 								currentBaseUrl={account.baseUrl || ''}
 								currentUsername={`${account.user?.username || ''}`}
@@ -622,6 +663,9 @@ export default function SettingsScreen() {
 								newApiToken={newApiToken}
 								availableRoutes={availableRoutes}
 								availableRoutesLoaded={availableRoutesLoaded}
+								mcpInfo={mcpInfo}
+								mcpInfoLoading={mcpInfoLoading}
+								onLoadMcpInfo={loadMcpInfo}
 								onLoadApiTokens={loadApiTokens}
 								onLoadAvailableRoutes={loadAvailableRoutes}
 								onCreateApiToken={createApiToken}
@@ -650,9 +694,10 @@ export default function SettingsScreen() {
 								onDeleteUserWebhook={deleteUserWebhook}
 							/>
 						) : null}
-						{account && getPlatform().capabilities.showPwaOnlySections ? (
+						{account ? (
 							<SettingsMigrationSection
 								open={openSections.migration}
+								nativeOnly={!getPlatform().capabilities.showPwaOnlySections}
 								onToggle={toggleSection}
 								availableMigrationServices={availableMigrationServices}
 								migrationAvailabilityResolved={migrationAvailabilityResolved}
@@ -661,13 +706,13 @@ export default function SettingsScreen() {
 								canManageUsers={canManageUsers}
 								migrationStatus={migrationStatus}
 								migrationMessages={migrationMessages}
+								migrationDetails={migrationDetails}
 								migrationLoadingServices={migrationLoadingServices}
 								migrationSubmittingServices={migrationSubmittingServices}
-								onLoadMigrationStatus={service => {
-									void loadMigrationStatus(service)
-								}}
+								onLoadMigrationStatus={loadMigrationStatus}
 								onGetMigrationAuthUrl={getMigrationAuthUrl}
 								onUploadFileMigration={uploadFileMigration}
+								onImportPlanka={importPlanka}
 								onOpenCsvImporter={() => {
 									navigate('/migrate/csv')
 								}}
@@ -693,8 +738,12 @@ export default function SettingsScreen() {
 								onToggle={toggleSection}
 								accountUser={account.user}
 								accountCanUseAdminBridge={Boolean(account.canUseAdminBridge)}
+								accountIsServerAdmin={isServerAdmin}
 								adminBridgeConfigured={adminBridgeConfigured}
 								canManageUsers={canManageUsers}
+								canListUsers={canListUsers}
+								adminOverview={adminOverview}
+								onSetAdminUserRole={setAdminUserRole}
 								adminUsers={adminUsers}
 								adminUsersLoading={adminUsersLoading}
 								adminUsersLoaded={adminUsersLoaded}
@@ -805,6 +854,7 @@ function normalizeMigrationService(value: unknown): MigrationService | '' {
 		case 'todoist':
 		case 'trello':
 		case 'microsoft-todo':
+		case 'planka':
 		case 'ticktick':
 		case 'wekan':
 		case 'csv':

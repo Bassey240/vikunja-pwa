@@ -1,10 +1,13 @@
 import {api} from '@/api'
 import AttachmentDownloadLink from '@/components/common/AttachmentDownloadLink'
+import AttachmentMediaPlayer from '@/components/common/AttachmentMediaPlayer'
 import AuthedImage from '@/components/common/AuthedImage'
 import DetailSheet from '@/components/common/DetailSheet'
+import RichTextView from '@/components/common/RichTextView'
 import {defaultTaskFilters, taskMatchesProjectFilters} from '@/hooks/useFilters'
 import useWideLayout from '@/hooks/useWideLayout'
 import TaskDetailAttachments from './detail/TaskDetailAttachments'
+import TaskDetailTimeTracking from './detail/TaskDetailTimeTracking'
 import CollapsibleSection from './detail/CollapsibleSection'
 import TaskDetailComments from './detail/TaskDetailComments'
 import MetadataRow from './detail/MetadataRow'
@@ -15,11 +18,13 @@ import TaskDetailRelated from './detail/TaskDetailRelated'
 import TaskDetailReminders from './detail/TaskDetailReminders'
 import {findTaskInAnyContext, getSubtasksFor, getTaskCollectionForTask} from '@/store/selectors'
 import {useAppStore} from '@/store'
+import {isTimeTrackingAvailable} from '@/store/slices/time-tracking'
 import type {Task, TaskAssignee, TaskAttachment, TaskComment, TaskRelationKind, TaskRelationRef, TaskReminder} from '@/types'
 import {
 	formatOptionalLongDate,
 	formatRepeatSummary,
 	getUserDisplayName,
+	isVideoAttachment,
 	normalizePercentDone,
 	normalizeRepeatAfter,
 	normalizeTaskDateValue,
@@ -44,6 +49,7 @@ const CLOSED_TASK_DETAIL_SECTIONS: Record<TaskDetailSection, boolean> = {
 	related: false,
 	comments: false,
 	attachments: false,
+	timeTracking: false,
 	description: false,
 	info: false,
 }
@@ -86,6 +92,16 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 	const updateTaskComment = useAppStore(state => state.updateTaskComment)
 	const deleteTaskComment = useAppStore(state => state.deleteTaskComment)
 	const loadReactions = useAppStore(state => state.loadReactions)
+	const timeTrackingAvailable = useAppStore(isTimeTrackingAvailable)
+	const timeEntriesByTask = useAppStore(state => state.timeEntriesByTask)
+	const timeEntriesLoadingTaskId = useAppStore(state => state.timeEntriesLoadingTaskId)
+	const runningTimeEntry = useAppStore(state => state.runningTimeEntry)
+	const timeTrackingMutating = useAppStore(state => state.timeTrackingMutating)
+	const startTaskTimer = useAppStore(state => state.startTaskTimer)
+	const stopRunningTimer = useAppStore(state => state.stopRunningTimer)
+	const createTaskTimeEntry = useAppStore(state => state.createTaskTimeEntry)
+	const updateTimeEntry = useAppStore(state => state.updateTimeEntry)
+	const deleteTimeEntry = useAppStore(state => state.deleteTimeEntry)
 	const addReaction = useAppStore(state => state.addReaction)
 	const removeReaction = useAppStore(state => state.removeReaction)
 	const addLabelToTask = useAppStore(state => state.addLabelToTask)
@@ -95,6 +111,9 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 	const openFocusedTask = useAppStore(state => state.openFocusedTask)
 	const [title, setTitle] = useState('')
 	const [description, setDescription] = useState('')
+	// Vikunja stores descriptions as HTML; show it rendered and reveal the raw
+	// editor on demand so editing still round-trips exactly what the server has.
+	const [editingDescription, setEditingDescription] = useState(false)
 	const [percentDone, setPercentDone] = useState(0)
 	const [repeatEveryValue, setRepeatEveryValue] = useState('1')
 	const [repeatEveryUnit, setRepeatEveryUnit] = useState<RepeatUnit>('days')
@@ -116,6 +135,8 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 	const percentDoneSaveTimeoutRef = useRef<number | null>(null)
 	const attachmentInputRef = useRef<HTMLInputElement | null>(null)
 
+	const taskRepeatsFromCurrentDate = Boolean(taskDetail?.repeat_from_current_date ?? (taskDetail?.repeat_mode === 2))
+
 	useEffect(() => {
 		setTitle(taskDetail?.title || '')
 		setDescription(taskDetail?.description || '')
@@ -123,7 +144,7 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 		const repeatEditorState = getRepeatEditorState(taskDetail?.repeat_after)
 		setRepeatEveryValue(repeatEditorState.value)
 		setRepeatEveryUnit(repeatEditorState.unit)
-		setRepeatFromCurrentDate(Boolean(taskDetail?.repeat_from_current_date))
+		setRepeatFromCurrentDate(taskRepeatsFromCurrentDate)
 		setReminders(normalizeTaskReminders(taskDetail?.reminders))
 		if (percentDoneSaveTimeoutRef.current !== null) {
 			window.clearTimeout(percentDoneSaveTimeoutRef.current)
@@ -135,7 +156,7 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 		taskDetail?.percent_done,
 		taskDetail?.reminders,
 		taskDetail?.repeat_after,
-		taskDetail?.repeat_from_current_date,
+		taskRepeatsFromCurrentDate,
 		taskDetail?.title,
 	])
 
@@ -263,7 +284,7 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 		.sort((a, b) => `${a.title}`.localeCompare(`${b.title}`))
 	const dueDateValue = normalizeTaskDateValue(taskDetail?.due_date || null)
 	const repeatAfterValue = normalizeRepeatAfter(taskDetail?.repeat_after)
-	const repeatSummary = formatRepeatSummary(taskDetail?.repeat_after, taskDetail?.repeat_from_current_date)
+	const repeatSummary = formatRepeatSummary(taskDetail?.repeat_after, taskRepeatsFromCurrentDate)
 	const quickReminderOptions = useMemo(() => buildQuickReminderOptions(new Date()), [taskDetail?.id])
 	const taskSubscriptionKey = taskDetail ? `task:${taskDetail.id}` : ''
 	const taskSubscribed = taskSubscriptionKey ? (subscriptionsByEntity[taskSubscriptionKey] ?? null) : null
@@ -440,7 +461,7 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 			const repeatEditorState = getRepeatEditorState(taskDetail?.repeat_after)
 			setRepeatEveryValue(repeatEditorState.value)
 			setRepeatEveryUnit(repeatEditorState.unit)
-			setRepeatFromCurrentDate(Boolean(taskDetail?.repeat_from_current_date))
+			setRepeatFromCurrentDate(taskRepeatsFromCurrentDate)
 		}
 	}
 
@@ -457,7 +478,7 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 			const repeatEditorState = getRepeatEditorState(taskDetail?.repeat_after)
 			setRepeatEveryValue(repeatEditorState.value)
 			setRepeatEveryUnit(repeatEditorState.unit)
-			setRepeatFromCurrentDate(Boolean(taskDetail?.repeat_from_current_date))
+			setRepeatFromCurrentDate(taskRepeatsFromCurrentDate)
 		}
 	}
 
@@ -469,7 +490,7 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 
 		const success = await saveRecurringSettings(repeatAfterValue, nextValue)
 		if (!success) {
-			setRepeatFromCurrentDate(Boolean(taskDetail?.repeat_from_current_date))
+			setRepeatFromCurrentDate(taskRepeatsFromCurrentDate)
 		}
 	}
 
@@ -482,7 +503,7 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 			const repeatEditorState = getRepeatEditorState(taskDetail?.repeat_after)
 			setRepeatEveryValue(repeatEditorState.value)
 			setRepeatEveryUnit(repeatEditorState.unit)
-			setRepeatFromCurrentDate(Boolean(taskDetail?.repeat_from_current_date))
+			setRepeatFromCurrentDate(taskRepeatsFromCurrentDate)
 		}
 	}
 
@@ -762,10 +783,14 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 									</button>
 								</div>
 								<div className="detail-media-viewer-body">
-									<AuthedImage
+									{isVideoAttachment(previewAttachment) ? <AttachmentMediaPlayer
+										kind="video"
+										path={`/api/tasks/${taskDetail.id}/attachments/${previewAttachment.id}`}
+										filename={previewAttachment.file.name || 'attachment'}
+									/> : <AuthedImage
 										src={`/api/tasks/${taskDetail.id}/attachments/${previewAttachment.id}`}
 										alt={previewAttachment.file.name || 'Attachment preview'}
-									/>
+									/>}
 								</div>
 								<div className="detail-inline-actions">
 									<AttachmentDownloadLink
@@ -985,22 +1010,73 @@ export default function TaskDetail({mode = 'sheet'}: {mode?: 'sheet' | 'inspecto
 								void handleRemoveAttachment(attachmentId)
 							}}
 						/>
+						{timeTrackingAvailable ? (
+							<TaskDetailTimeTracking
+								open={openSections.timeTracking}
+								onToggle={toggleSection}
+								taskId={taskDetail.id}
+								entries={timeEntriesByTask[taskDetail.id] || []}
+								loading={timeEntriesLoadingTaskId === taskDetail.id}
+								mutating={timeTrackingMutating}
+								runningEntry={runningTimeEntry}
+								disabled={offlineReadOnlyMode}
+								onStart={() => {
+									void startTaskTimer(taskDetail.id)
+								}}
+								onStop={() => {
+									void stopRunningTimer()
+								}}
+								onCreate={input => {
+									void createTaskTimeEntry(taskDetail.id, input)
+								}}
+								onUpdate={(entryId, input) => {
+									void updateTimeEntry(entryId, input)
+								}}
+								onDelete={entryId => {
+									void deleteTimeEntry(entryId)
+								}}
+							/>
+						) : null}
 						<CollapsibleSection
 							title="Description"
 							section="description"
 							open={openSections.description}
 							onToggle={toggleSection}
 						>
-							<label className="detail-description-field">
-								<textarea
-									className="detail-textarea"
-									data-detail-description
-									placeholder="No description"
-									value={description}
-									onChange={event => setDescription(event.currentTarget.value)}
-									onBlur={() => void handleDescriptionBlur()}
-								/>
-							</label>
+							{editingDescription ? (
+								<label className="detail-description-field">
+									<textarea
+										className="detail-textarea"
+										data-detail-description
+										placeholder="No description"
+										autoFocus
+										value={description}
+										onChange={event => setDescription(event.currentTarget.value)}
+										onBlur={() => {
+											setEditingDescription(false)
+											void handleDescriptionBlur()
+										}}
+									/>
+								</label>
+							) : (
+								<div
+									className="detail-description-read"
+									role="button"
+									tabIndex={0}
+									data-action="edit-task-description"
+									onClick={() => setEditingDescription(true)}
+									onKeyDown={event => {
+										if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+											event.preventDefault()
+											setEditingDescription(true)
+										}
+									}}
+								>
+									{description.trim()
+										? <RichTextView value={description} />
+										: <span className="detail-description-empty">No description</span>}
+								</div>
+							)}
 						</CollapsibleSection>
 						<CollapsibleSection
 							title="Info"

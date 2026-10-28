@@ -113,6 +113,8 @@ export const createTaskDetailSlice: StateCreator<AppStore, [], [], TaskDetailSto
 			void get().markTaskRead(taskId)
 			void get().loadReactions('task', taskId)
 			void get().loadTaskAttachments(taskId)
+			void get().loadTaskTimeEntries(taskId)
+			void get().loadRunningTimeEntry({silent: true})
 		} catch (error) {
 			set({error: formatError(error as Error)})
 		} finally {

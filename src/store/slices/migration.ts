@@ -1,6 +1,6 @@
 import {api, uploadApi, type ApiError} from '@/api'
-import type {MigrationService, MigrationStatus, MigrationStatusValue} from '@/types'
-import {formatError} from '@/utils/formatting'
+import type {MigrationService, MigrationStatus, MigrationStatusValue, PlankaMigrationCredentials} from '@/types'
+import {formatError, normalizeTaskDateValue} from '@/utils/formatting'
 import type {StateCreator} from 'zustand'
 import type {AppStore} from '../index'
 import {blockOfflineReadOnlyAction} from '../offline-readonly'
@@ -8,6 +8,7 @@ import {blockOfflineReadOnlyAction} from '../offline-readonly'
 export interface MigrationSlice {
 	migrationStatus: Partial<Record<MigrationService, MigrationStatusValue>>
 	migrationMessages: Partial<Record<MigrationService, string | null>>
+	migrationDetails: Partial<Record<MigrationService, MigrationStatus>>
 	migrationLoadingServices: Set<MigrationService>
 	migrationSubmittingServices: Set<MigrationService>
 
@@ -15,6 +16,7 @@ export interface MigrationSlice {
 	getMigrationAuthUrl: (service: MigrationService) => Promise<string | null>
 	completeOAuthMigration: (service: MigrationService, code: string) => Promise<boolean>
 	uploadFileMigration: (service: MigrationService, file: File) => Promise<boolean>
+	importPlanka: (credentials: PlankaMigrationCredentials) => Promise<boolean>
 	resetMigrationState: () => void
 }
 
@@ -23,8 +25,41 @@ const FILE_MIGRATION_SERVICES = new Set<MigrationService>(['ticktick', 'wekan', 
 export const createMigrationSlice: StateCreator<AppStore, [], [], MigrationSlice> = (set, get) => ({
 	migrationStatus: {},
 	migrationMessages: {},
+	migrationDetails: {},
 	migrationLoadingServices: new Set(),
 	migrationSubmittingServices: new Set(),
+
+	async importPlanka(credentials) {
+		if (blockOfflineReadOnlyAction(get, set, 'start an import')) return false
+		set(state => ({
+			migrationSubmittingServices: new Set(state.migrationSubmittingServices).add('planka'),
+			migrationDetails: {...state.migrationDetails, planka: undefined},
+			error: null,
+		}))
+		try {
+			const result = await api<{message?: string}>('/api/migration/planka/migrate', {method: 'POST', body: credentials})
+			set(state => ({
+				migrationStatus: {...state.migrationStatus, planka: 'running'},
+				migrationMessages: {...state.migrationMessages, planka: result.message || 'Import started.'},
+			}))
+			await get().loadMigrationStatus('planka')
+			return true
+		} catch (error) {
+			const message = getMigrationErrorMessage(error as ApiError)
+			set(state => ({
+				migrationStatus: {...state.migrationStatus, planka: 'error'},
+				migrationMessages: {...state.migrationMessages, planka: message},
+				error: message,
+			}))
+			return false
+		} finally {
+			set(state => {
+				const submitting = new Set(state.migrationSubmittingServices)
+				submitting.delete('planka')
+				return {migrationSubmittingServices: submitting}
+			})
+		}
+	},
 
 	async loadMigrationStatus(service) {
 		if (!get().connected) {
@@ -46,6 +81,15 @@ export const createMigrationSlice: StateCreator<AppStore, [], [], MigrationSlice
 				loading.delete(service)
 				return {
 					migrationLoadingServices: loading,
+					migrationDetails: {
+						...state.migrationDetails,
+						[service]: {
+							...normalized,
+							started_at: normalizeTaskDateValue(result.started_at),
+							finished_at: normalizeTaskDateValue(result.finished_at),
+							error_kind: result.error_kind,
+						},
+					},
 					migrationStatus: {
 						...state.migrationStatus,
 						[service]: normalized.status,
@@ -66,7 +110,7 @@ export const createMigrationSlice: StateCreator<AppStore, [], [], MigrationSlice
 					migrationLoadingServices: loading,
 					migrationStatus: {
 						...state.migrationStatus,
-						[service]: 'error',
+						[service]: state.migrationStatus[service] === 'running' ? 'running' : 'error',
 					},
 					migrationMessages: {
 						...state.migrationMessages,
@@ -129,6 +173,7 @@ export const createMigrationSlice: StateCreator<AppStore, [], [], MigrationSlice
 
 		set(state => ({
 			migrationSubmittingServices: new Set(state.migrationSubmittingServices).add(service),
+			migrationDetails: {...state.migrationDetails, [service]: undefined},
 			migrationStatus: {
 				...state.migrationStatus,
 				[service]: 'running',
@@ -197,6 +242,7 @@ export const createMigrationSlice: StateCreator<AppStore, [], [], MigrationSlice
 
 		set(state => ({
 			migrationSubmittingServices: new Set(state.migrationSubmittingServices).add(service),
+			migrationDetails: {...state.migrationDetails, [service]: undefined},
 			migrationStatus: {
 				...state.migrationStatus,
 				[service]: 'running',
@@ -255,6 +301,7 @@ export const createMigrationSlice: StateCreator<AppStore, [], [], MigrationSlice
 		set({
 			migrationStatus: {},
 			migrationMessages: {},
+			migrationDetails: {},
 			migrationLoadingServices: new Set(),
 			migrationSubmittingServices: new Set(),
 		})
@@ -273,12 +320,15 @@ function normalizeMigrationStatus(service: MigrationService, value: unknown): Mi
 	const record = value as Record<string, unknown>
 	const rawStatus = `${record.status || ''}`.trim().toLowerCase()
 	const message =
-		typeof record.message === 'string'
-			? `${record.message}`.trim() || null
-			: typeof record.error === 'string'
-				? `${record.error}`.trim() || null
-				: null
+		typeof record.error_message === 'string' && record.error_message
+			? record.error_message
+			: typeof record.message === 'string'
+				? `${record.message}`.trim() || null
+				: typeof record.error === 'string'
+					? `${record.error}`.trim() || null
+					: null
 
+	if (record.error_kind) return {service, status: 'error', message: message || 'Import failed. Check the Vikunja server logs.'}
 	if (rawStatus === 'running' || rawStatus === 'done' || rawStatus === 'error' || rawStatus === 'idle') {
 		return {service, status: rawStatus, message}
 	}
@@ -287,6 +337,9 @@ function normalizeMigrationStatus(service: MigrationService, value: unknown): Mi
 	}
 	if (record.running === true || rawStatus === 'pending') {
 		return {service, status: 'running', message}
+	}
+	if (record.started_at && !`${record.started_at}`.startsWith('0001-')) {
+		return {service, status: record.finished_at && !`${record.finished_at}`.startsWith('0001-') ? 'done' : 'running', message}
 	}
 
 	return {

@@ -14,6 +14,9 @@ export default function RootComposer() {
 		getProjectAncestors,
 		handleSubmit,
 		inputRef,
+		multilineRef,
+		multipleTasks,
+		setMultipleTasks,
 		parentTask,
 		setComposerProjectId,
 		setTitle,
@@ -56,6 +59,7 @@ export default function RootComposer() {
 							className="detail-input"
 							data-composer-project
 							value={composerProjectId || ''}
+							disabled={rootSubmitting}
 							onChange={event => setComposerProjectId(Number(event.currentTarget.value))}
 						>
 							{sortedProjects.map(project => (
@@ -72,21 +76,27 @@ export default function RootComposer() {
 						</div>
 					) : null}
 					<label className="detail-field">
-						<div className="detail-label">Title</div>
-						<HighlightedTaskInput
+						<div className="detail-label">{multipleTasks ? 'Tasks — one per line (up to 100)' : 'Title'}</div>
+						{multipleTasks ? (
+							<textarea ref={multilineRef} className="detail-input" data-root-input rows={6} placeholder="One task per line" value={title} disabled={rootSubmitting} onChange={event => setTitle(event.currentTarget.value)} />
+						) : <HighlightedTaskInput
 							ref={inputRef}
 							className="detail-input"
 							data-root-input
 							type="text"
 							placeholder="Task name"
 							value={title}
+							disabled={rootSubmitting}
 							onChange={event => setTitle(event.currentTarget.value)}
 							onKeyDown={event => {
 								if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
 									event.currentTarget.form?.requestSubmit()
 								}
 							}}
-						/>
+						/>}
+					</label>
+					<label className="detail-field">
+						<span><input type="checkbox" checked={multipleTasks} disabled={rootSubmitting || title.includes('\n')} onChange={event => setMultipleTasks(event.currentTarget.checked)} /> Multiple tasks</span>
 					</label>
 					<div className="composer-form-actions">
 						<button className="composer-submit" type="submit" disabled={rootSubmitting || !composerProjectId} onMouseDown={event => event.preventDefault()}>

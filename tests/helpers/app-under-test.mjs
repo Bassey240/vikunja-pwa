@@ -97,8 +97,9 @@ export async function startTestStack({
 			}
 			return payload
 		},
+		// Fixture setup/inspection remains independent of the client API under test.
 		async mockApi(pathname, options = {}) {
-			const response = await fetch(new URL(pathname, `${mock.origin}/api/v1/`), options)
+			const response = await fetch(new URL(pathname, `${mock.origin}/api/v1/`), {...options, headers: {...options.headers, 'x-mock-fixture': 'true'}})
 			const text = await response.text()
 			const payload = text ? JSON.parse(text) : null
 			if (!response.ok) {

@@ -160,6 +160,7 @@ export default function TaskFilterPanel({
 							<option value="none">No due date</option>
 							<option value="overdue">Overdue</option>
 							<option value="today">Due today</option>
+							<option value="tomorrow">Due tomorrow</option>
 							<option value="next7">Next 7 days</option>
 						</select>
 					</label>

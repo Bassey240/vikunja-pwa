@@ -772,6 +772,87 @@ test('parallel authenticated requests survive refresh-token rotation races', asy
 	}
 })
 
+test('a password session recovers when Vikunja rejects its access token mid-session', async () => {
+	const authStack = await startTestStack({
+		legacyConfigured: false,
+		mockVikunjaOptions: {
+			loginAccessTokenLifetimeSeconds: 3600,
+			refreshAccessTokenLifetimeSeconds: 3600,
+			rotateRefreshTokens: true,
+			enforceTokenExpiry: true,
+		},
+	})
+
+	try {
+		const sessionCookie = await loginWithPasswordSession(authStack)
+
+		// A Vikunja restart rotates the JWT secret: issued access tokens stop
+		// verifying while the refresh cookie stays valid.
+		authStack.mock.invalidateIssuedAccessTokens()
+
+		const [todayResponse, projectsResponse, notificationsResponse] = await Promise.all([
+			fetch(new URL('/api/tasks/today', authStack.appUrl), {headers: {Cookie: sessionCookie}}),
+			fetch(new URL('/api/projects', authStack.appUrl), {headers: {Cookie: sessionCookie}}),
+			fetch(new URL('/api/notifications', authStack.appUrl), {headers: {Cookie: sessionCookie}}),
+		])
+
+		assert.equal(todayResponse.status, 200)
+		assert.equal(projectsResponse.status, 200)
+		assert.equal(notificationsResponse.status, 200)
+
+		const sessionResponse = await fetch(new URL('/api/session', authStack.appUrl), {
+			headers: {Cookie: sessionCookie},
+		})
+		assert.equal(sessionResponse.status, 200)
+		assert.equal((await sessionResponse.json()).connected, true)
+	} finally {
+		await authStack.stop()
+	}
+})
+
+test('an api-token session that cannot refresh is dropped instead of replaying the upstream 401', async () => {
+	const authStack = await startTestStack({
+		legacyConfigured: false,
+		mockVikunjaOptions: {
+			enforceTokenExpiry: true,
+		},
+	})
+
+	try {
+		const apiToken = 'tk_smoke_revocable'
+		const loginResponse = await fetch(new URL('/api/session/login', authStack.appUrl), {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({
+				authMode: 'apiToken',
+				baseUrl: `${authStack.mock.origin}/api/v1`,
+				apiToken,
+			}),
+		})
+		assert.equal(loginResponse.status, 200)
+		const sessionCookie = getAppSessionCookie(loginResponse)
+		assert.ok(sessionCookie)
+
+		authStack.mock.revokeBearerToken(apiToken)
+
+		const tasksResponse = await fetch(new URL('/api/tasks/today', authStack.appUrl), {
+			headers: {Cookie: sessionCookie},
+		})
+		assert.equal(tasksResponse.status, 401)
+		const payload = await tasksResponse.json()
+		assert.equal(payload.error, 'Your Vikunja session is no longer valid. Sign in again.')
+
+		const sessionResponse = await fetch(new URL('/api/session', authStack.appUrl), {
+			headers: {Cookie: sessionCookie},
+		})
+		assert.equal((await sessionResponse.json()).connected, false)
+	} finally {
+		await authStack.stop()
+	}
+})
+
 test('admin testmail route requires an admin session, returns bridge output, and reports bridge misconfiguration', async () => {
 	const unauthorizedResponse = await fetch(new URL('/api/admin/testmail', stack.appUrl), {
 		method: 'POST',
@@ -899,7 +980,10 @@ test('admin bridge routes require an allowed operator email', async () => {
 		})
 		assert.equal(response.status, 403)
 		const payload = await response.json()
-		assert.equal(payload.error, 'This action requires an authorized operator account.')
+		assert.equal(
+			payload.error,
+			'This action requires a Vikunja instance admin or an authorized operator account.',
+		)
 	} finally {
 		await bridgeStack.stop()
 	}
@@ -967,6 +1051,140 @@ test('admin runtime status is available to any signed-in password session for br
 		assert.equal(payload.vikunjaCliReachable, false)
 	} finally {
 		await bridgeStack.stop()
+	}
+})
+
+test('an instance admin manages users over the HTTP admin API without a CLI bridge', async () => {
+	const adminStack = await startTestStack({
+		legacyConfigured: false,
+		mockVikunjaOptions: {
+			apiV2Enabled: true,
+			serverAdminUsernames: ['smoke-user'],
+		},
+	})
+
+	try {
+		const sessionCookie = await loginWithPasswordSession(adminStack)
+
+		const sessionResponse = await fetch(new URL('/api/session', adminStack.appUrl), {
+			headers: {Cookie: sessionCookie},
+		})
+		const sessionPayload = await sessionResponse.json()
+		assert.equal(sessionPayload.account.isServerAdmin, true)
+		assert.equal(sessionPayload.account.canManageUsers, true)
+
+		const overviewResponse = await fetch(new URL('/api/admin/overview', adminStack.appUrl), {
+			headers: {Cookie: sessionCookie},
+		})
+		assert.equal(overviewResponse.status, 200)
+		const overview = await overviewResponse.json()
+		assert.equal(overview.users, 3)
+		assert.ok(overview.tasks > 0)
+
+		// No bridge is configured on this stack, so every route below can only
+		// have answered through Vikunja's own admin API.
+		const listResponse = await fetch(new URL('/api/admin/users', adminStack.appUrl), {
+			headers: {Cookie: sessionCookie},
+		})
+		assert.equal(listResponse.status, 200)
+		const listPayload = await listResponse.json()
+		assert.equal(listPayload.source, 'api')
+		const self = listPayload.items.find(user => user.username === 'smoke-user')
+		assert.equal(self.isAdmin, true)
+		assert.equal(self.status, 'active')
+		assert.equal(self.enabled, true)
+
+		const createResponse = await fetch(new URL('/api/admin/users', adminStack.appUrl), {
+			method: 'POST',
+			headers: sameOriginHeaders(adminStack, sessionCookie, {'Content-Type': 'application/json'}),
+			body: JSON.stringify({
+				username: 'new-operator',
+				email: 'new-operator@example.test',
+				password: 'operator-password',
+				name: 'New Operator',
+			}),
+		})
+		assert.equal(createResponse.status, 201)
+		const created = (await createResponse.json()).user
+		assert.equal(created.username, 'new-operator')
+		assert.equal(created.isAdmin, false)
+
+		// The gateway resolves the username to the numeric id the admin routes need.
+		const disableResponse = await fetch(new URL('/api/admin/users/new-operator/status', adminStack.appUrl), {
+			method: 'PATCH',
+			headers: sameOriginHeaders(adminStack, sessionCookie, {'Content-Type': 'application/json'}),
+			body: JSON.stringify({enabled: false}),
+		})
+		assert.equal(disableResponse.status, 200)
+		const disabled = (await disableResponse.json()).user
+		assert.equal(disabled.enabled, false)
+		assert.equal(disabled.status, 'disabled')
+
+		const promoteResponse = await fetch(new URL('/api/admin/users/new-operator/admin', adminStack.appUrl), {
+			method: 'PATCH',
+			headers: sameOriginHeaders(adminStack, sessionCookie, {'Content-Type': 'application/json'}),
+			body: JSON.stringify({isAdmin: true}),
+		})
+		assert.equal(promoteResponse.status, 200)
+		assert.equal((await promoteResponse.json()).user.isAdmin, true)
+
+		// Passwords are v2-only; the mock serves v2, so this must not fall back.
+		const passwordResponse = await fetch(new URL('/api/admin/users/new-operator/password', adminStack.appUrl), {
+			method: 'POST',
+			headers: sameOriginHeaders(adminStack, sessionCookie, {'Content-Type': 'application/json'}),
+			body: JSON.stringify({password: 'replacement-password'}),
+		})
+		assert.equal(passwordResponse.status, 200)
+
+		const selfDemoteResponse = await fetch(new URL('/api/admin/users/smoke-user/admin', adminStack.appUrl), {
+			method: 'PATCH',
+			headers: sameOriginHeaders(adminStack, sessionCookie, {'Content-Type': 'application/json'}),
+			body: JSON.stringify({isAdmin: false}),
+		})
+		assert.equal(selfDemoteResponse.status, 400)
+
+		const deleteResponse = await fetch(new URL('/api/admin/users/new-operator', adminStack.appUrl), {
+			method: 'DELETE',
+			headers: sameOriginHeaders(adminStack, sessionCookie),
+		})
+		assert.equal(deleteResponse.status, 200)
+
+		const afterDeleteResponse = await fetch(new URL('/api/admin/users', adminStack.appUrl), {
+			headers: {Cookie: sessionCookie},
+		})
+		const remaining = (await afterDeleteResponse.json()).items
+		assert.equal(remaining.some(user => user.username === 'new-operator'), false)
+	} finally {
+		await adminStack.stop()
+	}
+})
+
+test('a session that is neither instance admin nor operator gets no user administration', async () => {
+	const plainStack = await startTestStack({
+		legacyConfigured: false,
+		envOverrides: {
+			ADMIN_BRIDGE_ALLOWED_EMAILS: '',
+		},
+	})
+
+	try {
+		const sessionCookie = await loginWithPasswordSession(plainStack)
+
+		const sessionResponse = await fetch(new URL('/api/session', plainStack.appUrl), {
+			headers: {Cookie: sessionCookie},
+		})
+		const sessionPayload = await sessionResponse.json()
+		assert.equal(sessionPayload.account.isServerAdmin, false)
+		assert.equal(sessionPayload.account.canManageUsers, false)
+
+		for (const pathname of ['/api/admin/overview', '/api/admin/users']) {
+			const response = await fetch(new URL(pathname, plainStack.appUrl), {
+				headers: {Cookie: sessionCookie},
+			})
+			assert.equal(response.status, 403, pathname)
+		}
+	} finally {
+		await plainStack.stop()
 	}
 })
 
@@ -1493,6 +1711,12 @@ test('account-backed sessions expose email reminder availability from Vikunja in
 		const payload = await response.json()
 		assert.equal(payload.connected, true)
 		assert.equal(payload.account.instanceFeatures.emailRemindersEnabled, true)
+		// Vikunja 2.4 reports license-unlocked Pro features; a free instance
+		// sends an empty list and the session payload must carry it through.
+		assert.deepEqual(payload.account.instanceFeatures.enabledProFeatures, [])
+		// 2.4 serves /api/v2 next to the frozen v1; the gateway probes once so
+		// features can prefer v2 and fall back rather than hard-migrating.
+		assert.equal(payload.account.instanceFeatures.apiV2Available, process.env.VIKUNJA_TEST_API_VERSION !== 'v1')
 	} finally {
 		await passwordStack.stop()
 	}
@@ -1849,6 +2073,36 @@ test('avatar upload and task attachments enforce route-specific raw body limits'
 	}
 })
 
+test('pending email routes preserve the confirmed address and cancel the change', async () => {
+	const authStack = await startTestStack({legacyConfigured: false, mockVikunjaOptions: {apiV2Enabled: true}})
+	try {
+		for (const [path, method] of [['/api/session/settings/email/resend', 'POST'], ['/api/session/settings/email', 'DELETE']]) {
+			const response = await fetch(new URL(path, authStack.appUrl), {method, headers: {Origin: authStack.appUrl}})
+			assert.equal(response.status, 401)
+		}
+		const cookie = await loginWithPasswordSession(authStack)
+		const headers = sameOriginHeaders(authStack, cookie, {'Content-Type': 'application/json'})
+		const change = await fetch(new URL('/api/session/settings/email', authStack.appUrl), {
+			method: 'POST', headers, body: JSON.stringify({password: 'smoke-password', newEmail: 'pending@example.test'}),
+		})
+		assert.equal(change.status, 200)
+		const user = await authStack.api('/api/user', {headers})
+		assert.equal(user.email, 'smoke@example.test')
+		assert.equal(user.pending_email, 'pending@example.test')
+		assert.equal((await authStack.api('/api/session', {headers})).account.user.pending_email, 'pending@example.test')
+		assert.deepEqual(await authStack.api('/api/session/settings/email/resend', {method: 'POST', headers}), {ok: true})
+		assert.deepEqual(await authStack.api('/api/session/settings/email', {method: 'DELETE', headers}), {ok: true})
+		const refreshed = await authStack.api('/api/user', {headers})
+		assert.equal(refreshed.email, 'smoke@example.test')
+		assert.equal(refreshed.pending_email, '')
+		const resend = await fetch(new URL('/api/session/settings/email/resend', authStack.appUrl), {method: 'POST', headers})
+		assert.equal(resend.status, 412)
+		assert.match((await resend.json()).error, /No email change is pending/)
+	} finally {
+		await authStack.stop()
+	}
+})
+
 test('instance info and account self-service proxy routes work end-to-end', async () => {
 	const authStack = await startTestStack({
 		legacyConfigured: false,
@@ -1867,7 +2121,7 @@ test('instance info and account self-service proxy routes work end-to-end', asyn
 		const instanceInfoResponse = await fetch(new URL(`/api/instance-info?baseUrl=${encodeURIComponent(`${authStack.mock.origin}/api/v1`)}`, authStack.appUrl))
 		assert.equal(instanceInfoResponse.status, 200)
 		const instanceInfo = await instanceInfoResponse.json()
-		assert.equal(instanceInfo.version, 'test')
+		assert.equal(instanceInfo.version, process.env.VIKUNJA_TEST_API_VERSION === 'v1' ? 'v2.3.0' : 'v2.7.0')
 		assert.equal(instanceInfo.motd, 'Smoke suite MOTD')
 		assert.deepEqual(instanceInfo.enabled_background_providers, ['unsplash'])
 		assert.equal(instanceInfo.auth.openid.providers[0].name, 'Acme SSO')
@@ -1880,7 +2134,7 @@ test('instance info and account self-service proxy routes work end-to-end', asyn
 			},
 		})
 		assert.equal(infoResponse.status, 200)
-		assert.equal((await infoResponse.json()).version, 'test')
+		assert.equal((await infoResponse.json()).version, process.env.VIKUNJA_TEST_API_VERSION === 'v1' ? 'v2.3.0' : 'v2.7.0')
 
 		const emailResponse = await fetch(new URL('/api/session/settings/email', authStack.appUrl), {
 			method: 'POST',
@@ -2294,4 +2548,224 @@ test('admin dump, restore, migration, and repair routes work with the mock bridg
 	} finally {
 		await bridgeStack.stop()
 	}
+})
+
+test('time tracking mirrors the licence gate: 404 through the gateway when the feature is off', async () => {
+	// Its own stack: the shared one's login rate limit is spent by this point.
+	const unlicensedStack = await startTestStack()
+
+	try {
+		const sessionCookie = await loginWithPasswordSession(unlicensedStack)
+
+		const listResponse = await fetch(new URL('/api/time-entries', unlicensedStack.appUrl), {
+			headers: sameOriginHeaders(unlicensedStack, sessionCookie),
+		})
+		assert.equal(listResponse.status, process.env.VIKUNJA_TEST_API_VERSION === 'v1' ? 501 : 404)
+
+		const taskEntriesResponse = await fetch(new URL('/api/tasks/101/time-entries', unlicensedStack.appUrl), {
+			headers: sameOriginHeaders(unlicensedStack, sessionCookie),
+		})
+		assert.equal(taskEntriesResponse.status, process.env.VIKUNJA_TEST_API_VERSION === 'v1' ? 501 : 404)
+	} finally {
+		await unlicensedStack.stop()
+	}
+})
+
+test('a licensed instance runs the whole timer lifecycle through the gateway', async () => {
+	const licensedStack = await startTestStack({
+		mockVikunjaOptions: {
+			enabledProFeatures: ['time_tracking'],
+			apiV2Enabled: true,
+		},
+	})
+
+	try {
+		const sessionCookie = await loginWithPasswordSession(licensedStack)
+
+		const sessionResponse = await fetch(new URL('/api/session', licensedStack.appUrl), {
+			headers: sameOriginHeaders(licensedStack, sessionCookie),
+		})
+		const session = await sessionResponse.json()
+		assert.deepEqual(session.account.instanceFeatures.enabledProFeatures, ['time_tracking'])
+		assert.equal(session.account.instanceFeatures.apiV2Available, true)
+
+		const seededResponse = await fetch(new URL('/api/tasks/101/time-entries', licensedStack.appUrl), {
+			headers: sameOriginHeaders(licensedStack, sessionCookie),
+		})
+		assert.equal(seededResponse.status, 200)
+		const seeded = await seededResponse.json()
+		assert.equal(seeded.timeEntries.length, 1)
+		assert.equal(seeded.timeEntries[0].comment, 'Reviewed the intake list')
+		assert.equal(Object.hasOwn(seeded.timeEntries[0], '$schema'), false)
+
+		const startResponse = await fetch(new URL('/api/time-entries', licensedStack.appUrl), {
+			method: 'POST',
+			headers: sameOriginHeaders(licensedStack, sessionCookie, {'Content-Type': 'application/json'}),
+			body: JSON.stringify({taskId: 101}),
+		})
+		assert.equal(startResponse.status, 201)
+		const started = (await startResponse.json()).timeEntry
+		assert.equal(started.end_time, null)
+		assert.equal(started.task_id, 101)
+
+		const runningResponse = await fetch(
+			new URL(`/api/time-entries?filter=${encodeURIComponent('user_id = 1 && end_time = null')}`, licensedStack.appUrl),
+			{headers: sameOriginHeaders(licensedStack, sessionCookie)},
+		)
+		assert.equal(runningResponse.status, 200)
+		const running = (await runningResponse.json()).timeEntries
+		assert.equal(running.length, 1)
+		assert.equal(running[0].id, started.id)
+
+		const stopResponse = await fetch(new URL('/api/time-entries/timer/stop', licensedStack.appUrl), {
+			method: 'POST',
+			headers: sameOriginHeaders(licensedStack, sessionCookie),
+		})
+		assert.equal(stopResponse.status, 200)
+		const stopped = (await stopResponse.json()).timeEntry
+		assert.equal(stopped.id, started.id)
+		assert.notEqual(stopped.end_time, null)
+
+		const editResponse = await fetch(new URL(`/api/time-entries/${started.id}`, licensedStack.appUrl), {
+			method: 'PUT',
+			headers: sameOriginHeaders(licensedStack, sessionCookie, {'Content-Type': 'application/json'}),
+			body: JSON.stringify({comment: 'Paired on the intake list'}),
+		})
+		assert.equal(editResponse.status, 200)
+		const edited = (await editResponse.json()).timeEntry
+		assert.equal(edited.comment, 'Paired on the intake list')
+		// The edit sent no task_id, so the merge onto the stored entry is what
+		// keeps it attached to task 101 through Vikunja's full-replace PUT.
+		assert.equal(edited.task_id, 101)
+		assert.equal(edited.start_time, stopped.start_time)
+
+		const deleteResponse = await fetch(new URL(`/api/time-entries/${started.id}`, licensedStack.appUrl), {
+			method: 'DELETE',
+			headers: sameOriginHeaders(licensedStack, sessionCookie),
+		})
+		assert.equal(deleteResponse.status, 200)
+
+		const remainingResponse = await fetch(new URL('/api/tasks/101/time-entries', licensedStack.appUrl), {
+			headers: sameOriginHeaders(licensedStack, sessionCookie),
+		})
+		assert.deepEqual((await remainingResponse.json()).timeEntries.map(entry => entry.id), [1])
+	} finally {
+		await licensedStack.stop()
+	}
+})
+
+test('starting a timer stops the one already running, as Vikunja does', async () => {
+	const licensedStack = await startTestStack({
+		mockVikunjaOptions: {
+			enabledProFeatures: ['time_tracking'],
+			apiV2Enabled: true,
+		},
+	})
+
+	try {
+		const sessionCookie = await loginWithPasswordSession(licensedStack)
+		const startTimer = async taskId => {
+			const response = await fetch(new URL('/api/time-entries', licensedStack.appUrl), {
+				method: 'POST',
+				headers: sameOriginHeaders(licensedStack, sessionCookie, {'Content-Type': 'application/json'}),
+				body: JSON.stringify({taskId}),
+			})
+			assert.equal(response.status, 201)
+			return (await response.json()).timeEntry
+		}
+
+		const first = await startTimer(101)
+		const second = await startTimer(102)
+
+		const runningResponse = await fetch(
+			new URL(`/api/time-entries?filter=${encodeURIComponent('user_id = 1 && end_time = null')}`, licensedStack.appUrl),
+			{headers: sameOriginHeaders(licensedStack, sessionCookie)},
+		)
+		assert.deepEqual((await runningResponse.json()).timeEntries.map(entry => entry.id), [second.id])
+
+		const firstResponse = await fetch(new URL(`/api/time-entries/${first.id}`, licensedStack.appUrl), {
+			headers: sameOriginHeaders(licensedStack, sessionCookie),
+		})
+		assert.notEqual((await firstResponse.json()).timeEntry.end_time, null)
+	} finally {
+		await licensedStack.stop()
+	}
+})
+
+test('the gateway rejects a time entry that names neither or both containers', async () => {
+	const licensedStack = await startTestStack({
+		mockVikunjaOptions: {
+			enabledProFeatures: ['time_tracking'],
+			apiV2Enabled: true,
+		},
+	})
+
+	try {
+		const sessionCookie = await loginWithPasswordSession(licensedStack)
+		const create = async body => fetch(new URL('/api/time-entries', licensedStack.appUrl), {
+			method: 'POST',
+			headers: sameOriginHeaders(licensedStack, sessionCookie, {'Content-Type': 'application/json'}),
+			body: JSON.stringify(body),
+		})
+
+		const neither = await create({comment: 'orphan'})
+		assert.equal(neither.status, 400)
+		assert.equal((await neither.json()).error, 'A time entry needs exactly one of taskId or projectId.')
+
+		const both = await create({taskId: 101, projectId: 1})
+		assert.equal(both.status, 400)
+	} finally {
+		await licensedStack.stop()
+	}
+})
+
+test('project drag accepts a full project response with client metadata', async () => {
+	const projects = await stack.api('/api/projects')
+	const project = projects.find(entry => entry.id > 0)
+	const {project: moved} = await stack.api(`/api/projects/${project.id}`, {
+		method: 'POST',
+		headers: {'Content-Type': 'application/json'},
+		body: JSON.stringify({...project, has_background: false, maxPermission: 2, parent_project_id: 0, position: 1045824}),
+	})
+	assert.equal(moved.position, 1045824)
+	assert.equal(moved.parent_project_id, 0)
+	assert.equal(moved.title, project.title)
+})
+
+test('task completion with legacy repeat metadata persists after refresh', async () => {
+	const tasks = await stack.api('/api/projects/2/tasks')
+	const task = tasks.find(entry => !entry.done)
+	await stack.api(`/api/tasks/${task.id}`, {
+		method: 'POST', headers: {'Content-Type': 'application/json'},
+		body: JSON.stringify({...task, repeat_from_current_date: false, done: true, done_at: new Date().toISOString()}),
+	})
+	const {task: refreshed} = await stack.api(`/api/tasks/${task.id}`)
+	assert.equal(refreshed.done, true)
+	assert.equal(refreshed.title, task.title)
+})
+
+test('every existing resource write satisfies the selected upstream contract', async () => {
+ const {readFileSync} = await import('node:fs')
+ const {writes, deletes} = JSON.parse(readFileSync(new URL('../helpers/v2-write-cases.json', import.meta.url)))
+ const contractStack = await startTestStack({legacyConfigured: false})
+ const failures = []
+ try {
+  for (const [method, path, body] of [...writes, ...deletes.map(path => ['DELETE', path, {}])]) {
+   contractStack.reset()
+   const cookie = await loginWithPasswordSession(contractStack)
+   const seed = async (route, body) => contractStack.mockApi(route, {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)})
+   if (/projects\/2\/users\//.test(path)) await seed('projects/2/users', {username: 'apartner', permission: 1})
+   if (/projects\/2\/teams\//.test(path)) await seed('projects/2/teams', {team_id: 1, permission: 1})
+   if (/projects\/2\/webhooks\//.test(path)) await seed('projects/2/webhooks', {target_url: 'https://example.test/hook', events: ['task.created']})
+   if (/teams\/1\/members\//.test(path)) await seed('teams/1/members', {username: 'apartner'})
+   if (/filters\/1$/.test(path)) await seed('filters', {title: 'Saved', filters: {filter: 'done = false'}})
+   const response = await fetch(new URL(path, contractStack.appUrl), {
+    method,
+    headers: sameOriginHeaders(contractStack, cookie, {'Content-Type': 'application/json'}),
+    body: JSON.stringify(body),
+   })
+   if (!response.ok) failures.push({method, path, status: response.status, error: await response.text()})
+  }
+  assert.deepEqual(failures, [])
+ } finally {await contractStack.stop()}
 })

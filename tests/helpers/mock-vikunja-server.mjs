@@ -1,4 +1,10 @@
 import http from 'node:http'
+import {readFileSync} from 'node:fs'
+import {v2BodyErrors} from './vikunja-v2-contract.mjs'
+
+// Methods from Vikunja 2.7 OpenAPI, plus configuration-enabled handlers from
+// the released 2.4 source. Independent of the application's route overrides.
+const v2Contracts = Object.entries(JSON.parse(readFileSync(new URL('./vikunja-v2-routes.json', import.meta.url)))).map(([path, methods]) => [new RegExp('^' + path.replace(/\{[^}]+\}/g, '[^/]+') + '$'), methods])
 import {setTimeout as delay} from 'node:timers/promises'
 import {createMockFixture, cloneFixture} from './mock-data.mjs'
 
@@ -7,12 +13,36 @@ const ONE_PIXEL_PNG = Buffer.from(
 	'base64',
 )
 
+// Eight-second H.264 baseline MP4, generated once with ffmpeg (no runtime dependency).
+export const VIDEO_MP4 = readFileSync(new URL('./fixtures/playback.mp4', import.meta.url))
+
+// Eight seconds of mono PCM silence, for real browser decoding/playback tests.
+export const AUDIO_WAV = (() => {
+	const dataSize = 8000 * 2 * 8
+	const wav = Buffer.alloc(44 + dataSize)
+	wav.write('RIFF', 0)
+	wav.writeUInt32LE(dataSize + 36, 4)
+	wav.write('WAVEfmt ', 8)
+	wav.writeUInt32LE(16, 16)
+	wav.writeUInt16LE(1, 20)
+	wav.writeUInt16LE(1, 22)
+	wav.writeUInt32LE(8000, 24)
+	wav.writeUInt32LE(16000, 28)
+	wav.writeUInt16LE(2, 32)
+	wav.writeUInt16LE(16, 34)
+	wav.write('data', 36)
+	wav.writeUInt32LE(dataSize, 40)
+	return wav
+})()
+
 export async function createMockVikunjaServer({
 	avatarRouteStyle = 'suffix',
 	hideAuthenticatedUserEmail = false,
+	mailerEnabled = true,
 	localAuthEnabled = true,
 	registrationEnabled = true,
 	caldavEnabled = true,
+	mcpInfo = null,
 	totpState = null,
 	oidcProviders = [],
 	enabledBackgroundProviders = ['unsplash'],
@@ -23,9 +53,23 @@ export async function createMockVikunjaServer({
 	refreshAccessTokenLifetimeSeconds = 3600,
 	rotateRefreshTokens = false,
 	refreshResponseDelayMs = 0,
+	// Real Vikunja rejects an expired access token with 401 code 11; the mock
+	// only ever read `sub`, so the gateway's reactive refresh path went untested.
+	enforceTokenExpiry = false,
 	unauthorizedGetRoutes = [],
+	enabledProFeatures = [],
+	apiV2Enabled = process.env.VIKUNJA_TEST_API_VERSION !== 'v1',
+	apiV1Enabled = !apiV2Enabled || process.env.VIKUNJA_TEST_API_VERSION !== 'v2',
+	serverVersion = null,
+	// Instance-admin rights cannot be read off /api/v1/user, so the gateway
+	// probes /admin/overview. Tests opt in per username to model both a plain
+	// session (403, CLI-bridge path) and an instance admin (HTTP path).
+	serverAdminUsernames = [],
 } = {}) {
 	const initialFixture = createMockFixture()
+	if (mcpInfo) {
+		initialFixture.apiRoutes = {...initialFixture.apiRoutes, ...mcpInfo.routes}
+	}
 	if (totpState && typeof totpState === 'object') {
 		initialFixture.totp = {
 			...initialFixture.totp,
@@ -33,9 +77,19 @@ export async function createMockVikunjaServer({
 		}
 	}
 	let state = buildMutableState(initialFixture)
+	let serverAdmins = buildServerAdminSet(serverAdminUsernames)
+	// Test control: the next N mutating task writes answer 409 (2.4's atomic
+	// position upserts can conflict transiently); armed per test, cleared on reset.
+	let conflictNextTaskWrites = 0
+	// Bumped to model a Vikunja restart that rotates the JWT secret: previously
+	// issued access tokens stop verifying while the refresh cookie stays valid.
+	let tokenGeneration = 0
+	// Bearer values Vikunja treats as revoked; API tokens are opaque, not JWTs.
+	const revokedBearerTokens = new Set()
 
 	const server = http.createServer(async (req, res) => {
 		try {
+			req.upstreamMethod = req.method
 			const url = new URL(req.url || '/', 'http://127.0.0.1')
 			const mockOidcAuthorizeMatch = url.pathname.match(/^\/mock-oidc\/([^/]+)\/authorize$/)
 			if (mockOidcAuthorizeMatch && req.method === 'GET') {
@@ -56,14 +110,160 @@ export async function createMockVikunjaServer({
 				return
 			}
 
-			if (!url.pathname.startsWith('/api/v1/')) {
+			if (url.pathname === '/api/v2/info' && !apiV2Enabled) {
 				sendJson(res, 404, {error: 'Route not found.'})
 				return
 			}
 
-			const route = url.pathname.replace(/^\/api\/v1\//, '')
+			// Setting a user's password is v2-only; the rest of the admin API
+			// lives under v1. Neither version is a superset of the other.
+			const v2AdminPasswordMatch = url.pathname.match(/^\/api\/v2\/admin\/users\/(\d+)\/password$/)
+			if (v2AdminPasswordMatch && req.method === 'PATCH' && apiV2Enabled) {
+				requireServerAdmin(req)
+				const passwordBody = await readJsonBody(req)
+				const newPassword = `${passwordBody?.new_password || ''}`
+				if (newPassword.length < 8) {
+					sendJson(res, 400, {message: 'The password must have at least 8 characters.'})
+					return
+				}
+
+				const target = getAdminUser(Number(v2AdminPasswordMatch[1]))
+				state.passwordsByUsername[`${target.username || ''}`.trim()] = newPassword
+				sendJson(res, 200, {message: 'The password was updated successfully.'})
+				return
+			}
+
+			// Time tracking is v2-only and licensed. Vikunja 404s the whole
+			// surface when the feature is off, and that 404 is what the app reads.
+			const v2TimeEntryMatch = url.pathname.match(/^\/api\/v2\/time-entries\/(\d+)$/)
+			const v2TaskTimeEntriesMatch = url.pathname.match(/^\/api\/v2\/tasks\/(\d+)\/time-entries$/)
+			const v2ProjectTimeEntriesMatch = url.pathname.match(/^\/api\/v2\/projects\/(-?\d+)\/time-entries$/)
+			const isTimeEntryRoute =
+				url.pathname === '/api/v2/time-entries' ||
+				url.pathname === '/api/v2/time-entries/timer/stop' ||
+				Boolean(v2TimeEntryMatch || v2TaskTimeEntriesMatch || v2ProjectTimeEntriesMatch)
+
+			if (isTimeEntryRoute && (!apiV2Enabled || !enabledProFeatures.includes('time_tracking'))) {
+				sendJson(res, 404, {message: 'Not Found'})
+				return
+			}
+
+			if (url.pathname === '/api/v2/time-entries' && req.method === 'GET') {
+				const matches = timeEntryFilterMatcher(url.searchParams.get('filter'))
+				sendTimeEntryPage(res, readableTimeEntries().filter(matches), url)
+				return
+			}
+
+			if (url.pathname === '/api/v2/time-entries' && req.method === 'POST') {
+				const entryBody = await readJsonBody(req)
+				sendJson(res, 201, withSchema(createTimeEntry(req, entryBody), 'TimeEntry'))
+				return
+			}
+
+			if (url.pathname === '/api/v2/time-entries/timer/stop' && req.method === 'POST') {
+				const userId = Number(getAuthenticatedUserProfile(req).id || 0)
+				const running = state.timeEntries.find(entry => Number(entry.user_id) === userId && entry.end_time === null)
+				if (!running) {
+					sendJson(res, 404, {message: 'You do not have a running timer.'})
+					return
+				}
+
+				running.end_time = new Date().toISOString()
+				running.updated = running.end_time
+				sendJson(res, 200, withSchema(running, 'TimeEntry'))
+				return
+			}
+
+			if (v2TimeEntryMatch && req.method === 'GET') {
+				sendJson(res, 200, withSchema(getTimeEntry(Number(v2TimeEntryMatch[1])), 'TimeEntryReadBody'))
+				return
+			}
+
+			if (v2TimeEntryMatch && req.method === 'PUT') {
+				const entryBody = await readJsonBody(req)
+				sendJson(res, 200, withSchema(updateTimeEntry(Number(v2TimeEntryMatch[1]), entryBody), 'TimeEntryReadBody'))
+				return
+			}
+
+			if (v2TimeEntryMatch && req.method === 'DELETE') {
+				const entryId = Number(v2TimeEntryMatch[1])
+				getTimeEntry(entryId)
+				state.timeEntries = state.timeEntries.filter(entry => Number(entry.id) !== entryId)
+				res.writeHead(204)
+				res.end()
+				return
+			}
+
+			if (v2TaskTimeEntriesMatch && req.method === 'GET') {
+				const taskId = Number(v2TaskTimeEntriesMatch[1])
+				sendTimeEntryPage(res, readableTimeEntries().filter(entry => Number(entry.task_id) === taskId), url)
+				return
+			}
+
+			if (v2ProjectTimeEntriesMatch && req.method === 'GET') {
+				const projectId = Number(v2ProjectTimeEntriesMatch[1])
+				const taskIdsInProject = new Set(
+					state.tasks.filter(task => Number(task.project_id) === projectId).map(task => Number(task.id)),
+				)
+				sendTimeEntryPage(
+					res,
+					readableTimeEntries().filter(entry =>
+						Number(entry.project_id) === projectId || taskIdsInProject.has(Number(entry.task_id)),
+					),
+					url,
+				)
+				return
+			}
+
+			const isV2 = url.pathname.startsWith('/api/v2/')
+			if ((!isV2 && !apiV1Enabled && req.headers['x-mock-fixture'] !== 'true') || (isV2 && !apiV2Enabled) || !/^\/api\/v[12]\//.test(url.pathname)) {
+				sendJson(res, 404, {error: 'Route not found.'})
+				return
+			}
+			if (isV2 && !v2Contracts.some(([path, methods]) => path.test(url.pathname.replace(/^\/api\/v2/, '')) && methods.includes(req.method))) {
+				sendJson(res, 405, {detail: 'Unsupported v2 path or method.'}); return
+			}
+			res.vikunjaV2 = isV2
+			res.vikunjaRoute = url.pathname
+			let route = url.pathname.replace(/^\/api\/v[12]\//, '')
+			if (isV2) {
+				if (url.searchParams.has('s')) {
+					sendJson(res, 400, {detail: 'Use q for v2 searches.'})
+					return
+				}
+				if (url.searchParams.has('q')) url.searchParams.set('s', url.searchParams.get('q'))
+				if (route === 'logout') route = 'user/logout'
+				else if (route === 'user/settings/avatar/provider') route = 'user/settings/avatar'
+				else if (route === 'user/settings/avatar' && req.method === 'PUT') route = 'user/settings/avatar/upload'
+				else route = route.replace(/^(projects\/\d+\/views\/\d+)\/buckets\/tasks$/, '$1/buckets').replace(/^(projects\/\d+)\/users\/search$/, '$1/projectusers')
+				if (req.method === 'POST' && /^(projects|tasks)\/\d+\/duplicate$/.test(route)) req.method = 'PUT'
+				const create = /^(projects|labels|teams|filters|tokens|subscriptions|user\/settings\/webhooks|user\/settings\/token\/caldav)$|^projects\/\d+\/(tasks|views|teams|users|shares|webhooks)$|^projects\/\d+\/views\/\d+\/buckets$|^tasks\/\d+\/(comments|relations|assignees|labels|reactions|attachments)$|^teams\/\d+\/members$|^subscriptions\/[^/]+\/\d+$|^(comments|projects)\/\d+\/reactions$/
+				if (create.test(route)) {
+					if (req.method === 'PUT') { sendJson(res, 405, {detail: 'Creation requires POST.'}); return }
+					if (req.method === 'POST') req.method = 'PUT'
+				} else if (req.method === 'PATCH' && !route.startsWith('admin/')) req.method = 'POST'
+				else if (req.method === 'PUT' && (/^(?:user\/settings|projects\/\d+)\/webhooks\/\d+$/.test(route) || /^projects\/\d+\/(users|teams)\/[^/]+$|^projects\/\d+\/views\/\d+\/buckets\/\d+$|^notifications\/\d+$/.test(route) || route === 'user/settings/email' || route === 'tasks/bulk' || /^projects\/\d+\/views\/\d+\/buckets\/\d+\/tasks$|^tasks\/\d+\/(assignees|labels)\/bulk$/.test(route) || /^projects\/\d+\/backgrounds\/unsplash$/.test(route))) req.method = 'POST'
+				else if (req.method === 'PUT' && /^tasks\/\d+\/(position|read)$/.test(route)) req.method = 'POST'
+			}
+
+			if (
+				conflictNextTaskWrites > 0 &&
+				route.startsWith('tasks/') &&
+				req.method !== 'GET'
+			) {
+				conflictNextTaskWrites -= 1
+				sendJson(res, 409, {message: 'The task position was modified concurrently. Please retry.'})
+				return
+			}
 			if (req.method === 'GET' && unauthorizedGetRoutes.includes(route)) {
 				sendJson(res, 401, {message: 'missing, malformed, expired or otherwise invalid token provided'})
+				return
+			}
+			if (enforceTokenExpiry && !PUBLIC_ROUTES.has(route) && isRejectedBearerToken(req)) {
+				sendJson(res, 401, {
+					code: 11,
+					message: 'missing, malformed, expired or otherwise invalid token provided',
+				})
 				return
 			}
 			const isMultipart = `${req.headers['content-type'] || ''}`.toLowerCase().includes('multipart/form-data')
@@ -71,7 +271,7 @@ export async function createMockVikunjaServer({
 			const avatarSuffixMatch = route.match(/^([^/]+)\/avatar$/)
 			const avatarPrefixMatch = route.match(/^avatar\/([^/]+)$/)
 
-			const avatarRouteMatches = (
+			const avatarRouteMatches = isV2 ? avatarPrefixMatch : (
 				(avatarRouteStyle === 'suffix' && avatarSuffixMatch) ||
 				(avatarRouteStyle === 'prefix' && avatarPrefixMatch) ||
 				(avatarRouteStyle === 'both' && (avatarPrefixMatch || avatarSuffixMatch))
@@ -88,7 +288,7 @@ export async function createMockVikunjaServer({
 			if (route === 'info' && req.method === 'GET') {
 				const requestOrigin = `http://${req.headers.host || '127.0.0.1'}`
 				sendJson(res, 200, {
-					version: 'test',
+					version: serverVersion || (isV2 ? 'v2.7.0' : 'v2.3.0'),
 					frontend_url: 'http://127.0.0.1',
 					motd,
 					caldav_enabled: caldavEnabled,
@@ -98,6 +298,7 @@ export async function createMockVikunjaServer({
 					link_sharing_enabled: true,
 					public_teams_enabled: true,
 					email_reminders_enabled: true,
+					enabled_pro_features: enabledProFeatures,
 					auth: {
 						local: {
 							enabled: localAuthEnabled,
@@ -189,7 +390,7 @@ export async function createMockVikunjaServer({
 					res,
 					200,
 					{
-						token: buildToken(username, loginAccessTokenLifetimeSeconds),
+						token: buildToken(username, loginAccessTokenLifetimeSeconds, tokenGeneration),
 					},
 					{
 						'Set-Cookie': buildRefreshCookie(issueRefreshToken(username, {reset: true})),
@@ -217,7 +418,7 @@ export async function createMockVikunjaServer({
 					res,
 					200,
 					{
-						token: buildToken('smoke-user', loginAccessTokenLifetimeSeconds),
+						token: buildToken('smoke-user', loginAccessTokenLifetimeSeconds, tokenGeneration),
 					},
 					{
 						'Set-Cookie': buildRefreshCookie(issueRefreshToken('smoke-user', {reset: true})),
@@ -258,7 +459,7 @@ export async function createMockVikunjaServer({
 					res,
 					200,
 					{
-						token: buildToken(username, refreshAccessTokenLifetimeSeconds),
+						token: buildToken(username, refreshAccessTokenLifetimeSeconds, tokenGeneration),
 					},
 					{
 						'Set-Cookie': buildRefreshCookie(issueRefreshToken(username)),
@@ -272,6 +473,8 @@ export async function createMockVikunjaServer({
 				sendJson(res, 200, {
 					...authenticatedUser,
 					email: hideAuthenticatedUserEmail ? '' : `${authenticatedUser?.email || ''}`.trim(),
+					...(apiV2Enabled ? {pending_email: state.pendingEmailChange?.username === authenticatedUser.username
+						? state.pendingEmailChange.newEmail : ''} : {}),
 				})
 				return
 			}
@@ -289,6 +492,114 @@ export async function createMockVikunjaServer({
 						return haystacks.some(value => value.toLowerCase().includes(search))
 					})
 				sendJson(res, 200, paginate(users, url))
+				return
+			}
+
+			if (route === 'admin/overview' && req.method === 'GET') {
+				requireServerAdmin(req)
+				sendJson(res, 200, {
+					users: state.users.length,
+					projects: state.projects.filter(project => project.id > 0).length,
+					tasks: state.tasks.length,
+					teams: (state.teams || []).length,
+				})
+				return
+			}
+
+			if (route === 'admin/users' && req.method === 'GET') {
+				requireServerAdmin(req)
+				const search = `${url.searchParams.get('s') || ''}`.trim().toLowerCase()
+				const matches = !search
+					? state.users
+					: state.users.filter(user => [
+						`${user.username || ''}`,
+						`${user.email || ''}`,
+						`${user.name || ''}`,
+					].some(value => value.toLowerCase().includes(search)))
+				sendJson(res, 200, paginate(matches.map(user => toAdminUserPayload(user)), url))
+				return
+			}
+
+			if (route === 'admin/users' && req.method === 'POST') {
+				requireServerAdmin(req)
+				const username = `${body?.username || ''}`.trim()
+				const email = `${body?.email || ''}`.trim().toLowerCase()
+				const password = `${body?.password || ''}`
+				if (!username || !email || !password) {
+					sendJson(res, 400, {message: 'Username, email, and password are required.'})
+					return
+				}
+				if (state.users.some(user => `${user.username || ''}`.trim() === username)) {
+					sendJson(res, 400, {message: 'A user with this username already exists.'})
+					return
+				}
+
+				const now = new Date().toISOString()
+				const created = normalizeUserProfile({
+					id: state.nextUserId++,
+					name: `${body?.name || ''}`.trim() || username,
+					username,
+					email,
+					status: 0,
+					created: now,
+					updated: now,
+					settings: buildDefaultUserSettings(),
+				})
+				state.users.push(created)
+				state.passwordsByUsername[username] = password
+				if (body?.is_admin === true) {
+					serverAdmins.add(username)
+				}
+				sendJson(res, 201, toAdminUserPayload(created))
+				return
+			}
+
+			const adminUserStatusMatch = route.match(/^admin\/users\/(\d+)\/status$/)
+			if (adminUserStatusMatch && req.method === 'PATCH') {
+				requireServerAdmin(req)
+				const target = getAdminUser(Number(adminUserStatusMatch[1]))
+				target.status = Number(body?.status || 0)
+				target.updated = new Date().toISOString()
+				sendJson(res, 200, toAdminUserPayload(target))
+				return
+			}
+
+			const adminUserRoleMatch = route.match(/^admin\/users\/(\d+)\/admin$/)
+			if (adminUserRoleMatch && req.method === 'PATCH') {
+				requireServerAdmin(req)
+				const target = getAdminUser(Number(adminUserRoleMatch[1]))
+				const username = `${target.username || ''}`.trim()
+				if (body?.is_admin === true) {
+					serverAdmins.add(username)
+				} else {
+					serverAdmins.delete(username)
+				}
+				target.updated = new Date().toISOString()
+				sendJson(res, 200, toAdminUserPayload(target))
+				return
+			}
+
+			const adminUserMatch = route.match(/^admin\/users\/(\d+)$/)
+			if (adminUserMatch && req.method === 'DELETE') {
+				requireServerAdmin(req)
+				const target = getAdminUser(Number(adminUserMatch[1]))
+				const mode = `${url.searchParams.get('mode') || ''}`.trim()
+				if (mode !== 'now') {
+					sendJson(res, 400, {message: 'Only mode=now deletes a user immediately.'})
+					return
+				}
+
+				const username = `${target.username || ''}`.trim()
+				state.users = state.users.filter(user => Number(user.id) !== Number(target.id))
+				serverAdmins.delete(username)
+				delete state.passwordsByUsername[username]
+				sendJson(res, 200, {message: 'The user was deleted successfully.'})
+				return
+			}
+
+			if (route.startsWith('admin/')) {
+				requireServerAdmin(req)
+				sendJson(res, 404, {error: 'Route not found.'})
 				return
 			}
 
@@ -388,12 +699,32 @@ export async function createMockVikunjaServer({
 					return
 				}
 
-				state.pendingEmailChange = {
-					username: authenticatedUser.username,
-					newEmail,
-					requestedAt: new Date().toISOString(),
+				if (mailerEnabled) {
+					state.pendingEmailChange = {
+						username: authenticatedUser.username,
+						newEmail,
+						requestedAt: new Date().toISOString(),
+					}
+				} else {
+					updateUserProfile(authenticatedUser.username, user => ({...user, email: newEmail}))
+					state.pendingEmailChange = null
 				}
 				sendJson(res, 200, {message: 'The email change was requested successfully.'})
+				return
+			}
+
+			if (apiV2Enabled && route === 'user/settings/email/resend' && req.method === 'POST') {
+				if (state.pendingEmailChange?.username !== getAuthenticatedUserProfile(req).username) {
+					sendJson(res, 412, {message: 'No email change is pending.'})
+					return
+				}
+				sendJson(res, 200, {message: 'Confirmation email resent.'})
+				return
+			}
+
+			if (apiV2Enabled && route === 'user/settings/email' && req.method === 'DELETE') {
+				if (state.pendingEmailChange?.username === getAuthenticatedUserProfile(req).username) state.pendingEmailChange = null
+				sendJson(res, 200, {message: 'Email change cancelled.'})
 				return
 			}
 
@@ -652,6 +983,11 @@ export async function createMockVikunjaServer({
 				return
 			}
 
+			if (route === 'mcp/info' && req.method === 'GET' && mcpInfo) {
+				sendJson(res, 200, mcpInfo)
+				return
+			}
+
 			if (route === 'user/settings/webhooks' && req.method === 'GET') {
 				sendJson(res, 200, paginate((state.userWebhooks || []).map(normalizeWebhook), url))
 				return
@@ -716,11 +1052,24 @@ export async function createMockVikunjaServer({
 				}
 
 				if (action === 'status' && req.method === 'GET') {
-					sendJson(res, 200, normalizeMigrationState(service, state.migrationStatus[service]))
+					sendJson(res, 200, service === 'planka' ? state.migrationStatus[service] : normalizeMigrationState(service, state.migrationStatus[service]))
 					return
 				}
 
 				if (action === 'migrate' && req.method === 'POST') {
+					if (service === 'planka') {
+						if (!body?.url || (!body.token && !(body.username && body.password))) {
+							sendJson(res, 400, {error: 'Planka URL and credentials are required.'})
+							return
+						}
+						if (body.token === 'invalid-key') {
+							sendJson(res, 400, {error: 'Planka refused the credentials.'})
+							return
+						}
+						state.migrationStatus.planka = {started_at: new Date().toISOString(), finished_at: '0001-01-01T00:00:00Z', error_kind: '', error_message: ''}
+						sendJson(res, 200, {message: 'Migration was started successfully.'})
+						return
+					}
 					if ((service === 'ticktick' || service === 'vikunja-file') && !isMultipart) {
 						sendJson(res, 400, {error: 'File upload required.'})
 						return
@@ -821,6 +1170,11 @@ export async function createMockVikunjaServer({
 				const uploadedFiles = parseMultipartFiles(await readRawBody(req), `${req.headers['content-type'] || ''}`)
 				if (uploadedFiles.length === 0) {
 					sendJson(res, 400, {error: 'At least one file is required.'})
+					return
+				}
+				// Vikunja 2.4 rejects images it cannot decode (e.g. SVG) with a 400.
+				if (uploadedFiles.some(file => `${file.mime || ''}${file.name || ''}`.toLowerCase().includes('svg'))) {
+					sendJson(res, 400, {message: 'The avatar image could not be decoded.'})
 					return
 				}
 				updateUserProfile(authenticatedUser.username, profile => ({
@@ -1007,6 +1361,13 @@ export async function createMockVikunjaServer({
 			}
 
 			const projectViewMatch = route.match(/^projects\/(-?\d+)\/views\/(\d+)$/)
+			if (projectViewMatch && req.method === 'POST') {
+				const view = getViewsForProject(Number(projectViewMatch[1])).find(view => view.id === Number(projectViewMatch[2]))
+				Object.assign(view, body)
+				sendJson(res, 200, view)
+				return
+			}
+
 			if (projectViewMatch && req.method === 'DELETE') {
 				const projectId = Number(projectViewMatch[1])
 				const viewId = Number(projectViewMatch[2])
@@ -1482,11 +1843,52 @@ export async function createMockVikunjaServer({
 				return
 			}
 
+			const bucketWriteMatch = route.match(/^projects\/(-?\d+)\/views\/(\d+)\/buckets\/(\d+)(\/tasks)?$/)
+			if (bucketWriteMatch) {
+				const viewId = Number(bucketWriteMatch[2])
+				const bucketId = Number(bucketWriteMatch[3])
+				const bucket = state.bucketsByViewId[viewId].find(entry => entry.id === bucketId)
+				if (req.method === 'DELETE') {
+					state.bucketsByViewId[viewId] = state.bucketsByViewId[viewId].filter(entry => entry.id !== bucketId)
+					sendJson(res, 200, {ok: true}); return
+				}
+				if (req.method === 'POST' && bucketWriteMatch[4]) {
+					const task = getTask(Number(body.task_id))
+					task.bucket_id = bucketId
+					task.done = bucketId === getViewsForProject(Number(bucketWriteMatch[1])).find(view => view.id === viewId)?.done_bucket_id
+					sendJson(res, 200, {task_id: task.id, bucket_id: bucketId, task: serializeTask(task)}); return
+				}
+				if (req.method === 'POST') {
+					Object.assign(bucket, body)
+					sendJson(res, 200, bucket); return
+				}
+			}
+
 			const projectViewTasksMatch = route.match(/^projects\/(-?\d+)\/views\/(\d+)\/tasks$/)
 			if (projectViewTasksMatch && req.method === 'GET') {
 				const projectId = Number(projectViewTasksMatch[1])
 				const viewId = Number(projectViewTasksMatch[2])
 				sendJson(res, 200, paginate(listTasksForProjectView(projectId, viewId, url.searchParams), url))
+				return
+			}
+
+			const bulkCreateTasksMatch = route.match(/^projects\/(\d+)\/tasks\/bulk$/)
+			if (bulkCreateTasksMatch && req.method === 'POST') {
+				if (!isV2 || /^v?2\.[0-4]\./.test(serverVersion || '')) {
+					sendJson(res, 404, {error: 'Route not found.'}); return
+				}
+				const projectId = Number(bulkCreateTasksMatch[1])
+				getProject(projectId)
+				const tasks = body.tasks.map(input => {
+					const task = buildTask({
+						...input, id: state.nextTaskId++, project_id: projectId,
+						position: getNextTaskPosition(projectId),
+						repeat_from_current_date: input.repeat_mode === 2,
+					})
+					state.tasks.push(task)
+					return serializeTask(task)
+				})
+				sendJson(res, 201, {tasks})
 				return
 			}
 
@@ -1686,6 +2088,7 @@ export async function createMockVikunjaServer({
 						? normalizePercentDone(task.percent_done)
 						: normalizePercentDone(body.percent_done),
 					reminders: body?.reminders === undefined ? task.reminders : normalizeTaskReminders(body.reminders),
+					repeat_mode: body?.repeat_mode ?? task.repeat_mode ?? (task.repeat_from_current_date ? 2 : 0),
 					repeat_after: body?.repeat_after === undefined
 						? normalizeRepeatAfter(task.repeat_after)
 						: normalizeRepeatAfter(body.repeat_after),
@@ -2055,9 +2458,32 @@ export async function createMockVikunjaServer({
 		origin: `http://127.0.0.1:${server.address().port}`,
 		reset() {
 			state = buildMutableState(initialFixture)
+			serverAdmins = buildServerAdminSet(serverAdminUsernames)
+			conflictNextTaskWrites = 0
+			tokenGeneration = 0
+			revokedBearerTokens.clear()
+		},
+		invalidateIssuedAccessTokens() {
+			tokenGeneration += 1
+		},
+		revokeBearerToken(token) {
+			revokedBearerTokens.add(`${token || ''}`)
+		},
+		conflictNextTaskWritesOnce(count = 1) {
+			conflictNextTaskWrites = Math.max(0, Number(count) || 0)
 		},
 		getState() {
 			return structuredClone(state)
+		},
+		setMigrationStatus(service, status) {
+			state.migrationStatus[service] = status
+		},
+		confirmPendingEmail() {
+			const pending = state.pendingEmailChange
+			if (pending) {
+				updateUserProfile(pending.username, user => ({...user, email: pending.newEmail}))
+				state.pendingEmailChange = null
+			}
 		},
 		close() {
 			return new Promise((resolve, reject) => {
@@ -2178,6 +2604,7 @@ export async function createMockVikunjaServer({
 			priority: task.priority,
 			percent_done: normalizePercentDone(task.percent_done),
 			reminders: task.reminders?.length ? task.reminders.map(reminder => ({...reminder})) : null,
+			repeat_mode: task.repeat_mode ?? (task.repeat_from_current_date ? 2 : 0),
 			repeat_after: normalizeRepeatAfter(task.repeat_after),
 			repeat_from_current_date: Boolean(task.repeat_from_current_date),
 			assignees: task.assignees?.length ? task.assignees.map(assignee => ({...assignee})) : null,
@@ -2298,6 +2725,41 @@ export async function createMockVikunjaServer({
 		return `${state.user?.username || ''}`.trim()
 	}
 
+	function requireServerAdmin(req) {
+		const username = getAuthenticatedUsername(req)
+		if (!serverAdmins.has(username)) {
+			const error = new Error('You are not allowed to do this.')
+			error.statusCode = 403
+			throw error
+		}
+		return username
+	}
+
+	function getAdminUser(userId) {
+		const user = state.users.find(entry => Number(entry.id) === Number(userId))
+		if (!user) {
+			const error = new Error(`User ${userId} not found.`)
+			error.statusCode = 404
+			throw error
+		}
+		return user
+	}
+
+	function toAdminUserPayload(user) {
+		return {
+			id: Number(user.id),
+			username: `${user.username || ''}`.trim(),
+			email: `${user.email || ''}`.trim(),
+			name: `${user.name || ''}`.trim(),
+			status: Number(user.status || 0),
+			is_admin: serverAdmins.has(`${user.username || ''}`.trim()),
+			bot_owner_id: Number(user.bot_owner_id || 0),
+			auth_provider: `${user.auth_provider || 'local'}`,
+			created: user.created || null,
+			updated: user.updated || null,
+		}
+	}
+
 	function issueRefreshToken(username, {reset = false} = {}) {
 		if (reset) {
 			state.refreshTokenSubjects = {}
@@ -2322,6 +2784,29 @@ export async function createMockVikunjaServer({
 		return match ? match[1] : ''
 	}
 
+	function isRejectedBearerToken(req) {
+		const token = `${req.headers.authorization || ''}`.replace(/^Bearer\s+/i, '')
+		if (!token) {
+			return false
+		}
+
+		if (revokedBearerTokens.has(token)) {
+			return true
+		}
+
+		const payload = decodeTokenPayload(token)
+		if (!payload) {
+			return false
+		}
+
+		const expiry = Number(payload.exp || 0)
+		if (expiry > 0 && expiry <= Math.floor(Date.now() / 1000)) {
+			return true
+		}
+
+		return Number(payload.gen || 0) < tokenGeneration
+	}
+
 	function getAuthenticatedUserProfile(req) {
 		return getUserProfileByUsername(getAuthenticatedUsername(req))
 	}
@@ -2342,6 +2827,77 @@ export async function createMockVikunjaServer({
 			state.user = nextProfile
 		}
 		return nextProfile
+	}
+
+	/* Vikunja scopes time entries by accessible project, not by owner, so the
+	 * mock keeps every entry readable and leaves owner scoping to the filter. */
+	function readableTimeEntries() {
+		return state.timeEntries
+	}
+
+	function getTimeEntry(entryId) {
+		const entry = state.timeEntries.find(candidate => Number(candidate.id) === Number(entryId))
+		if (!entry) {
+			const error = new Error(`Time entry ${entryId} not found.`)
+			error.statusCode = 404
+			throw error
+		}
+
+		return entry
+	}
+
+	function createTimeEntry(req, body) {
+		const userId = Number(getAuthenticatedUserProfile(req).id || 0)
+		const endTime = body?.end_time ? `${body.end_time}` : null
+
+		// Starting a running timer auto-stops the previous one; a completed
+		// manual entry leaves it alone. Mirrors TimeEntry.Create upstream.
+		if (endTime === null) {
+			state.timeEntries
+				.filter(entry => Number(entry.user_id) === userId && entry.end_time === null)
+				.forEach(entry => {
+					entry.end_time = new Date().toISOString()
+					entry.updated = entry.end_time
+				})
+		}
+
+		const now = new Date().toISOString()
+		const entry = {
+			id: state.nextTimeEntryId++,
+			task_id: Number(body?.task_id || 0),
+			project_id: Number(body?.project_id || 0),
+			user_id: userId,
+			start_time: `${body?.start_time || ''}`.trim() || now,
+			end_time: endTime,
+			comment: `${body?.comment || ''}`,
+			created: now,
+			updated: now,
+		}
+		assertTimeEntryIsValid(entry)
+		state.timeEntries.push(entry)
+		return entry
+	}
+
+	function updateTimeEntry(entryId, body) {
+		const entry = getTimeEntry(entryId)
+		if (entry.end_time !== null && !body?.end_time) {
+			const error = new Error('This time entry has already ended.')
+			error.statusCode = 400
+			throw error
+		}
+
+		const updated = {
+			...entry,
+			task_id: Number(body?.task_id || 0),
+			project_id: Number(body?.project_id || 0),
+			start_time: `${body?.start_time || ''}`.trim() || entry.start_time,
+			end_time: body?.end_time ? `${body.end_time}` : null,
+			comment: `${body?.comment || ''}`,
+			updated: new Date().toISOString(),
+		}
+		assertTimeEntryIsValid(updated)
+		state.timeEntries[state.timeEntries.indexOf(entry)] = updated
+		return updated
 	}
 
 	function getTeam(teamId) {
@@ -2558,6 +3114,14 @@ export async function createMockVikunjaServer({
 	}
 }
 
+function buildServerAdminSet(usernames) {
+	return new Set(
+		(Array.isArray(usernames) ? usernames : [])
+			.map(username => `${username || ''}`.trim())
+			.filter(Boolean),
+	)
+}
+
 function buildMutableState(fixture) {
 	const state = cloneFixture(fixture)
 	state.user = normalizeUserProfile(state.user)
@@ -2594,6 +3158,8 @@ function buildMutableState(fixture) {
 	state.nextCaldavTokenId = Math.max(0, ...((state.caldavTokens || []).map(token => Number(token.id || 0)))) + 1
 	state.nextApiTokenId = Math.max(0, ...((state.apiTokens || []).map(token => Number(token.id || 0)))) + 1
 	state.nextTaskId = Math.max(...state.tasks.map(task => task.id), 0) + 1
+	state.timeEntries = Array.isArray(state.timeEntries) ? state.timeEntries : []
+	state.nextTimeEntryId = Math.max(0, ...state.timeEntries.map(entry => Number(entry.id || 0))) + 1
 	state.nextCommentId = Math.max(
 		0,
 		...state.tasks.flatMap(task => Array.isArray(task.comments) ? task.comments.map(comment => Number(comment.id || 0)) : []),
@@ -2690,17 +3256,23 @@ function normalizeUserProfile(user) {
 	}
 }
 
+/* Reached before or without a bearer token, so expiry never applies. */
+const PUBLIC_ROUTES = new Set(['login', 'register', 'info', 'user/token/refresh'])
+
 function decodeTokenSubject(token) {
+	return `${decodeTokenPayload(token)?.sub || ''}`.trim()
+}
+
+function decodeTokenPayload(token) {
 	const normalizedToken = `${token || ''}`.trim()
 	if (!normalizedToken.includes('.')) {
-		return ''
+		return null
 	}
 
 	try {
-		const payload = JSON.parse(Buffer.from(normalizedToken.split('.')[1], 'base64url').toString('utf8'))
-		return `${payload?.sub || ''}`.trim()
+		return JSON.parse(Buffer.from(normalizedToken.split('.')[1], 'base64url').toString('utf8'))
 	} catch {
-		return ''
+		return null
 	}
 }
 
@@ -3141,6 +3713,10 @@ function normalizeTaskComments(comments) {
 				name: `${comment?.author?.name || ''}`.trim(),
 				username: `${comment?.author?.username || ''}`.trim(),
 				email: `${comment?.author?.email || ''}`.trim(),
+				// Vikunja 2.4 marks bot users on the author payload.
+				...(Number(comment?.author?.bot_owner_id || 0) > 0
+					? {bot_owner_id: Number(comment.author.bot_owner_id)}
+					: {}),
 			},
 			created: normalizeDateString(comment?.created || null) || new Date().toISOString(),
 			updated: normalizeDateString(comment?.updated || comment?.created || null) || new Date().toISOString(),
@@ -3468,11 +4044,105 @@ function readMultiValueQueryParam(searchParams, key) {
 	return searchParams.getAll(key).map(value => `${value || ''}`.trim()).filter(Boolean)
 }
 
+/* Vikunja validates the container XOR and the time order before it writes. */
+function assertTimeEntryIsValid(entry) {
+	if ((entry.task_id > 0) === (entry.project_id > 0)) {
+		const error = new Error('Exactly one of task_id and project_id must be set.')
+		error.statusCode = 400
+		throw error
+	}
+
+	if (entry.end_time && new Date(entry.end_time).getTime() < new Date(entry.start_time).getTime()) {
+		const error = new Error('The end time cannot be before the start time.')
+		error.statusCode = 400
+		throw error
+	}
+}
+
+/* A conjunction over the fields Vikunja documents for this filter. Anything
+ * else throws so an unmodelled filter fails loudly instead of matching all. */
+function timeEntryFilterMatcher(filter) {
+	const normalized = `${filter || ''}`.trim()
+	if (!normalized) {
+		return () => true
+	}
+
+	const clauses = normalized.split('&&').map(clause => {
+		const parsed = clause.trim().match(/^(user_id|task_id|project_id|start_time|end_time)\s*(>=|<=|!=|=|>|<)\s*(.+)$/)
+		if (!parsed) {
+			const error = new Error(`Unsupported time entry filter: ${clause.trim()}`)
+			error.statusCode = 400
+			throw error
+		}
+
+		return {
+			field: parsed[1],
+			operator: parsed[2],
+			value: parsed[3].trim().replace(/^['"]|['"]$/g, ''),
+		}
+	})
+
+	return entry => clauses.every(clause => matchesTimeEntryClause(entry, clause))
+}
+
+function matchesTimeEntryClause(entry, {field, operator, value}) {
+	const actual = entry[field]
+	if (value === 'null') {
+		return operator === '!=' ? actual !== null : actual === null
+	}
+
+	if (field === 'start_time' || field === 'end_time') {
+		return compareTimeEntryValues(actual ? new Date(actual).getTime() : 0, new Date(value).getTime(), operator)
+	}
+
+	return compareTimeEntryValues(Number(actual || 0), Number(value || 0), operator)
+}
+
+function compareTimeEntryValues(left, right, operator) {
+	switch (operator) {
+		case '=':
+			return left === right
+		case '!=':
+			return left !== right
+		case '>':
+			return left > right
+		case '<':
+			return left < right
+		case '>=':
+			return left >= right
+		default:
+			return left <= right
+	}
+}
+
+function sendTimeEntryPage(res, entries, url) {
+	const ordered = [...entries].sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())
+	const perPage = Math.max(1, Number(url.searchParams.get('per_page') || 100))
+	sendJson(res, 200, {
+		...withSchema({}, 'PaginatedTimeEntry'),
+		items: paginate(ordered, url).map(entry => withSchema(entry, 'TimeEntry')),
+		page: Number(url.searchParams.get('page') || 1),
+		per_page: perPage,
+		total: ordered.length,
+		total_pages: Math.max(1, Math.ceil(ordered.length / perPage)),
+	})
+}
+
+/* Huma stamps every v2 body with the URL of its JSON Schema. */
+function withSchema(payload, schemaName) {
+	return {
+		$schema: `http://127.0.0.1/api/v2/schemas/${schemaName}.json`,
+		...payload,
+	}
+}
+
 function paginate(items, url) {
 	const page = Number(url.searchParams.get('page') || 1)
 	const perPage = Number(url.searchParams.get('per_page') || 100)
 	const start = Math.max(0, (page - 1) * perPage)
-	return items.slice(start, start + perPage)
+	const result = items.slice(start, start + perPage)
+	Object.defineProperty(result, 'pagination', {value: {total: items.length, page, per_page: perPage, total_pages: Math.ceil(items.length / perPage)}})
+	return result
 }
 
 function startOfDay(value) {
@@ -3487,7 +4157,16 @@ async function readJsonBody(req) {
 		return {}
 	}
 	const raw = buffer.toString('utf8').trim()
-	return raw ? JSON.parse(raw) : {}
+	const body = raw ? JSON.parse(raw) : {}
+	const path = new URL(req.url, 'http://localhost').pathname
+	const errors = path.startsWith('/api/v2/') ? v2BodyErrors(req.upstreamMethod, path.slice('/api/v2'.length), body) : null
+	if (errors) {
+		const error = new Error(`V2 body validation: ${JSON.stringify(errors)}`)
+		error.statusCode = 422
+		throw error
+	}
+	if ('repeat_mode' in body) body.repeat_from_current_date = body.repeat_mode === 2
+	return body
 }
 
 async function readRawBody(req) {
@@ -3502,11 +4181,13 @@ async function readRawBody(req) {
 }
 
 function sendJson(res, statusCode, payload, headers = {}) {
+	if (res.vikunjaV2 && Array.isArray(payload) && !/\/webhooks\/events$|\/user\/timezones$/.test(res.vikunjaRoute)) payload = {items: payload, ...(payload.pagination || {total: payload.length, page: 1, per_page: 100, total_pages: 1})}
+	if (res.vikunjaV2 && statusCode >= 400) payload = {...payload, detail: payload.message || payload.error, status: statusCode}
 	res.writeHead(statusCode, {
 		'Content-Type': 'application/json',
 		...headers,
 	})
-	res.end(JSON.stringify(payload))
+	res.end(JSON.stringify(payload, res.vikunjaV2 ? (key, value) => key === 'repeat_from_current_date' ? undefined : value : undefined))
 }
 
 function sendBuffer(res, statusCode, payload, headers = {}) {
@@ -3567,7 +4248,7 @@ function buildAttachmentPayload(attachment, previewSize) {
 	}
 
 	return {
-		body: Buffer.from(`Mock attachment: ${name}\n`),
+		body: /\.wav$/i.test(name) ? AUDIO_WAV : /\.mp4$/i.test(name) ? VIDEO_MP4 : Buffer.from(`Mock attachment: ${name}\n`),
 		headers: {
 			'Content-Type': mime,
 			'Content-Disposition': `inline; filename="${name.replace(/"/g, '')}"`,
@@ -3576,9 +4257,10 @@ function buildAttachmentPayload(attachment, previewSize) {
 	}
 }
 
-function buildToken(subject, lifetimeSeconds = 3600) {
+function buildToken(subject, lifetimeSeconds = 3600, generation = 0) {
 	const encode = value => Buffer.from(JSON.stringify(value)).toString('base64url')
-	return `${encode({alg: 'none', typ: 'JWT'})}.${encode({sub: subject, exp: Math.floor(Date.now() / 1000) + lifetimeSeconds})}.signature`
+	const claims = {sub: subject, exp: Math.floor(Date.now() / 1000) + lifetimeSeconds, gen: generation}
+	return `${encode({alg: 'none', typ: 'JWT'})}.${encode(claims)}.signature`
 }
 
 function listen(server) {

@@ -1,5 +1,82 @@
+/* Kept one-way: admin-http.mjs imports nothing, so there is no cycle back. */
+import {probeServerAdmin} from './admin-http.mjs'
+import {prepareRepeatBody, prepareV2Body} from './vikunja-v2-body.mjs'
+
+/* Single place where an API version becomes part of an upstream URL.
+ *
+ * The configured base URL stays pinned to /api/v1 (operators may have set it
+ * that way, and it is persisted in encrypted sessions), so this strips any
+ * version suffix to recover the instance origin — including instances served
+ * under a path prefix — and re-attaches the requested one. The trailing slash
+ * matters: without it, `new URL('projects/2/views', base)` would drop the
+ * version segment. */
+export function resolveVersionedUrl(baseUrl, route, version = 'v1') {
+	const origin = `${baseUrl || ''}`.trim().replace(/\/+$/, '').replace(/\/api\/v\d+$/, '')
+	return new URL(`${route || ''}`.replace(/^\/+/, ''), `${origin}/api/${version}/`)
+}
+
+export async function loadVikunjaInstance(baseUrl, {signal} = {}) {
+	for (const apiVersion of ['v2', 'v1']) {
+		const response = await fetch(resolveVersionedUrl(baseUrl, 'info', apiVersion), {
+			headers: {Accept: 'application/json'}, signal,
+		})
+		if (apiVersion === 'v2' && [404, 405].includes(response.status)) continue
+		if (!response.ok) {
+			const error = new Error(`Unable to load Vikunja info (${response.status}).`)
+			error.statusCode = response.status
+			throw error
+		}
+		return {info: await response.json(), apiVersion}
+	}
+}
+
+export function instanceFeaturesFromInfo(info, apiVersion) {
+	return {
+		linkSharingEnabled: normalizeNullableBoolean(info?.link_sharing_enabled ?? info?.linkSharingEnabled ?? null),
+		publicTeamsEnabled: normalizeNullableBoolean(info?.public_teams_enabled ?? info?.publicTeamsEnabled ?? null),
+		frontendUrl: normalizeFrontendUrl(info?.frontend_url ?? info?.frontendUrl ?? null),
+		emailRemindersEnabled: normalizeNullableBoolean(info?.email_reminders_enabled ?? info?.emailRemindersEnabled ?? null),
+		enabledProFeatures: normalizeStringList(info?.enabled_pro_features ?? info?.enabledProFeatures ?? null),
+		apiV2Available: apiVersion === 'v2',
+		serverVersion: `${info?.version || ''}`,
+	}
+}
+
+/* v2 list responses are an envelope; v1's fetchAllPages walks bare arrays and
+ * would silently return page one of an envelope, so the two stay separate. */
+export async function collectV2Pages(fetchPage, {perPage = 100, maxPages = 1000} = {}) {
+	const items = []
+	let page = 1
+
+	while (page <= maxPages) {
+		const envelope = await fetchPage({page, perPage})
+		const pageItems = Array.isArray(envelope?.items) ? envelope.items : []
+		items.push(...pageItems.map(stripSchemaField))
+
+		const totalPages = Number(envelope?.total_pages || 0)
+		if (totalPages > 0 ? page >= totalPages : pageItems.length < perPage) {
+			return items
+		}
+
+		page += 1
+	}
+
+	return items
+}
+
+/* Huma stamps a `$schema` URL on v2 bodies; it is transport metadata, not data. */
+export function stripSchemaField(payload) {
+	if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+		return payload
+	}
+
+	const {$schema: _schema, ...rest} = payload
+	return rest
+}
+
 export function createVikunjaClient({
 	baseUrl,
+	apiVersion = 'v1',
 	authMode = 'apiToken',
 	apiToken = '',
 	accessToken = '',
@@ -43,7 +120,16 @@ export function createVikunjaClient({
 			}
 		},
 
-		async fetchAllPages(route, params = {}) {
+		async getFreshAccessToken() {
+			await ensureFreshAccessToken()
+			return currentAccessToken
+		},
+
+		async fetchAllPages(route, params = {}, options = {}) {
+			if ((options.apiVersion || apiVersion) === 'v2') {
+				if (options.v2Route?.endsWith('/buckets/tasks')) return (await request(route, {...options, params})).items || []
+				return this.fetchAllPagesV2(route, params, options)
+			}
 			const items = []
 			let page = 1
 			const perPage = 100
@@ -51,6 +137,7 @@ export function createVikunjaClient({
 
 			for (;;) {
 				const pageItems = await request(route, {
+					...options,
 					params: {
 						...params,
 						page,
@@ -75,6 +162,18 @@ export function createVikunjaClient({
 				items.push(...pageItems)
 				page += 1
 			}
+		},
+
+		async fetchAllPagesV2(route, params = {}, options = {}) {
+			return collectV2Pages(({page, perPage}) => request(route, {
+				...options,
+				apiVersion: 'v2',
+				params: {
+					...params,
+					page,
+					per_page: perPage,
+				},
+			}))
 		},
 
 		async request(route, options = {}) {
@@ -106,19 +205,21 @@ export function createVikunjaClient({
 		},
 	}
 
-		async function request(route, options = {}, attempt = 0) {
-			const response = await requestRaw(route, options, attempt)
-			const rawText = await response.text()
-			const payload = tryParseJson(rawText)
+	async function request(route, options = {}, attempt = 0) {
+		const response = await requestRaw(route, options, attempt)
+		const rawText = await response.text()
+		const payload = tryParseJson(rawText)
 
-			if (!response.ok) {
-				const error = new Error(getVikunjaErrorMessage(payload, rawText, response.status))
-				error.statusCode = response.status
-				error.details = payload || rawText || null
-				throw error
-			}
+		if (!response.ok) {
+			const error = new Error(isUnrecoverableAuthError(response.status, payload)
+				? 'Your Vikunja session is no longer valid. Sign in again.'
+				: getVikunjaErrorMessage(payload, rawText, response.status))
+			error.statusCode = response.status
+			error.details = payload || rawText || null
+			throw error
+		}
 
-		return payload
+		return stripSchemaField(payload)
 	}
 
 	async function requestRaw(route, options = {}, attempt = 0) {
@@ -135,15 +236,26 @@ export function createVikunjaClient({
 				await refreshUserToken()
 				return requestRaw(route, options, attempt + 1)
 			}
+
+			// Modes without a refresh token cannot recover, so drop the session
+			// instead of replaying the upstream string on every poll.
+			if (isUnrecoverableAuthError(response.status, payload)) {
+				onAuthFailure?.({
+					statusCode: response.status,
+					details: payload || rawText || null,
+				})
+			}
 		}
 
 		return response
 	}
 
 	async function doRequest(route, options = {}) {
-		const requestUrl = new URL(route.replace(/^\/+/, ''), `${baseUrl}/`)
+		const version = options.apiVersion || apiVersion
+		const requestUrl = resolveVersionedUrl(baseUrl, version === 'v2' ? options.v2Route || route : route, version)
 
-		for (const [key, value] of Object.entries(options.params || {})) {
+		for (const [originalKey, value] of Object.entries(options.params || {})) {
+			const key = version === 'v2' && originalKey === 's' ? 'q' : version === 'v2' && route === 'backgrounds/unsplash/search' && originalKey === 'p' ? 'page' : originalKey
 			if (Array.isArray(value)) {
 				value.forEach(entry => requestUrl.searchParams.append(key, formatParam(entry)))
 			} else if (typeof value !== 'undefined' && value !== null && value !== '') {
@@ -167,10 +279,12 @@ export function createVikunjaClient({
 			}
 		}
 
+		const body = version === 'v2' ? prepareV2Body(route, options.body) : prepareRepeatBody(options.body)
+
 		return fetch(requestUrl, {
-			method: options.method || 'GET',
+			method: (version === 'v2' ? options.v2Method : null) || options.method || 'GET',
 			headers,
-			body: options.rawBody ?? (options.body ? JSON.stringify(options.body) : undefined),
+			body: options.rawBody ?? (options.body ? JSON.stringify(body) : undefined),
 		})
 	}
 
@@ -220,6 +334,14 @@ export function createVikunjaClient({
 		await refreshUserToken()
 	}
 
+	/* Connect-time clients carry no session to drop, so they must keep the
+	 * upstream reason instead of being told to sign in again. */
+	function isUnrecoverableAuthError(status, payload) {
+		return shouldRefreshFromError(status, payload)
+			&& authMode !== 'password'
+			&& typeof onAuthFailure === 'function'
+	}
+
 	async function refreshUserToken() {
 		if (authMode !== 'password') {
 			return null
@@ -238,7 +360,7 @@ export function createVikunjaClient({
 				throw error
 			}
 
-			const response = await fetch(new URL('user/token/refresh', `${baseUrl}/`), {
+			const response = await fetch(resolveVersionedUrl(baseUrl, 'user/token/refresh', apiVersion), {
 				method: 'POST',
 				headers: {
 					Accept: 'application/json',
@@ -301,8 +423,9 @@ export function createVikunjaClient({
 }
 
 export async function createPasswordAccount({baseUrl, username, password, totpPasscode = '', longToken = false}) {
+	const {info, apiVersion} = await loadVikunjaInstance(baseUrl)
 	const nextTotpPasscode = `${totpPasscode || ''}`.trim()
-	const response = await fetch(new URL('login', `${baseUrl}/`), {
+	const response = await fetch(resolveVersionedUrl(baseUrl, 'login', apiVersion), {
 		method: 'POST',
 		headers: {
 			Accept: 'application/json',
@@ -320,7 +443,7 @@ export async function createPasswordAccount({baseUrl, username, password, totpPa
 	const payload = tryParseJson(rawText)
 
 	if (!response.ok) {
-		const error = new Error(payload?.message || payload?.error || `Vikunja login failed with ${response.status}`)
+		const error = new Error(payload?.detail || payload?.message || payload?.error || payload?.title || `Vikunja login failed with ${response.status}`)
 		error.statusCode = response.status
 		error.details = payload || rawText || null
 		throw error
@@ -336,14 +459,16 @@ export async function createPasswordAccount({baseUrl, username, password, totpPa
 
 	const client = createVikunjaClient({
 		baseUrl,
+		apiVersion,
 		authMode: 'password',
 		accessToken,
 		refreshCookie,
 	})
 
-	const [user, instanceFeatures] = await Promise.all([
+	const [user, instanceFeatures, isServerAdmin] = await Promise.all([
 		client.request('user'),
-		loadInstanceFeatures(client),
+		instanceFeaturesFromInfo(info, apiVersion),
+		probeServerAdmin(client),
 	])
 	return {
 		authMode: 'password',
@@ -351,12 +476,14 @@ export async function createPasswordAccount({baseUrl, username, password, totpPa
 		accessToken,
 		refreshCookie,
 		instanceFeatures,
+		isServerAdmin,
 		user,
 	}
 }
 
 export async function createOidcAccount({baseUrl, provider, code, redirectUrl}) {
-	const response = await fetch(new URL(`auth/openid/${encodeURIComponent(provider)}/callback`, `${baseUrl}/`), {
+	const {info, apiVersion} = await loadVikunjaInstance(baseUrl)
+	const response = await fetch(resolveVersionedUrl(baseUrl, `auth/openid/${encodeURIComponent(provider)}/callback`, apiVersion), {
 		method: 'POST',
 		headers: {
 			Accept: 'application/json',
@@ -372,7 +499,7 @@ export async function createOidcAccount({baseUrl, provider, code, redirectUrl}) 
 	const payload = tryParseJson(rawText)
 
 	if (!response.ok) {
-		const error = new Error(payload?.message || payload?.error || `Vikunja OIDC login failed with ${response.status}`)
+		const error = new Error(payload?.detail || payload?.message || payload?.error || payload?.title || `Vikunja OIDC login failed with ${response.status}`)
 		error.statusCode = response.status
 		error.details = payload || rawText || null
 		throw error
@@ -388,14 +515,16 @@ export async function createOidcAccount({baseUrl, provider, code, redirectUrl}) 
 
 	const client = createVikunjaClient({
 		baseUrl,
+		apiVersion,
 		authMode: 'password',
 		accessToken,
 		refreshCookie,
 	})
 
-	const [user, instanceFeatures] = await Promise.all([
+	const [user, instanceFeatures, isServerAdmin] = await Promise.all([
 		client.request('user'),
-		loadInstanceFeatures(client),
+		instanceFeaturesFromInfo(info, apiVersion),
+		probeServerAdmin(client),
 	])
 
 	return {
@@ -404,20 +533,23 @@ export async function createOidcAccount({baseUrl, provider, code, redirectUrl}) 
 		accessToken,
 		refreshCookie,
 		instanceFeatures,
+		isServerAdmin,
 		user,
 	}
 }
 
 export async function createApiTokenAccount({baseUrl, apiToken}) {
+	const {info, apiVersion} = await loadVikunjaInstance(baseUrl)
 	const client = createVikunjaClient({
 		baseUrl,
+		apiVersion,
 		authMode: 'apiToken',
 		apiToken,
 	})
 
 	const [user, instanceFeatures] = await Promise.all([
 		client.request('user'),
-		loadInstanceFeatures(client),
+		instanceFeaturesFromInfo(info, apiVersion),
 	])
 	return {
 		authMode: 'apiToken',
@@ -429,7 +561,8 @@ export async function createApiTokenAccount({baseUrl, apiToken}) {
 }
 
 export async function authenticateLinkShare({baseUrl, hash, password = ''}) {
-	const response = await fetch(new URL(`shares/${encodeURIComponent(hash)}/auth`, `${baseUrl}/`), {
+	const {apiVersion} = await loadVikunjaInstance(baseUrl)
+	const response = await fetch(resolveVersionedUrl(baseUrl, `shares/${encodeURIComponent(hash)}/auth`, apiVersion), {
 		method: 'POST',
 		headers: {
 			Accept: 'application/json',
@@ -444,7 +577,7 @@ export async function authenticateLinkShare({baseUrl, hash, password = ''}) {
 	const payload = tryParseJson(rawText)
 
 	if (!response.ok) {
-		const error = new Error(payload?.message || payload?.error || `Vikunja link share auth failed with ${response.status}`)
+		const error = new Error(payload?.detail || payload?.message || payload?.error || payload?.title || `Vikunja link share auth failed with ${response.status}`)
 		error.statusCode = response.status
 		error.details = payload || rawText || null
 		throw error
@@ -475,31 +608,6 @@ export async function createLinkShareAccount({baseUrl, token, projectId}) {
 		...account,
 		linkShareAuth: true,
 		linkShareProjectId: projectId,
-	}
-}
-
-async function loadInstanceFeatures(client) {
-	try {
-		const info = await client.request('info')
-		return {
-			linkSharingEnabled: normalizeNullableBoolean(
-				info?.link_sharing_enabled ?? info?.linkSharingEnabled ?? null,
-			),
-			publicTeamsEnabled: normalizeNullableBoolean(
-				info?.public_teams_enabled ?? info?.publicTeamsEnabled ?? null,
-			),
-			frontendUrl: normalizeFrontendUrl(info?.frontend_url ?? info?.frontendUrl ?? null),
-			emailRemindersEnabled: normalizeNullableBoolean(
-				info?.email_reminders_enabled ?? info?.emailRemindersEnabled ?? null,
-			),
-		}
-	} catch {
-		return {
-			linkSharingEnabled: null,
-			publicTeamsEnabled: null,
-			frontendUrl: null,
-			emailRemindersEnabled: null,
-		}
 	}
 }
 
@@ -548,7 +656,7 @@ function tryParseJson(value) {
 }
 
 function getVikunjaErrorMessage(payload, rawText, statusCode) {
-	const directMessage = `${payload?.message || payload?.error || ''}`.trim()
+	const directMessage = `${payload?.detail || payload?.message || payload?.error || payload?.title || ''}`.trim()
 	if (directMessage) {
 		return directMessage
 	}
@@ -574,6 +682,15 @@ function formatParam(value) {
 	}
 
 	return `${value}`
+}
+
+function normalizeStringList(value) {
+	if (!Array.isArray(value)) {
+		return []
+	}
+	return value
+		.map(entry => `${entry ?? ''}`.trim())
+		.filter(entry => entry.length > 0)
 }
 
 function normalizeNullableBoolean(value) {

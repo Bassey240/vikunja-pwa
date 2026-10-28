@@ -1,3 +1,4 @@
+import {getFilterTimezone} from '@/utils/date-helpers'
 import {api, type ApiError} from '@/api'
 import type {Bucket, ProjectView, Task} from '@/types'
 import {formatError} from '@/utils/formatting'
@@ -321,7 +322,7 @@ export const createViewsSlice: StateCreator<AppStore, [], [], ViewsSlice> = (set
 			const filterPayload = filterString
 				? {
 					filter: filterString,
-					filter_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+					filter_timezone: getFilterTimezone(),
 				}
 				: null
 			const payload = await api<ProjectView | {view?: ProjectView}, unknown>(`/api/projects/${projectId}/views`, {
@@ -467,7 +468,7 @@ export const createViewsSlice: StateCreator<AppStore, [], [], ViewsSlice> = (set
 			return false
 		}
 
-		const parsed = parseQuickAddMagic(trimmedTitle)
+		const parsed = parseQuickAddMagic(trimmedTitle, new Date(), get().account?.user?.settings?.frontend_settings?.default_due_time || undefined)
 		const finalTitle = parsed.title.trim()
 		const dueDate = parsed.date ? parsed.date.toISOString() : null
 		if (!finalTitle) {

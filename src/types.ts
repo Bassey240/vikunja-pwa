@@ -62,9 +62,14 @@ export interface VikunjaInfo {
 	frontend_url: string | null
 	motd: string | null
 	caldav_enabled?: boolean
+	link_sharing_enabled?: boolean
+	public_teams_enabled?: boolean
+	email_reminders_enabled?: boolean
 	task_attachments_enabled: boolean
 	enabled_background_providers: string[]
 	available_migrators?: string[]
+	/* Vikunja 2.4+: Pro features unlocked by the instance's license key. */
+	enabled_pro_features?: string[]
 	auth: {
 		local: {
 			enabled: boolean
@@ -93,6 +98,10 @@ export interface UserProfile {
 	name: string
 	username: string
 	email: string
+	pending_email?: string
+	/* Vikunja 2.4+: set when this user is a bot owned by another account. */
+	bot_owner_id?: number | null
+	botOwnerId?: number | null
 	deletionScheduledAt?: string | null
 	isLocalUser?: boolean | null
 	authProvider?: string | null
@@ -133,6 +142,7 @@ export interface NotificationSettingsForm {
 }
 
 export interface UserFrontendSettings {
+	default_due_time?: string | null
 	notification_preferences?: Partial<Record<NotificationCategory, Partial<NotificationCategoryPreference>>> | null
 	backgroundBrightness?: number | null
 	background_brightness?: number | null
@@ -153,6 +163,11 @@ export interface InstanceFeatures {
 	publicTeamsEnabled: boolean | null
 	frontendUrl: string | null
 	emailRemindersEnabled: boolean | null
+	/* Vikunja 2.4+: license-unlocked Pro features, reflected never enforced. */
+	enabledProFeatures: string[]
+	/* Whether the instance serves /api/v2 alongside the frozen /api/v1. */
+	apiV2Available: boolean
+	serverVersion?: string
 }
 
 export interface Account {
@@ -162,6 +177,11 @@ export interface Account {
 	linkShareAuth?: boolean
 	linkShareProjectId?: number | null
 	canUseAdminBridge?: boolean
+	/* Vikunja 2.4+: instance-admin rights on the signed-in account, which
+	 * unlock the server's own /admin API without any host-side bridge. */
+	isServerAdmin?: boolean
+	/* True via either route: instance admin over HTTP, or the CLI bridge. */
+	canManageUsers?: boolean
 	instanceFeatures?: InstanceFeatures | null
 	user: UserProfile | null
 	sessionsSupported: boolean
@@ -178,6 +198,20 @@ export interface AdminUser {
 	subject?: string
 	created?: string | null
 	updated?: string | null
+	/* Present only when the record came from Vikunja's /admin API; the CLI
+	 * bridge's table output carries none of these. */
+	name?: string
+	isAdmin?: boolean
+	botOwnerId?: number
+	authProvider?: string
+}
+
+/* Instance-wide counters from GET /admin/overview (Vikunja 2.4+). */
+export interface AdminOverview {
+	users?: number
+	projects?: number
+	tasks?: number
+	teams?: number
 }
 
 export interface AdminRuntimeHealth {
@@ -399,10 +433,18 @@ export type MigrationService =
 	| 'todoist'
 	| 'trello'
 	| 'microsoft-todo'
+	| 'planka'
 	| 'ticktick'
 	| 'wekan'
 	| 'csv'
 	| 'vikunja-file'
+
+export interface PlankaMigrationCredentials {
+	url: string
+	token?: string
+	username?: string
+	password?: string
+}
 
 export type MigrationStatusValue =
 	| 'idle'
@@ -414,6 +456,9 @@ export interface MigrationStatus {
 	service: MigrationService
 	status: MigrationStatusValue
 	message?: string | null
+	started_at?: string | null
+	finished_at?: string | null
+	error_kind?: string | null
 }
 
 export interface TotpSettings {
@@ -443,6 +488,16 @@ export interface ApiRouteDetail {
 
 export type ApiRouteGroup = Record<string, ApiRouteDetail>
 export type ApiRouteGroups = Record<string, ApiRouteGroup>
+
+export interface McpConnectionInfo {
+	endpoint: string
+	routes: ApiRouteGroups
+	presets: {
+		read_only: Record<string, string[]>
+		typed: Record<string, string[]>
+		full: Record<string, string>
+	}
+}
 
 export interface AccountForm {
 	authMode: AuthMode
@@ -591,6 +646,9 @@ export interface TaskAssignee {
 	name: string
 	username: string
 	email?: string
+	/* Vikunja 2.4+: set when this user is a bot owned by another account. */
+	bot_owner_id?: number | null
+	botOwnerId?: number | null
 }
 
 export interface TaskComment {
@@ -696,6 +754,7 @@ export interface Task {
 	percent_done?: number | null
 	reminders?: TaskReminder[] | null
 	repeat_after?: number | null
+	repeat_mode?: number | null
 	repeat_from_current_date?: boolean
 	created_by?: TaskAssignee | null
 	assignees?: TaskAssignee[] | null
@@ -707,6 +766,21 @@ export interface Task {
 	bucket_id?: number | null
 	bucketId?: number | null
 	subscription?: EntitySubscription | null
+}
+
+/* Vikunja 2.4 time entry. Exactly one of task_id / project_id is set, and a
+ * null end_time means the timer is still running. */
+export interface TimeEntry {
+	id: number
+	task_id: number
+	project_id: number
+	user_id: number
+	start_time: string
+	end_time: string | null
+	comment: string
+	created?: string | null
+	updated?: string | null
+	max_permission?: number
 }
 
 export interface FocusTarget {

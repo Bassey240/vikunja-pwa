@@ -76,6 +76,7 @@ export function createMockFixture(referenceDate = new Date()) {
 			{event_name: 'project.updated'},
 		],
 		migrationStatus: {
+			planka: {started_at: '0001-01-01T00:00:00Z', finished_at: '0001-01-01T00:00:00Z', error_kind: '', error_message: ''},
 			todoist: {status: 'idle', message: 'Ready to import from Todoist.'},
 			trello: {status: 'idle', message: 'Ready to import from Trello.'},
 			'microsoft-todo': {status: 'idle', message: 'Ready to import from Microsoft To Do.'},
@@ -242,6 +243,19 @@ export function createMockFixture(referenceDate = new Date()) {
 				},
 			},
 		],
+		timeEntries: [
+			{
+				id: 1,
+				task_id: 101,
+				project_id: 0,
+				user_id: 1,
+				start_time: today.toISOString(),
+				end_time: laterToday.toISOString(),
+				comment: 'Reviewed the intake list',
+				created: today.toISOString(),
+				updated: laterToday.toISOString(),
+			},
+		],
 		savedFilters: [
 			{
 				id: 0,
@@ -356,7 +370,9 @@ export function createMockFixture(referenceDate = new Date()) {
 				id: 101,
 				project_id: 1,
 				title: 'Buy milk',
-				description: 'Pick up groceries on the way home',
+				// Vikunja stores rich text as HTML; the script tag proves the app
+				// renders markup as elements without ever executing it.
+				description: '<p>Pick up <strong>groceries</strong> on the way home</p><ul><li>Milk</li></ul><p><a href="javascript:alert(1)">bad</a><a href="https://example.test/list">good</a></p><script>window.__richTextEscaped = true<\/script>',
 				done: false,
 				is_favorite: false,
 				due_date: laterToday.toISOString(),
@@ -439,6 +455,22 @@ export function createMockFixture(referenceDate = new Date()) {
 							name: 'Smoke User',
 							username: 'smoke-user',
 							email: 'smoke@example.test',
+						},
+						created: yesterday.toISOString(),
+						updated: today.toISOString(),
+					},
+					{
+						// High id: nextCommentId derives from the highest fixture id,
+						// and other tests assert the id a newly created comment gets.
+						id: 900,
+						comment: 'Deployed by automation.',
+						// Vikunja 2.4 bot user: identified by bot_owner_id, not the name.
+						author: {
+							id: 42,
+							name: 'Deploy Bot',
+							username: 'bot-deploy',
+							email: 'bot-deploy@example.test',
+							bot_owner_id: 1,
 						},
 						created: yesterday.toISOString(),
 						updated: today.toISOString(),

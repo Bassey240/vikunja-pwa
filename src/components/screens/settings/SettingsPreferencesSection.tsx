@@ -1,4 +1,5 @@
 import type {SettingsSectionId} from '@/utils/settings-helpers'
+import {useEffect, useState} from 'react'
 import {DESKTOP_VIEW_KINDS, MOBILE_VIEW_KINDS, type ProjectViewKind} from '@/store/view-selections'
 import SettingsSection from './SettingsSection'
 
@@ -25,6 +26,9 @@ export default function SettingsPreferencesSection({
 	timezoneNotice,
 	timezoneOptions,
 	onTimezoneChange,
+	defaultDueTime,
+	settingsSubmitting,
+	onSaveDefaultDueTime,
 }: {
 	open: boolean
 	onToggle: (section: SettingsSectionId) => void
@@ -41,7 +45,12 @@ export default function SettingsPreferencesSection({
 	timezoneNotice: string | null
 	timezoneOptions: string[]
 	onTimezoneChange: (timezone: string) => void
+	defaultDueTime: string
+	settingsSubmitting: boolean
+	onSaveDefaultDueTime: (time: string) => void
 }) {
+	const [dueTimeDraft, setDueTimeDraft] = useState(defaultDueTime)
+	useEffect(() => { setDueTimeDraft(defaultDueTime) }, [defaultDueTime])
 	return (
 		<SettingsSection title="Preferences" section="preferences" open={open} onToggle={onToggle}>
 			<div className="detail-section-list">
@@ -96,6 +105,25 @@ export default function SettingsPreferencesSection({
 							))}
 						</select>
 					</label>
+				</div>
+				<div className="detail-core-card settings-subsection">
+					<div className="panel-label">Default due time</div>
+					<form className="detail-grid settings-form" data-form="default-due-time" onSubmit={event => {
+						event.preventDefault()
+						onSaveDefaultDueTime(dueTimeDraft)
+					}}>
+						<label className="detail-item detail-item-full detail-field">
+							<div className="detail-label">Time for date-only deadlines</div>
+							<input className="detail-input" type="time" data-setting-field="default-due-time" value={dueTimeDraft} disabled={settingsSubmitting || accountAuthMode !== 'password'} onChange={event => setDueTimeDraft(event.currentTarget.value)} />
+						</label>
+						<div className="empty-state compact">Used when you add a due date without choosing a time. Leave empty to use the existing defaults. Times you choose yourself stay unchanged.</div>
+						{accountAuthMode === 'password' ? (
+							<div className="settings-actions-row">
+								<button className="pill-button" type="submit" disabled={settingsSubmitting || dueTimeDraft === defaultDueTime}>{settingsSubmitting ? 'Saving…' : 'Save default due time'}</button>
+								<button className="pill-button subtle" type="button" disabled={settingsSubmitting || !dueTimeDraft} onClick={() => setDueTimeDraft('')}>Clear</button>
+							</div>
+						) : <div className="empty-state compact">Sign in with your Vikunja account to change this preference.</div>}
+					</form>
 				</div>
 				{accountAuthMode === 'password' ? (
 					<div className="detail-core-card settings-subsection">

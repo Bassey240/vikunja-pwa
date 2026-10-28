@@ -17,6 +17,7 @@ import SettingsScreen from '@/components/screens/SettingsScreen'
 import SharedProjectShell from '@/components/sharing/SharedProjectShell'
 import {ScreenActiveContext} from '@/components/layout/ScreenActiveContext'
 import useCollectionPolling from '@/hooks/useCollectionPolling'
+import useVikunjaEvents from '@/hooks/useVikunjaEvents'
 import useWideLayout, {useCompactWideLayout} from '@/hooks/useWideLayout'
 import {shouldSuppressDragClicks, useSortableBridge} from '@/hooks/useDragAndDrop'
 import {getProjectDescendantIds} from '@/store/project-helpers'
@@ -24,6 +25,7 @@ import useGlobalShortcuts from '@/hooks/useGlobalShortcuts'
 import {memo, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react'
 import {useLocation, useNavigate} from 'react-router-dom'
 import {useAppStore} from '@/store'
+import {isTimeTrackingAvailable} from '@/store/slices/time-tracking'
 import type {Screen} from '@/types'
 import {getCollectionPollingConfig} from '@/utils/collectionPolling'
 import {getProjectBackgroundBrightness, projectHasBackground} from '@/utils/project-background'
@@ -125,6 +127,7 @@ export default function AppShell() {
 	const isWideLayout = useWideLayout()
 	const isCompactWideLayout = useCompactWideLayout()
 	const linkShareAuth = account?.linkShareAuth === true
+	const timeTrackingEnabled = useAppStore(isTimeTrackingAvailable)
 	const showWideShell = isWideLayout && connected
 	const showWideSidebar = showWideShell && !linkShareAuth
 	const compactWideShell = showWideShell && isCompactWideLayout
@@ -186,6 +189,7 @@ export default function AppShell() {
 	const effectiveWideInspectorWidth =
 		compactWideShell && !wideInspectorWidthStored ? DEFAULT_COMPACT_WIDE_INSPECTOR_WIDTH : wideInspectorWidth
 	const collectionPollingConfig = getCollectionPollingConfig()
+	useVikunjaEvents()
 
 	// Shell-wide single-key map (audit A1): / jumps to search. Typing contexts
 	// are guarded inside the hook; screens add their own maps (calendar).
@@ -219,6 +223,17 @@ export default function AppShell() {
 			}
 
 			await state.loadProjects({silent: true})
+		},
+	})
+
+	// The running timer is server-owned: another client can start or stop it,
+	// so the local clock reconciles against Vikunja on this poll.
+	useCollectionPolling({
+		enabled: timeTrackingEnabled && initialized && connected && !linkShareAuth && isOnline && !offlineReadOnlyMode,
+		intervalMs: 60_000,
+		mutationDebounceMs: collectionPollingConfig.mutationDebounceMs,
+		onPoll: async () => {
+			await useAppStore.getState().loadRunningTimeEntry({silent: true})
 		},
 	})
 

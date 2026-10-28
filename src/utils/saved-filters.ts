@@ -7,6 +7,11 @@ import {
 } from '@/hooks/useFilters'
 import type {Label, Project, SavedFilter, SavedFilterQuery} from '@/types'
 import {taskFiltersToVikunjaFilter} from '@/store/task-filter-query'
+import {
+	getDueFilterExpressionPattern,
+	getDueFilterRangesBySpecificity,
+	getLegacyDueFilterPatterns,
+} from './due-filter-expressions.ts'
 
 export const defaultSavedFilterSortBy = ['done', 'id']
 export const defaultSavedFilterOrderBy = ['asc', 'desc']
@@ -62,11 +67,6 @@ export function extractTaskFiltersFromSavedFilterQuery(
 	labels: Label[],
 ) {
 	let remaining = `${filterQuery || ''}`.trim()
-	const today = new Date()
-	const todayIso = today.toISOString().slice(0, 10)
-	const plus7 = new Date(today)
-	plus7.setDate(plus7.getDate() + 7)
-	const next7Iso = plus7.toISOString().slice(0, 10)
 	const nextTaskFilters = {...defaultTaskFilters}
 
 	remaining = removeQueryPattern(remaining, /\bdone\s*=\s*false\b/i, () => {
@@ -75,26 +75,23 @@ export function extractTaskFiltersFromSavedFilterQuery(
 	remaining = removeQueryPattern(remaining, /\bdone\s*=\s*true\b/i, () => {
 		nextTaskFilters.status = 'done'
 	})
-	remaining = removeQueryPattern(remaining, new RegExp(`\\bdue_date\\s*=\\s*"${todayIso}"\\b`, 'i'), () => {
-		nextTaskFilters.due = 'today'
-	})
-	remaining = removeQueryPattern(remaining, new RegExp(`\\bdue_date\\s*=\\s*0\\b`, 'i'), () => {
-		nextTaskFilters.due = 'none'
-	})
-	remaining = removeQueryPattern(
-		remaining,
-		new RegExp(`\\bdue_date\\s*<\\s*"${todayIso}"\\s*&&\\s*due_date\\s*!=\\s*0\\b`, 'i'),
-		() => {
-			nextTaskFilters.due = 'overdue'
-		},
-	)
-	remaining = removeQueryPattern(
-		remaining,
-		new RegExp(`\\bdue_date\\s*>=\\s*"${todayIso}"\\s*&&\\s*due_date\\s*<=\\s*"${next7Iso}"\\b`, 'i'),
-		() => {
-			nextTaskFilters.due = 'next7'
-		},
-	)
+	// Date ranges are read back from the same expression table the builder
+	// uses, most specific first so a broad match can't swallow a narrow one.
+	for (const due of getDueFilterRangesBySpecificity()) {
+		remaining = removeQueryPattern(remaining, getDueFilterExpressionPattern(due), () => {
+			nextTaskFilters.due = due
+		})
+	}
+	// Filters saved by earlier versions carry literal dates; recognise those too
+	// so the dropdown still reflects them (and re-saving upgrades them).
+	if (nextTaskFilters.due === defaultTaskFilters.due) {
+		for (const {due, pattern} of getLegacyDueFilterPatterns()) {
+			remaining = removeQueryPattern(remaining, pattern, () => {
+				nextTaskFilters.due = due
+			})
+		}
+	}
+
 	remaining = removeQueryPattern(remaining, /\bproject\s*=\s*(\d+)\b/i, match => {
 		nextTaskFilters.projectId = Number(match[1] || 0)
 	})

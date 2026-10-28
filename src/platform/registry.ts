@@ -69,6 +69,7 @@ export interface PlatformRegistry {
 	// registry↔api import cycle: this module imports no shared runtime code).
 	transport: ApiTransport | null
 	sessionLoader: (() => Promise<SessionPayload>) | null
+	subscribeVikunjaEvents: ((onEvent: (name: string) => void, timersEnabled: boolean) => (() => void)) | null
 	haptics: HapticsPort
 	notificationSurface: NotificationSurfacePort
 	imageLoader: ImageLoaderPort
@@ -84,6 +85,7 @@ const noop = (): void => {}
 const registry: PlatformRegistry = {
 	transport: null,
 	sessionLoader: null,
+	subscribeVikunjaEvents: null,
 	haptics: {lift: noop, drop: noop, success: noop, error: noop, selection: noop},
 	notificationSurface: {enabled: false, surface: async () => {}},
 	imageLoader: {mode: 'passthrough', load: async src => ({url: src})},
